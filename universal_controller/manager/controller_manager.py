@@ -2,6 +2,7 @@
 from typing import Dict, Any, Optional
 import numpy as np
 import time
+import logging
 
 from ..core.interfaces import (
     IStateEstimator, ITrajectoryTracker, IConsistencyChecker,
@@ -13,12 +14,14 @@ from ..core.data_types import (
 )
 from ..core.enums import ControllerState, PlatformType
 from ..core.diagnostics_input import DiagnosticsInput
-from ..core.ros_compat import get_monotonic_time
+from ..core.ros_compat import get_monotonic_time, normalize_angle
 from ..config.default_config import PLATFORM_CONFIG, DEFAULT_CONFIG
 from ..safety.timeout_monitor import TimeoutMonitor
 from ..safety.state_machine import StateMachine
 from ..health.mpc_health_monitor import MPCHealthMonitor
 from ..diagnostics.publisher import DiagnosticsPublisher
+
+logger = logging.getLogger(__name__)
 
 
 class ControllerManager:
@@ -69,7 +72,11 @@ class ControllerManager:
         self._last_update_time: Optional[float] = None  # 用于计算实际时间间隔
         
         # 诊断发布器（职责分离）
-        self._diagnostics_publisher = DiagnosticsPublisher()
+        diagnostics_config = config.get('diagnostics', {})
+        self._diagnostics_publisher = DiagnosticsPublisher(
+            diagnostics_topic=diagnostics_config.get('topic', '/controller/diagnostics'),
+            cmd_topic=diagnostics_config.get('cmd_topic', '/cmd_unified')
+        )
         
         # 尝试初始化 ROS Publisher (向后兼容)
         self._cmd_pub: Optional[Any] = None
@@ -97,9 +104,9 @@ class ControllerManager:
                 queue_size=1
             )
             
-            print("[ControllerManager] ROS command publisher initialized")
+            logger.info("ROS command publisher initialized")
         except Exception as e:
-            print(f"[ControllerManager] ROS publisher init failed: {e}")
+            logger.warning(f"ROS publisher init failed: {e}")
             self._cmd_pub = None
     
     def set_diagnostics_callback(self, callback: callable) -> None:
@@ -192,7 +199,7 @@ class ControllerManager:
     
     def _on_state_changed(self, old_state: ControllerState, new_state: ControllerState) -> None:
         """状态变化回调"""
-        print(f"Controller state changed: {old_state.name} -> {new_state.name}")
+        logger.info(f"Controller state changed: {old_state.name} -> {new_state.name}")
         
         # MPC horizon 动态调整
         if new_state == ControllerState.MPC_DEGRADED:
@@ -200,13 +207,13 @@ class ControllerManager:
                 self._current_horizon = self.horizon_degraded
                 if self.mpc_tracker:
                     self.mpc_tracker.set_horizon(self.horizon_degraded)
-                print(f"MPC horizon reduced to {self.horizon_degraded}")
+                logger.info(f"MPC horizon reduced to {self.horizon_degraded}")
         elif new_state == ControllerState.NORMAL and old_state == ControllerState.MPC_DEGRADED:
             if self._current_horizon != self.horizon_normal:
                 self._current_horizon = self.horizon_normal
                 if self.mpc_tracker:
                     self.mpc_tracker.set_horizon(self.horizon_normal)
-                print(f"MPC horizon restored to {self.horizon_normal}")
+                logger.info(f"MPC horizon restored to {self.horizon_normal}")
         
         # 平滑过渡
         if (old_state in [ControllerState.NORMAL, ControllerState.SOFT_DISABLED, ControllerState.MPC_DEGRADED] and
@@ -240,7 +247,7 @@ class ControllerManager:
             # 检测长时间暂停
             if actual_dt > ekf_reset_threshold:
                 # 超过重置阈值的暂停，重置 EKF 以避免累积误差
-                print(f"[ControllerManager] Long pause detected ({actual_dt:.2f}s), resetting EKF")
+                logger.warning(f"Long pause detected ({actual_dt:.2f}s), resetting EKF")
                 if self.state_estimator:
                     self.state_estimator.reset()
                 # 重置后跳过本次预测，只进行观测更新
@@ -250,7 +257,7 @@ class ControllerManager:
             elif actual_dt > long_pause_threshold:
                 # 中等暂停，使用多步预测
                 # 将长时间间隔分解为多个小步骤，提高预测精度
-                print(f"[ControllerManager] Medium pause detected ({actual_dt:.2f}s), using multi-step prediction")
+                logger.info(f"Medium pause detected ({actual_dt:.2f}s), using multi-step prediction")
                 num_steps = int(actual_dt / self.dt)
                 if self.state_estimator and num_steps > 1:
                     for _ in range(num_steps - 1):
@@ -449,7 +456,7 @@ class ControllerManager:
         
         traj_heading = np.arctan2(dy, dx)
         heading_error = theta - traj_heading
-        heading_error = np.arctan2(np.sin(heading_error), np.cos(heading_error))
+        heading_error = normalize_angle(heading_error)
         
         return {
             'lateral_error': lateral_error,
@@ -459,7 +466,8 @@ class ControllerManager:
         }
     
     def get_timeout_status(self) -> TimeoutStatus:
-        return self.timeout_monitor.check(time.time())
+        """获取超时状态"""
+        return self.timeout_monitor.check()
     
     def get_state(self) -> ControllerState:
         return self._last_state

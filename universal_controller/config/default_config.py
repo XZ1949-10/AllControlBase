@@ -96,6 +96,10 @@ DEFAULT_CONFIG = {
         'imu_timeout_ms': 100,
         'startup_grace_ms': 1000,
     },
+    'diagnostics': {
+        'topic': '/controller/diagnostics',  # 诊断话题名称
+        'cmd_topic': '/cmd_unified',  # 控制命令话题名称
+    },
     'consistency': {
         'kappa_thresh': 0.5,
         'v_dir_thresh': 0.8,

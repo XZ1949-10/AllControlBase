@@ -6,7 +6,7 @@ import numpy as np
 from ..core.interfaces import IStateEstimator
 from ..core.data_types import EstimatorOutput, Odometry, Imu
 from ..config.default_config import PLATFORM_CONFIG
-from ..core.ros_compat import euler_from_quaternion, get_monotonic_time
+from ..core.ros_compat import euler_from_quaternion, get_monotonic_time, normalize_angle
 
 
 class AdaptiveEKFEstimator(IStateEstimator):
@@ -127,7 +127,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self.x[0] += dx
         self.x[1] += dy
         self.x[6] += dtheta
-        self.x[6] = np.arctan2(np.sin(self.x[6]), np.cos(self.x[6]))
+        self.x[6] = normalize_angle(self.x[6])
         
         if self.velocity_heading_coupled:
             v_body = np.sqrt(self.x[3]**2 + self.x[4]**2)
@@ -163,7 +163,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self.x[1] += self.x[4] * dt
         self.x[2] += self.x[5] * dt
         self.x[6] += self.x[7] * dt
-        self.x[6] = np.arctan2(np.sin(self.x[6]), np.cos(self.x[6]))
+        self.x[6] = normalize_angle(self.x[6])
         
         # 对于速度-航向耦合平台，更新速度方向
         if self.velocity_heading_coupled and abs(self.x[7]) > 1e-6:
@@ -418,7 +418,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self._ensure_positive_definite()
         self.last_innovation_norm = np.linalg.norm(y)
         
-        self.x[6] = np.arctan2(np.sin(self.x[6]), np.cos(self.x[6]))
+        self.x[6] = normalize_angle(self.x[6])
     
     def _compute_jacobian(self, dt: float, theta: float, omega: float) -> np.ndarray:
         """

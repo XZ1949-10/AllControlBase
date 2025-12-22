@@ -10,6 +10,7 @@
 """
 from typing import Dict, Any, Tuple, Optional
 import numpy as np
+import logging
 
 from ..core.interfaces import ICoordinateTransformer, IStateEstimator
 from ..core.data_types import Trajectory, Point3D
@@ -19,8 +20,11 @@ from ..core.ros_compat import (
     TF2LookupException, TF2ExtrapolationException, TF2ConnectivityException,
     get_current_time, create_time, create_duration,
     euler_from_quaternion, quaternion_from_euler,
+    normalize_angle,
     get_monotonic_time
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RobustCoordinateTransformer(ICoordinateTransformer):
@@ -78,15 +82,15 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                 self._tf_buffer = tf2_ros.Buffer()
                 self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
                 self._tf2_initialized = True
-                print("[RobustCoordinateTransformer] TF2 initialized successfully")
+                logger.info("TF2 initialized successfully")
             except Exception as e:
-                print(f"[RobustCoordinateTransformer] TF2 initialization failed: {e}")
+                logger.warning(f"TF2 initialization failed: {e}")
                 self._tf2_initialized = False
         else:
             # 非 ROS 环境，使用模拟 Buffer
             self._tf_buffer = tf2_ros.Buffer()
             self._tf2_initialized = True
-            print("[RobustCoordinateTransformer] Using mock TF2 buffer")
+            logger.debug("Using mock TF2 buffer")
     
     def set_tf2_available(self, available: bool) -> None:
         """
@@ -96,7 +100,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         """
         self._tf2_force_disabled = not available
         if not available:
-            print("[RobustCoordinateTransformer] TF2 force disabled for testing")
+            logger.debug("TF2 force disabled for testing")
     
     def set_transform(self, parent_frame: str, child_frame: str,
                      x: float, y: float, z: float, yaw: float,
@@ -168,7 +172,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             # TF2 查找失败
             return None, None, False
         except Exception as e:
-            print(f"[RobustCoordinateTransformer] TF2 lookup error: {e}")
+            logger.warning(f"TF2 lookup error: {e}")
             return None, None, False
     
     def transform_trajectory(self, traj: Trajectory, target_frame: str, 
@@ -195,7 +199,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                 # 重置漂移估计时间跟踪
                 if hasattr(self, '_last_fallback_update_time'):
                     self._last_fallback_update_time = None
-                print(f"[RobustCoordinateTransformer] TF2 recovered, drift corrected")
+                logger.info("TF2 recovered, drift corrected")
             
             self._last_status = TransformStatus.TF2_OK
             
@@ -250,7 +254,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         if self.fallback_start_time is None:
             # 开始降级
             self.fallback_start_time = current_time
-            print(f"[RobustCoordinateTransformer] TF2 fallback started")
+            logger.warning("TF2 fallback started")
             
             if self.state_estimator is not None:
                 state = self.state_estimator.get_state()
@@ -311,7 +315,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             # 计算相对位移（在状态估计器的坐标系下，通常是 odom）
             delta_position = current_estimator_position - self._fallback_start_estimator_position
             delta_theta = current_estimator_theta - self._fallback_start_estimator_theta
-            delta_theta = np.arctan2(np.sin(delta_theta), np.cos(delta_theta))
+            delta_theta = normalize_angle(delta_theta)
             
             # 如果 TF2 变换的 yaw 不为零，需要将 delta_position 旋转到 TF2 坐标系
             # 这是因为 TF2 变换可能包含一个初始旋转
@@ -331,7 +335,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             # 估计当前变换
             estimated_position = self._fallback_start_tf2_position + delta_position
             estimated_yaw = self._fallback_start_tf2_yaw + delta_theta
-            estimated_yaw = np.arctan2(np.sin(estimated_yaw), np.cos(estimated_yaw))
+            estimated_yaw = normalize_angle(estimated_yaw)
             
             transformed_traj = self._apply_tf2_transform(
                 traj, estimated_position, estimated_yaw, target_frame)
@@ -369,25 +373,25 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         # 计算 fallback 期间 odom 积分的位移
         odom_displacement = current_estimator_position - self._fallback_start_estimator_position
         odom_theta_change = current_estimator_theta - self._fallback_start_estimator_theta
-        odom_theta_change = np.arctan2(np.sin(odom_theta_change), np.cos(odom_theta_change))
+        odom_theta_change = normalize_angle(odom_theta_change)
         
         # 如果有真实 TF2 位置，计算精确漂移
         if current_tf2_position is not None and current_tf2_yaw is not None:
             # 计算 TF2 实际位移
             tf2_displacement = current_tf2_position - self._fallback_start_tf2_position
             tf2_theta_change = current_tf2_yaw - self._fallback_start_tf2_yaw
-            tf2_theta_change = np.arctan2(np.sin(tf2_theta_change), np.cos(tf2_theta_change))
+            tf2_theta_change = normalize_angle(tf2_theta_change)
             
             # 漂移 = odom 积分 - TF2 实际
             drift_x = odom_displacement[0] - tf2_displacement[0]
             drift_y = odom_displacement[1] - tf2_displacement[1]
             drift_theta = odom_theta_change - tf2_theta_change
-            drift_theta = np.arctan2(np.sin(drift_theta), np.cos(drift_theta))
+            drift_theta = normalize_angle(drift_theta)
             
             # 应用校正 (反向)
             if abs(drift_x) > 0.01 or abs(drift_y) > 0.01 or abs(drift_theta) > 0.01:
                 self.state_estimator.apply_drift_correction(-drift_x, -drift_y, -drift_theta)
-                print(f"[RobustCoordinateTransformer] Applied precise drift correction: "
+                logger.info(f"Applied precise drift correction: "
                       f"dx={-drift_x:.4f}, dy={-drift_y:.4f}, dtheta={-drift_theta:.4f}")
         else:
             # 没有真实 TF2 位置，无法计算精确漂移
@@ -402,7 +406,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             drift_magnitude = self.accumulated_drift
             
             if drift_magnitude > 0.02:  # 只有漂移超过 2cm 才记录警告
-                print(f"[RobustCoordinateTransformer] Accumulated drift estimate: {drift_magnitude:.4f}m, "
+                logger.warning(f"Accumulated drift estimate: {drift_magnitude:.4f}m, "
                       f"but no TF2 position available for precise correction. "
                       f"Consider enabling external localization for drift correction.")
         

@@ -1,10 +1,13 @@
 """状态机"""
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional
 from collections import deque
+import logging
 
 from ..core.enums import ControllerState
 from ..core.diagnostics_input import DiagnosticsInput
 from ..core.ros_compat import get_monotonic_time
+
+logger = logging.getLogger(__name__)
 
 
 class StateMachine:
@@ -110,12 +113,9 @@ class StateMachine:
         # 最近 N 次中至少 N-1 次成功才考虑恢复
         return recent_successes >= recent_count - 1
     
-    def update(self, diagnostics: Union[DiagnosticsInput, Dict[str, Any]]) -> ControllerState:
-        # 支持 DiagnosticsInput 和 Dict 两种输入格式（向后兼容）
-        if isinstance(diagnostics, DiagnosticsInput):
-            diag = diagnostics
-        else:
-            diag = DiagnosticsInput.from_dict(diagnostics)
+    def update(self, diagnostics: DiagnosticsInput) -> ControllerState:
+        """更新状态机"""
+        diag = diagnostics
         
         alpha = diag.alpha
         mpc_health = diag.mpc_health
@@ -162,7 +162,7 @@ class StateMachine:
                     elif data_valid and alpha < self.alpha_disable_thresh:
                         self.state = ControllerState.SOFT_DISABLED
                         self._reset_all_counters()
-                    elif (mpc_health and mpc_health.warning) or tf2_critical:
+                    elif (mpc_health is not None and mpc_health.warning) or tf2_critical:
                         self.state = ControllerState.MPC_DEGRADED
                         self._reset_all_counters()
         
@@ -177,7 +177,7 @@ class StateMachine:
                 self._reset_all_counters()
                 return self.state
             
-            if (mpc_health and mpc_health.warning) or tf2_critical:
+            if (mpc_health is not None and mpc_health.warning) or tf2_critical:
                 self.state = ControllerState.MPC_DEGRADED
                 self._reset_all_counters()
                 return self.state
@@ -202,7 +202,7 @@ class StateMachine:
                 return self.state
             
             # 尝试恢复
-            if mpc_health and mpc_health.can_recover and not tf2_critical and not safety_failed:
+            if mpc_health is not None and mpc_health.can_recover and not tf2_critical and not safety_failed:
                 self.mpc_recovery_count += 1
                 if self.mpc_recovery_count >= self.mpc_recovery_thresh:
                     if alpha >= self.alpha_disable_thresh and data_valid:
@@ -235,7 +235,7 @@ class StateMachine:
             elif self._stopping_start_time is not None:
                 elapsed = get_monotonic_time() - self._stopping_start_time
                 if elapsed > self.stopping_timeout:
-                    print(f"STOPPING timeout after {elapsed:.1f}s, forcing STOPPED")
+                    logger.warning(f"STOPPING timeout after {elapsed:.1f}s, forcing STOPPED")
                     self.state = ControllerState.STOPPED
                     self._stopping_start_time = None
                     self._reset_all_counters()

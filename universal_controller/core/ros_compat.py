@@ -17,6 +17,15 @@ import numpy as np
 from typing import Tuple
 
 # ============================================================================
+# 数值常量
+# ============================================================================
+
+# 数值稳定性阈值
+EPSILON = 1e-6          # 通用小量阈值
+EPSILON_SMALL = 1e-9    # 更严格的小量阈值
+EPSILON_ANGLE = 1e-9    # 角度计算阈值
+
+# ============================================================================
 # ROS 检测
 # ============================================================================
 
@@ -124,6 +133,33 @@ def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> Tuple[float,
     y = cr * sp * cy + sr * cp * sy
     z = cr * cp * sy - sr * sp * cy
     return (x, y, z, w)
+
+
+def normalize_angle(angle: float) -> float:
+    """
+    将角度归一化到 [-π, π] 范围
+    
+    Args:
+        angle: 输入角度 (弧度)
+    
+    Returns:
+        归一化后的角度 (弧度)，范围 [-π, π]
+    """
+    return np.arctan2(np.sin(angle), np.cos(angle))
+
+
+def angle_difference(angle1: float, angle2: float) -> float:
+    """
+    计算两个角度之间的最短差值
+    
+    Args:
+        angle1: 第一个角度 (弧度)
+        angle2: 第二个角度 (弧度)
+    
+    Returns:
+        角度差 (弧度)，范围 [-π, π]，表示从 angle2 到 angle1 的最短旋转
+    """
+    return normalize_angle(angle1 - angle2)
 
 
 # ============================================================================

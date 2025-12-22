@@ -69,7 +69,7 @@ import numpy as np
 
 from ..core.interfaces import IAttitudeController
 from ..core.data_types import ControlOutput, AttitudeCommand
-from ..core.ros_compat import get_monotonic_time
+from ..core.ros_compat import get_monotonic_time, normalize_angle
 
 
 class QuadrotorAttitudeController(IAttitudeController):
@@ -570,10 +570,10 @@ class QuadrotorAttitudeController(IAttitudeController):
         
         # yaw 需要处理角度环绕 (-pi, pi]
         yaw_error = yaw - self._last_attitude.yaw
-        yaw_error = np.arctan2(np.sin(yaw_error), np.cos(yaw_error))  # 归一化到 [-pi, pi]
+        yaw_error = normalize_angle(yaw_error)
         yaw_error_limited = np.clip(yaw_error, -max_yaw_change, max_yaw_change)
         yaw_limited = self._last_attitude.yaw + yaw_error_limited
-        yaw_limited = np.arctan2(np.sin(yaw_limited), np.cos(yaw_limited))  # 归一化
+        yaw_limited = normalize_angle(yaw_limited)
         
         # 推力变化率限制 (可配置)
         max_thrust_change = self.thrust_rate_max * dt

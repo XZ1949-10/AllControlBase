@@ -7,6 +7,8 @@
 from typing import Dict, Any, Optional, Callable, List
 import json
 import numpy as np
+import logging
+import threading
 
 from ..core.data_types import (
     DiagnosticsV2, Header, ControlOutput, EstimatorOutput, 
@@ -14,6 +16,8 @@ from ..core.data_types import (
 )
 from ..core.enums import ControllerState
 from ..core.ros_compat import ROS_AVAILABLE
+
+logger = logging.getLogger(__name__)
 
 
 def _numpy_json_encoder(obj: Any) -> Any:
@@ -72,8 +76,9 @@ class DiagnosticsPublisher:
         self._diagnostics_topic = diagnostics_topic
         self._cmd_topic = cmd_topic
         
-        # 回调函数
+        # 回调函数（线程安全）
         self._callbacks: List[Callable[[Dict[str, Any]], None]] = []
+        self._callbacks_lock = threading.Lock()
         
         # ROS Publishers
         self._diagnostics_pub: Optional[Any] = None
@@ -107,31 +112,34 @@ class DiagnosticsPublisher:
                 queue_size=1
             )
             
-            print(f"[DiagnosticsPublisher] ROS publishers initialized: "
+            logger.info(f"ROS publishers initialized: "
                   f"{self._diagnostics_topic}, {self._cmd_topic}")
         except Exception as e:
-            print(f"[DiagnosticsPublisher] ROS publisher init failed: {e}")
+            logger.warning(f"ROS publisher init failed: {e}")
             self._diagnostics_pub = None
             self._cmd_pub = None
     
     def add_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """
-        添加诊断回调函数
+        添加诊断回调函数（线程安全）
         
         Args:
             callback: 回调函数，签名为 callback(diagnostics: Dict[str, Any]) -> None
         """
-        if callback not in self._callbacks:
-            self._callbacks.append(callback)
+        with self._callbacks_lock:
+            if callback not in self._callbacks:
+                self._callbacks.append(callback)
     
     def remove_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
-        """移除诊断回调函数"""
-        if callback in self._callbacks:
-            self._callbacks.remove(callback)
+        """移除诊断回调函数（线程安全）"""
+        with self._callbacks_lock:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
     
     def clear_callbacks(self) -> None:
-        """清除所有回调函数"""
-        self._callbacks.clear()
+        """清除所有回调函数（线程安全）"""
+        with self._callbacks_lock:
+            self._callbacks.clear()
     
     def publish(self,
                 current_time: float,
@@ -170,12 +178,15 @@ class DiagnosticsPublisher:
         diag_dict = diag.to_ros_msg()
         self._last_published = diag_dict
         
-        # 调用所有回调
-        for callback in self._callbacks:
+        # 调用所有回调（线程安全：复制列表后迭代）
+        with self._callbacks_lock:
+            callbacks_copy = list(self._callbacks)
+        
+        for callback in callbacks_copy:
             try:
                 callback(diag_dict)
             except Exception as e:
-                print(f"[DiagnosticsPublisher] Callback error: {e}")
+                logger.warning(f"Callback error: {e}")
         
         # ROS 发布
         self._publish_to_ros(diag_dict)

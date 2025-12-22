@@ -11,6 +11,7 @@ from universal_controller.core.data_types import (
     Odometry, Imu, MPCHealthStatus
 )
 from universal_controller.core.enums import ControllerState, PlatformType
+from universal_controller.core.diagnostics_input import DiagnosticsInput
 from universal_controller.config.default_config import DEFAULT_CONFIG, PLATFORM_CONFIG
 from universal_controller.estimator.adaptive_ekf import AdaptiveEKFEstimator
 from universal_controller.consistency.weighted_analyzer import WeightedConsistencyAnalyzer
@@ -95,19 +96,19 @@ def test_state_machine_counter_reset():
     sm.alpha_recovery_count = 3
     
     # 触发 safety_failed 转换到 MPC_DEGRADED
-    diagnostics = {
-        'alpha': 0.5,
-        'mpc_health': None,
-        'mpc_success': True,
-        'odom_timeout': False,
-        'traj_timeout_exceeded': False,
-        'has_valid_data': True,
-        'tf2_critical': False,
-        'data_valid': True,
-        'safety_failed': True,
-        'v_horizontal': 0.5,
-        'vz': 0.0,
-    }
+    diagnostics = DiagnosticsInput(
+        alpha=0.5,
+        mpc_health=None,
+        mpc_success=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        has_valid_data=True,
+        tf2_critical=False,
+        data_valid=True,
+        safety_failed=True,
+        v_horizontal=0.5,
+        vz=0.0,
+    )
     
     new_state = sm.update(diagnostics)
     
@@ -129,19 +130,19 @@ def test_state_machine_mpc_fail_count_reset():
     for _ in range(5):
         sm._mpc_success_history.append(True)
     
-    diagnostics = {
-        'alpha': 0.5,
-        'mpc_health': None,
-        'mpc_success': False,  # MPC 失败
-        'odom_timeout': False,
-        'traj_timeout_exceeded': False,
-        'has_valid_data': True,
-        'tf2_critical': False,
-        'data_valid': True,
-        'safety_failed': False,
-        'v_horizontal': 0.5,
-        'vz': 0.0,
-    }
+    diagnostics = DiagnosticsInput(
+        alpha=0.5,
+        mpc_health=None,
+        mpc_success=False,  # MPC 失败
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        has_valid_data=True,
+        tf2_critical=False,
+        data_valid=True,
+        safety_failed=False,
+        v_horizontal=0.5,
+        vz=0.0,
+    )
     
     new_state = sm.update(diagnostics)
     assert new_state == ControllerState.BACKUP_ACTIVE
@@ -153,8 +154,19 @@ def test_state_machine_mpc_fail_count_reset():
     for _ in range(5):
         sm._mpc_success_history.append(True)
     
-    diagnostics['mpc_success'] = True
-    diagnostics['safety_failed'] = True
+    diagnostics = DiagnosticsInput(
+        alpha=0.5,
+        mpc_health=None,
+        mpc_success=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        has_valid_data=True,
+        tf2_critical=False,
+        data_valid=True,
+        safety_failed=True,
+        v_horizontal=0.5,
+        vz=0.0,
+    )
     
     new_state = sm.update(diagnostics)
     assert new_state == ControllerState.MPC_DEGRADED
@@ -166,8 +178,19 @@ def test_state_machine_mpc_fail_count_reset():
     for _ in range(5):
         sm._mpc_success_history.append(True)
     
-    diagnostics['safety_failed'] = False
-    diagnostics['tf2_critical'] = True
+    diagnostics = DiagnosticsInput(
+        alpha=0.5,
+        mpc_health=None,
+        mpc_success=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        has_valid_data=True,
+        tf2_critical=True,
+        data_valid=True,
+        safety_failed=False,
+        v_horizontal=0.5,
+        vz=0.0,
+    )
     
     new_state = sm.update(diagnostics)
     assert new_state == ControllerState.MPC_DEGRADED
@@ -179,8 +202,19 @@ def test_state_machine_mpc_fail_count_reset():
     for _ in range(5):
         sm._mpc_success_history.append(True)
     
-    diagnostics['tf2_critical'] = False
-    diagnostics['mpc_success'] = False
+    diagnostics = DiagnosticsInput(
+        alpha=0.5,
+        mpc_health=None,
+        mpc_success=False,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        has_valid_data=True,
+        tf2_critical=False,
+        data_valid=True,
+        safety_failed=False,
+        v_horizontal=0.5,
+        vz=0.0,
+    )
     
     new_state = sm.update(diagnostics)
     assert new_state == ControllerState.BACKUP_ACTIVE
@@ -190,9 +224,19 @@ def test_state_machine_mpc_fail_count_reset():
     sm.reset()
     sm.state = ControllerState.BACKUP_ACTIVE
     
-    diagnostics['mpc_success'] = True
-    diagnostics['tf2_critical'] = False
-    diagnostics['safety_failed'] = False
+    diagnostics = DiagnosticsInput(
+        alpha=0.5,
+        mpc_health=None,
+        mpc_success=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        has_valid_data=True,
+        tf2_critical=False,
+        data_valid=True,
+        safety_failed=False,
+        v_horizontal=0.5,
+        vz=0.0,
+    )
     
     # 需要多次成功才能从 BACKUP_ACTIVE 恢复
     # 根据 _check_mpc_can_recover 的逻辑，需要最近 5 次中至少 4 次成功
@@ -240,12 +284,13 @@ def test_safety_monitor():
     
     # 正常命令
     cmd = ControlOutput(vx=1.0, vy=0.0, vz=0.0, omega=0.5, frame_id="base_link")
-    decision = monitor.check(state, cmd, {})
+    diagnostics = DiagnosticsInput()  # 使用默认值
+    decision = monitor.check(state, cmd, diagnostics)
     assert decision.safe == True
     
     # 超限命令
     cmd_over = ControlOutput(vx=10.0, vy=0.0, vz=0.0, omega=0.5, frame_id="base_link")
-    decision_over = monitor.check(state, cmd_over, {})
+    decision_over = monitor.check(state, cmd_over, diagnostics)
     assert decision_over.safe == False
     assert decision_over.limited_cmd is not None
     
@@ -255,7 +300,7 @@ def test_safety_monitor():
         frame_id="base_link",
         health_metrics={'test': 123}
     )
-    decision_metrics = monitor.check(state, cmd_with_metrics, {})
+    decision_metrics = monitor.check(state, cmd_with_metrics, diagnostics)
     if decision_metrics.limited_cmd:
         assert 'test' in decision_metrics.limited_cmd.health_metrics
     

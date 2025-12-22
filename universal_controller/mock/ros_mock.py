@@ -5,10 +5,13 @@ ROS 模拟类
 """
 import time
 import numpy as np
+import logging
 from collections import deque
 from typing import Optional, Tuple, Any
 
 from .data_mock import MockTransformStamped, MockHeader
+
+logger = logging.getLogger(__name__)
 
 
 class LookupException(Exception):
@@ -327,7 +330,7 @@ class MockTF2BufferCore:
         
         if norm_sq < 1e-10:
             # 无效四元数，返回单位变换的逆（即单位变换本身）
-            print("[MockTF2BufferCore] Warning: Invalid quaternion detected, using identity")
+            logger.warning("Invalid quaternion detected, using identity")
             inv_q = (0.0, 0.0, 0.0, 1.0)
             R = np.eye(3)
         else:

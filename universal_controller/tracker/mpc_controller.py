@@ -2,11 +2,16 @@
 from typing import Dict, Any, Optional
 import numpy as np
 import time
+import logging
 
 from ..core.interfaces import ITrajectoryTracker
 from ..core.data_types import Trajectory, ControlOutput, ConsistencyResult
 from ..core.enums import PlatformType
+from ..core.ros_compat import normalize_angle, angle_difference
+from ..core.velocity_smoother import VelocitySmoother
 from ..config.default_config import PLATFORM_CONFIG
+
+logger = logging.getLogger(__name__)
 
 # 尝试导入 ACADOS
 try:
@@ -53,6 +58,10 @@ class MPCController(ITrajectoryTracker):
         self.fallback_heading_kp = fallback_config.get('heading_kp', 1.5)
         self.fallback_max_curvature = fallback_config.get('max_curvature', 5.0)
         
+        # 阿克曼车辆最小转向速度 - 从 backup 配置读取以保持一致性
+        backup_config = config.get('backup', {})
+        self.min_turn_speed = backup_config.get('min_turn_speed', 0.1)
+        
         # ACADOS 求解器参数
         solver_config = mpc_config.get('solver', {})
         self.nlp_max_iter = solver_config.get('nlp_max_iter', 50)
@@ -70,11 +79,18 @@ class MPCController(ITrajectoryTracker):
         self._last_kkt_residual = 0.0
         self._last_condition_number = 1.0
         self._last_cmd: Optional[ControlOutput] = None
+        
+        # 速度平滑器
+        az_max = constraints.get('az_max', 1.0)
+        self._velocity_smoother = VelocitySmoother(
+            a_max=self.a_max, az_max=az_max,
+            alpha_max=self.alpha_max, dt=self.dt
+        )
     
     def _initialize_solver(self) -> None:
         """初始化 ACADOS 求解器"""
         if not ACADOS_AVAILABLE:
-            print("ACADOS not available, using fallback mode")
+            logger.info("ACADOS not available, using fallback mode")
             self._is_initialized = False
             return
         
@@ -202,10 +218,10 @@ class MPCController(ITrajectoryTracker):
             self._solver = AcadosOcpSolver(ocp, json_file='acados_ocp.json')
             self._is_initialized = True
             self._ocp = ocp
-            print("ACADOS MPC solver initialized successfully")
+            logger.info("ACADOS MPC solver initialized successfully")
             
         except Exception as e:
-            print(f"ACADOS initialization failed: {e}")
+            logger.error(f"ACADOS initialization failed: {e}")
             self._is_initialized = False
 
     
@@ -233,7 +249,7 @@ class MPCController(ITrajectoryTracker):
                 theta_ref = state[6]
             elif abs(wz_ref) > 1e-3:
                 theta_ref = theta_ref + wz_ref * self.dt
-                theta_ref = np.arctan2(np.sin(theta_ref), np.cos(theta_ref))
+                theta_ref = normalize_angle(theta_ref)
             elif traj_idx < len(trajectory.points) - 1:
                 next_point = trajectory.points[traj_idx + 1]
                 dx = next_point.x - ref_point.x
@@ -286,12 +302,8 @@ class MPCController(ITrajectoryTracker):
             omega = x_next[7]
             frame_id = self.output_frame  # 使用配置的输出坐标系
         
-        if self._last_cmd is not None:
-            max_dv = self.a_max * self.dt
-            vx = np.clip(vx, self._last_cmd.vx - max_dv, self._last_cmd.vx + max_dv)
-            vy = np.clip(vy, self._last_cmd.vy - max_dv, self._last_cmd.vy + max_dv)
-        
-        result = ControlOutput(
+        # 构建原始控制输出
+        raw_result = ControlOutput(
             vx=vx, vy=vy, vz=vz, omega=omega,
             frame_id=frame_id, success=True,
             health_metrics={
@@ -300,6 +312,10 @@ class MPCController(ITrajectoryTracker):
                 'solver_status': status
             }
         )
+        
+        # 使用 VelocitySmoother 进行速度平滑
+        result = self._velocity_smoother.smooth(raw_result, self._last_cmd)
+        result.health_metrics = raw_result.health_metrics
         
         self._last_cmd = result
         return result
@@ -325,14 +341,14 @@ class MPCController(ITrajectoryTracker):
         except ValueError as e:
             # 输入数据错误（如 NaN、维度不匹配等）
             # 这通常是可恢复的，下一次调用可能成功
-            print(f"[MPC] Input validation error: {e}")
+            logger.warning(f"Input validation error: {e}")
             return ControlOutput(vx=0, vy=0, vz=0, omega=0,
                                frame_id=self.output_frame, success=False,
                                health_metrics={'error_type': 'input_validation'})
         except RuntimeError as e:
             # 求解器运行时错误（如数值问题、求解失败等）
             # 可能需要重新初始化求解器
-            print(f"[MPC] Solver runtime error: {e}")
+            logger.warning(f"Solver runtime error: {e}")
             # 尝试使用 fallback 求解器
             try:
                 result = self._solve_fallback(state, trajectory, consistency)
@@ -346,7 +362,7 @@ class MPCController(ITrajectoryTracker):
                                    health_metrics={'error_type': 'solver_runtime'})
         except MemoryError as e:
             # 内存错误，这是严重问题
-            print(f"[MPC] Memory error: {e}")
+            logger.error(f"Memory error: {e}")
             # 尝试释放资源并重新初始化
             self._solver = None
             self._is_initialized = False
@@ -355,7 +371,7 @@ class MPCController(ITrajectoryTracker):
                                health_metrics={'error_type': 'memory_error'})
         except Exception as e:
             # 其他未预期的错误
-            print(f"[MPC] Unexpected error: {type(e).__name__}: {e}")
+            logger.error(f"Unexpected error: {type(e).__name__}: {e}")
             return ControlOutput(vx=0, vy=0, vz=0, omega=0,
                                frame_id=self.output_frame, success=False,
                                health_metrics={'error_type': 'unexpected'})
@@ -400,7 +416,7 @@ class MPCController(ITrajectoryTracker):
                 vy = 0.0
             
             target_heading = np.arctan2(dy, dx)
-            heading_error = np.arctan2(np.sin(target_heading - theta), np.cos(target_heading - theta))
+            heading_error = angle_difference(target_heading, theta)
             omega = self.fallback_heading_kp * heading_error
             omega = np.clip(omega, -self.omega_max, self.omega_max)
             
@@ -429,8 +445,8 @@ class MPCController(ITrajectoryTracker):
                     # 根据平台类型决定是否可以原地转向
                     if self.platform_type == PlatformType.ACKERMANN:
                         # 阿克曼车辆不能原地转向，需要以最小速度前进/后退
-                        # 使用小速度配合大转向角
-                        min_turn_speed = max(0.1, self.v_min) if self.v_min > 0 else 0.1
+                        # 使用配置的最小转向速度
+                        min_turn_speed = max(self.min_turn_speed, self.v_min) if self.v_min > 0 else self.min_turn_speed
                         vx = min_turn_speed
                     else:
                         # 差速车可以原地转向
@@ -452,16 +468,18 @@ class MPCController(ITrajectoryTracker):
             vz = 0.0
             frame_id = self.output_frame  # 使用配置的输出坐标系
         
-        if self._last_cmd is not None:
-            max_dv = self.a_max * self.dt
-            vx = np.clip(vx, self._last_cmd.vx - max_dv, self._last_cmd.vx + max_dv)
-            vy = np.clip(vy, self._last_cmd.vy - max_dv, self._last_cmd.vy + max_dv)
+        # 构建原始控制输出
+        raw_result = ControlOutput(vx=vx, vy=vy, vz=vz, omega=omega,
+                                   frame_id=frame_id, success=True)
+        
+        # 使用 VelocitySmoother 进行速度平滑
+        result = self._velocity_smoother.smooth(raw_result, self._last_cmd)
         
         self._last_kkt_residual = 0.0
         self._last_condition_number = 1.0
+        self._last_cmd = result
         
-        return ControlOutput(vx=vx, vy=vy, vz=vz, omega=omega,
-                            frame_id=frame_id, success=True)
+        return result
     
     def set_horizon(self, horizon: int) -> None:
         """动态调整预测 horizon"""
@@ -470,10 +488,10 @@ class MPCController(ITrajectoryTracker):
         
         old_horizon = self.horizon
         self.horizon = horizon
-        print(f"MPC horizon changed from {old_horizon} to {horizon}")
+        logger.info(f"MPC horizon changed from {old_horizon} to {horizon}")
         
         if self._is_initialized:
-            print("Reinitializing ACADOS solver with new horizon...")
+            logger.info("Reinitializing ACADOS solver with new horizon...")
             self._initialize_solver()
     
     def get_health_metrics(self) -> Dict[str, Any]:

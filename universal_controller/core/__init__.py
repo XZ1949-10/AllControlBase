@@ -12,6 +12,9 @@ from .interfaces import (
 )
 from .ros_compat import (
     ROS_AVAILABLE, TF2_AVAILABLE,
+    EPSILON, EPSILON_SMALL, EPSILON_ANGLE,
     euler_from_quaternion, quaternion_from_euler,
+    normalize_angle, angle_difference,
     get_current_time, create_time, create_duration
 )
+from .velocity_smoother import VelocitySmoother, clip_velocity

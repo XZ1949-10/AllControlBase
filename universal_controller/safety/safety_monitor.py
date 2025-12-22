@@ -1,5 +1,5 @@
 """安全监控器"""
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional
 from collections import deque
 import numpy as np
 
@@ -119,13 +119,9 @@ class BasicSafetyMonitor(ISafetyMonitor):
         return self._filtered_ax, self._filtered_ay, self._filtered_az, self._filtered_alpha
     
     def check(self, state: np.ndarray, cmd: ControlOutput, 
-              diagnostics: Union[DiagnosticsInput, Dict[str, Any]]) -> SafetyDecision:
+              diagnostics: DiagnosticsInput) -> SafetyDecision:
         """检查控制命令安全性"""
-        # 支持 DiagnosticsInput 和 Dict 两种输入格式（向后兼容）
-        if isinstance(diagnostics, DiagnosticsInput):
-            diag = diagnostics
-        else:
-            diag = DiagnosticsInput.from_dict(diagnostics)
+        diag = diagnostics
         
         reasons = []
         limited_cmd = cmd.copy()

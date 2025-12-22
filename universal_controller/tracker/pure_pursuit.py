@@ -5,6 +5,8 @@ import numpy as np
 from ..core.interfaces import ITrajectoryTracker
 from ..core.data_types import Trajectory, ControlOutput, ConsistencyResult, Point3D
 from ..core.enums import PlatformType, HeadingMode
+from ..core.ros_compat import normalize_angle, angle_difference
+from ..core.velocity_smoother import VelocitySmoother
 from ..config.default_config import PLATFORM_CONFIG
 
 
@@ -59,6 +61,12 @@ class PurePursuitController(ITrajectoryTracker):
         self._current_position: Optional[np.ndarray] = None
         self._manual_heading: Optional[float] = None
         self._is_shutdown = False
+        
+        # 速度平滑器
+        self._velocity_smoother = VelocitySmoother(
+            a_max=self.a_max, az_max=self.az_max, 
+            alpha_max=self.alpha_max, dt=self.dt
+        )
     
     def _parse_heading_mode(self, mode_str: str) -> HeadingMode:
         mode_map = {
@@ -179,8 +187,7 @@ class PurePursuitController(ITrajectoryTracker):
                 # 目标点在车辆后方，使用航向误差控制
                 # 差速车可以原地转向，所以先转向再前进
                 target_heading = np.arctan2(dy, dx)
-                heading_error = np.arctan2(np.sin(target_heading - theta), 
-                                          np.cos(target_heading - theta))
+                heading_error = angle_difference(target_heading, theta)
                 
                 # 计算期望角速度
                 omega_desired = self.kp_heading * heading_error
@@ -236,8 +243,7 @@ class PurePursuitController(ITrajectoryTracker):
                 
                 # 航向误差控制部分
                 target_heading = np.arctan2(dy, dx)
-                heading_error = np.arctan2(np.sin(target_heading - theta), 
-                                          np.cos(target_heading - theta))
+                heading_error = angle_difference(target_heading, theta)
                 hc_omega = self.kp_heading * heading_error
                 hc_omega = np.clip(hc_omega, -omega_limit, omega_limit)
                 
@@ -315,13 +321,13 @@ class PurePursuitController(ITrajectoryTracker):
         if self.heading_mode == HeadingMode.FOLLOW_VELOCITY:
             if dist_to_target > 0.1:
                 target_heading = np.arctan2(dy, dx)
-                heading_error = np.arctan2(np.sin(target_heading - theta), np.cos(target_heading - theta))
+                heading_error = angle_difference(target_heading, theta)
                 omega = self.kp_heading * heading_error
             else:
                 omega = 0.0
         elif self.heading_mode == HeadingMode.FIXED:
             if self.fixed_heading is not None:
-                heading_error = np.arctan2(np.sin(self.fixed_heading - theta), np.cos(self.fixed_heading - theta))
+                heading_error = angle_difference(self.fixed_heading, theta)
                 omega = self.kp_heading * heading_error
             else:
                 omega = 0.0
@@ -330,14 +336,13 @@ class PurePursuitController(ITrajectoryTracker):
                 end_point = trajectory.points[-1]
                 px, py = self._current_position[0], self._current_position[1]
                 target_heading = np.arctan2(end_point.y - py, end_point.x - px)
-                heading_error = np.arctan2(np.sin(target_heading - theta), np.cos(target_heading - theta))
+                heading_error = angle_difference(target_heading, theta)
                 omega = self.kp_heading * heading_error
             else:
                 omega = 0.0
         elif self.heading_mode == HeadingMode.MANUAL:
             if self._manual_heading is not None:
-                heading_error = np.arctan2(np.sin(self._manual_heading - theta), 
-                                          np.cos(self._manual_heading - theta))
+                heading_error = angle_difference(self._manual_heading, theta)
                 omega = self.kp_heading * heading_error
             else:
                 omega = 0.0
@@ -348,41 +353,12 @@ class PurePursuitController(ITrajectoryTracker):
 
     
     def _apply_velocity_smoothing(self, cmd: ControlOutput) -> ControlOutput:
-        if self.last_cmd is None:
-            return cmd
-        
-        max_dv = self.a_max * self.dt
-        max_dvz = self.az_max * self.dt
-        max_domega = self.alpha_max * self.dt
-        
-        smoothed_vx = np.clip(cmd.vx, self.last_cmd.vx - max_dv, self.last_cmd.vx + max_dv)
-        smoothed_vy = np.clip(cmd.vy, self.last_cmd.vy - max_dv, self.last_cmd.vy + max_dv)
-        smoothed_vz = np.clip(cmd.vz, self.last_cmd.vz - max_dvz, self.last_cmd.vz + max_dvz)
-        smoothed_omega = np.clip(cmd.omega, self.last_cmd.omega - max_domega, self.last_cmd.omega + max_domega)
-        
-        return ControlOutput(vx=smoothed_vx, vy=smoothed_vy, vz=smoothed_vz, omega=smoothed_omega,
-                            frame_id=cmd.frame_id, success=cmd.success)
+        """使用 VelocitySmoother 平滑控制命令"""
+        return self._velocity_smoother.smooth(cmd, self.last_cmd)
     
     def _smooth_stop_command(self) -> ControlOutput:
-        if self.last_cmd is None:
-            return ControlOutput(vx=0.0, vy=0.0, vz=0.0, omega=0.0, frame_id=self.output_frame, success=True)
-        
-        max_dv = self.a_max * self.dt
-        max_dvz = self.az_max * self.dt
-        max_domega = self.alpha_max * self.dt
-        
-        def smooth_to_zero(value: float, max_change: float) -> float:
-            if abs(value) <= max_change:
-                return 0.0
-            return value - max_change if value > 0 else value + max_change
-        
-        cmd = ControlOutput(
-            vx=smooth_to_zero(self.last_cmd.vx, max_dv),
-            vy=smooth_to_zero(self.last_cmd.vy, max_dv),
-            vz=smooth_to_zero(self.last_cmd.vz, max_dvz),
-            omega=smooth_to_zero(self.last_cmd.omega, max_domega),
-            frame_id=self.output_frame, success=True
-        )
+        """使用 VelocitySmoother 平滑停止"""
+        cmd = self._velocity_smoother.smooth_to_stop(self.last_cmd, self.output_frame)
         self.last_cmd = cmd
         return cmd
     

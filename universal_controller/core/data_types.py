@@ -12,6 +12,16 @@ from .enums import TrajectoryMode, ControllerState
 logger = logging.getLogger(__name__)
 
 
+def _normalize_angle_internal(angle: float) -> float:
+    """
+    将角度归一化到 [-π, π] 范围
+    
+    注意: 这是内部函数，用于避免循环导入。
+    外部代码应使用 ros_compat.normalize_angle()
+    """
+    return np.arctan2(np.sin(angle), np.cos(angle))
+
+
 # 模拟 ROS Header
 @dataclass
 class Header:
@@ -120,7 +130,7 @@ class Trajectory:
                 heading_curr = np.arctan2(vy, vx)
                 heading_next = np.arctan2(vy_next, vx_next)
                 dheading = heading_next - heading_curr
-                dheading = np.arctan2(np.sin(dheading), np.cos(dheading))
+                dheading = _normalize_angle_internal(dheading)
                 wz = dheading / self.dt_sec
             else:
                 wz = 0.0
