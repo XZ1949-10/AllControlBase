@@ -405,7 +405,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         self._kalman_update_with_expected(z, z_expected, H, self.R_imu)
     
-    def _kalman_update(self, z: np.ndarray, H: np.ndarray, R: np.ndarray):
+    def _kalman_update(self, z: np.ndarray, H: np.ndarray, R: np.ndarray) -> None:
         y = z - H @ self.x
         self._apply_kalman_gain(y, H, R)
     
@@ -414,7 +414,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         y = z - z_expected
         self._apply_kalman_gain(y, H, R)
     
-    def _apply_kalman_gain(self, y: np.ndarray, H: np.ndarray, R: np.ndarray):
+    def _apply_kalman_gain(self, y: np.ndarray, H: np.ndarray, R: np.ndarray) -> None:
         S = H @ self.P @ H.T + R
         try:
             L = np.linalg.cholesky(S)
@@ -498,7 +498,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         return F
     
-    def _ensure_positive_definite(self):
+    def _ensure_positive_definite(self) -> None:
         """确保协方差矩阵正定"""
         self.P = (self.P + self.P.T) / 2
         try:
@@ -517,7 +517,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
     def _is_stationary(self) -> bool:
         return np.linalg.norm(self.x[3:6]) < self.stationary_thresh
     
-    def _update_odom_covariance(self, v_body: float):
+    def _update_odom_covariance(self, v_body: float) -> None:
         """更新 odom 测量噪声协方差"""
         if self.slip_detected:
             self.R_odom_current = self.R_odom_base * self.slip_covariance_scale

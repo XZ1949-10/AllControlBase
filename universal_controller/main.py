@@ -1,7 +1,20 @@
 """
-通用控制器主入口
+通用控制器主入口 - 演示脚本
 
-示例用法:
+这是一个演示脚本，展示如何使用 Universal Controller。
+使用模拟数据进行测试，不适用于生产环境。
+
+生产环境使用示例:
+    from universal_controller import ControllerManager, DEFAULT_CONFIG
+    
+    config = DEFAULT_CONFIG.copy()
+    manager = ControllerManager(config)
+    manager.initialize_default_components()
+    
+    # 在控制循环中使用真实的 odom 和 trajectory 数据
+    cmd = manager.update(real_odom, real_trajectory)
+
+演示用法:
     python -m universal_controller.main
 """
 import time

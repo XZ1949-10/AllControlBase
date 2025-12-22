@@ -87,6 +87,10 @@ class DiagnosticsPublisher:
         # 发布历史
         self._last_published: Optional[Dict[str, Any]] = None
         
+        # 发布失败警告标志（避免重复警告）
+        self._cmd_publish_warned: bool = False
+        self._diag_publish_warned: bool = False
+        
         # 初始化 ROS Publishers
         self._init_ros_publishers()
     
@@ -212,8 +216,12 @@ class DiagnosticsPublisher:
             
             self._cmd_pub.publish(twist)
         except Exception as e:
-            # 发布失败不应影响主控制循环，使用 debug 级别记录
-            logger.debug(f"Command publish failed: {e}")
+            # 首次失败记录 warning，后续使用 debug 避免日志泛滥
+            if not self._cmd_publish_warned:
+                logger.warning(f"Command publish failed (subsequent failures will be debug): {e}")
+                self._cmd_publish_warned = True
+            else:
+                logger.debug(f"Command publish failed: {e}")
     
     def get_last_published(self) -> Optional[Dict[str, Any]]:
         """获取最后发布的诊断数据"""
@@ -305,5 +313,9 @@ class DiagnosticsPublisher:
             msg.data = json.dumps(diag_dict, default=_numpy_json_encoder)
             self._diagnostics_pub.publish(msg)
         except Exception as e:
-            # 发布失败不应影响主控制循环，使用 debug 级别记录
-            logger.debug(f"Diagnostics publish failed: {e}")
+            # 首次失败记录 warning，后续使用 debug 避免日志泛滥
+            if not self._diag_publish_warned:
+                logger.warning(f"Diagnostics publish failed (subsequent failures will be debug): {e}")
+                self._diag_publish_warned = True
+            else:
+                logger.debug(f"Diagnostics publish failed: {e}")

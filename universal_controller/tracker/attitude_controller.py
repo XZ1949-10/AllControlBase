@@ -83,6 +83,9 @@ class QuadrotorAttitudeController(IAttitudeController):
     
     # 数值稳定性常量
     MIN_COS_ROLL_THRESH = 0.1  # cos(roll) 最小阈值，用于避免奇异情况
+    # 低推力时简化计算的姿态角限制 (sin 值)
+    # 0.5 对应约 30° 的姿态角，用于低推力情况下的保守估计
+    LOW_THRUST_ATTITUDE_SIN_LIMIT = 0.5
     
     def __init__(self, config: Dict[str, Any]):
         attitude_config = config.get('attitude', {})
@@ -310,9 +313,11 @@ class QuadrotorAttitudeController(IAttitudeController):
         if thrust_accel < MIN_THRUST_ACCEL:
             # 推力很小，使用简化计算
             # 假设小姿态角近似: roll ≈ -ay/g, pitch ≈ ax/g
+            # 使用类常量限制姿态角范围，避免数值不稳定
             if thrust_accel > 1e-6:
-                roll = np.arcsin(np.clip(-ay_body / self.gravity, -0.5, 0.5))
-                pitch = -np.arcsin(np.clip(ax_body / self.gravity, -0.5, 0.5))
+                sin_limit = self.LOW_THRUST_ATTITUDE_SIN_LIMIT
+                roll = np.arcsin(np.clip(-ay_body / self.gravity, -sin_limit, sin_limit))
+                pitch = -np.arcsin(np.clip(ax_body / self.gravity, -sin_limit, sin_limit))
             else:
                 roll = 0.0
                 pitch = 0.0
