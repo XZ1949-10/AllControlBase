@@ -59,12 +59,22 @@ class Trajectory:
         return len(self.points)
     
     def copy(self) -> 'Trajectory':
+        """
+        创建轨迹的深拷贝
+        
+        确保所有数据都是独立的副本，修改副本不会影响原始对象
+        """
         new_header = Header(stamp=self.header.stamp, frame_id=self.header.frame_id, seq=self.header.seq)
         # 保持 velocities 的原始状态：None 保持 None，空数组保持空数组，有数据则复制
+        # 使用 np.array(..., copy=True) 确保深拷贝，即使原数组是视图
         if self.velocities is None:
             new_velocities = None
+        elif len(self.velocities) == 0:
+            # 空数组保持空数组
+            new_velocities = np.array(self.velocities, copy=True)
         else:
-            new_velocities = self.velocities.copy()
+            # 有数据则深拷贝
+            new_velocities = np.array(self.velocities, copy=True)
         return Trajectory(
             header=new_header,
             points=[Point3D(p.x, p.y, p.z) for p in self.points],

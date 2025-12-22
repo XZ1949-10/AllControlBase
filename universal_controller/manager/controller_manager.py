@@ -267,6 +267,9 @@ class ControllerManager:
         LONG_PAUSE_THRESHOLD = 0.5  # 500ms
         EKF_RESET_THRESHOLD = 2.0   # 2s
         
+        # 标记是否需要跳过预测（EKF 刚重置后）
+        skip_prediction = False
+        
         if self._last_update_time is not None:
             actual_dt = current_time - self._last_update_time
             
@@ -276,7 +279,10 @@ class ControllerManager:
                 print(f"[ControllerManager] Long pause detected ({actual_dt:.2f}s), resetting EKF")
                 if self.state_estimator:
                     self.state_estimator.reset()
-                actual_dt = self.dt  # 使用默认值
+                # 重置后跳过本次预测，只进行观测更新
+                # 这样可以让 EKF 从观测数据重新初始化状态
+                skip_prediction = True
+                actual_dt = self.dt  # 使用默认值（用于后续计算）
             elif actual_dt > LONG_PAUSE_THRESHOLD:
                 # 500ms - 2s 的暂停，使用多步预测
                 # 将长时间间隔分解为多个小步骤，提高预测精度
@@ -305,8 +311,9 @@ class ControllerManager:
         state_output: Optional[EstimatorOutput] = None
         if self.state_estimator:
             # EKF 标准流程: 先预测，再更新
-            # 预测步骤使用实际时间间隔而非固定值
-            self.state_estimator.predict(actual_dt)
+            # 如果 EKF 刚重置，跳过预测步骤
+            if not skip_prediction:
+                self.state_estimator.predict(actual_dt)
             
             # 更新步骤: 先更新 odom，再更新 IMU
             self.state_estimator.update_odom(odom)

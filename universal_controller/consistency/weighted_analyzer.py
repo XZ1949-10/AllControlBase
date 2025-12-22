@@ -139,6 +139,19 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         return 1.0, False
     
     def _compute_curvature_from_points(self, points: List[Point3D]) -> Tuple[float, bool]:
+        """
+        从轨迹点计算曲率
+        
+        使用三点法计算曲率: κ = 2 * |cross(v1, v2)| / (|v1| * |v2| * |p2-p0|)
+        
+        数值稳定性考虑:
+        - 当点距离过近时，返回无效
+        - 当分母接近零时，返回无效
+        - 限制最大曲率值
+        
+        Returns:
+            (curvature, valid): 曲率值和有效性标志
+        """
         if len(points) < 3:
             return 0.0, False
         
@@ -148,22 +161,47 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         v1, v2 = p1 - p0, p2 - p1
         l1, l2 = np.linalg.norm(v1), np.linalg.norm(v2)
         
-        if l1 < 1e-6 or l2 < 1e-6:
+        # 检查向量长度
+        MIN_SEGMENT_LENGTH = 1e-6
+        if l1 < MIN_SEGMENT_LENGTH or l2 < MIN_SEGMENT_LENGTH:
             return 0.0, False
         
         cross = v1[0] * v2[1] - v1[1] * v2[0]
         l12 = np.linalg.norm(p2 - p0)
         
-        if l12 < 1e-6:
+        if l12 < MIN_SEGMENT_LENGTH:
             return 0.0, False
         
-        curvature = 2.0 * abs(cross) / (l1 * l2 * l12)
-        # 添加数值稳定性保护：限制曲率最大值
-        max_curvature = 10.0  # 最大曲率限制 (对应最小转弯半径 0.1m)
-        curvature = min(curvature, max_curvature)
+        # 计算分母并检查数值稳定性
+        denominator = l1 * l2 * l12
+        MIN_DENOMINATOR = 1e-9
+        if denominator < MIN_DENOMINATOR:
+            # 分母过小，可能导致数值不稳定
+            return 0.0, False
+        
+        curvature = 2.0 * abs(cross) / denominator
+        
+        # 限制曲率最大值 (对应最小转弯半径 0.1m)
+        MAX_CURVATURE = 10.0
+        curvature = min(curvature, MAX_CURVATURE)
+        
         return curvature, True
     
     def _compute_curvature_from_velocities(self, velocities: np.ndarray, dt: float) -> Tuple[float, bool]:
+        """
+        从速度向量计算曲率
+        
+        使用公式: κ = |v × a| / |v|³
+        其中 v 是速度向量，a 是加速度向量
+        
+        数值稳定性考虑:
+        - 当速度过低时，返回无效
+        - 当分母接近零时，返回无效
+        - 限制最大曲率值
+        
+        Returns:
+            (curvature, valid): 曲率值和有效性标志
+        """
         if len(velocities) < 2:
             return 0.0, False
         
@@ -175,14 +213,24 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         a = (v_next - v) / dt
         v_norm = np.linalg.norm(v)
         
+        # 低速时曲率计算不可靠
         if v_norm < self.low_speed_thresh:
             return 0.0, False
         
         cross = v[0] * a[1] - v[1] * a[0]
-        # 添加数值稳定性保护：限制曲率最大值
-        curvature = abs(cross) / (v_norm ** 3)
-        max_curvature = 10.0  # 最大曲率限制 (对应最小转弯半径 0.1m)
-        curvature = min(curvature, max_curvature)
+        
+        # 计算分母并检查数值稳定性
+        denominator = v_norm ** 3
+        MIN_DENOMINATOR = 1e-9
+        if denominator < MIN_DENOMINATOR:
+            return 0.0, False
+        
+        curvature = abs(cross) / denominator
+        
+        # 限制曲率最大值 (对应最小转弯半径 0.1m)
+        MAX_CURVATURE = 10.0
+        curvature = min(curvature, MAX_CURVATURE)
+        
         return curvature, True
     
     def reset(self) -> None:

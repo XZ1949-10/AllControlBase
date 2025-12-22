@@ -288,16 +288,29 @@ class AdaptiveEKFEstimator(IStateEstimator):
         ay_world = ax_body_true * sin_theta + ay_body_true * cos_theta
         
         # 打滑检测：比较 IMU 测量的加速度与 odom 计算的加速度
-        if self._world_accel_initialized:
+        # 添加时间窗口检查，确保 odom 加速度数据是新鲜的
+        current_imu_time = _get_monotonic_time()
+        ACCEL_FRESHNESS_THRESH = 0.1  # 100ms 内的 odom 加速度数据才有效
+        
+        odom_accel_fresh = (
+            self._world_accel_initialized and 
+            self.last_odom_time is not None and
+            (current_imu_time - self.last_odom_time) < ACCEL_FRESHNESS_THRESH
+        )
+        
+        if odom_accel_fresh:
             imu_accel_world = np.array([ax_world, ay_world])
             accel_diff = np.linalg.norm(imu_accel_world - self.world_accel_vec)
             self.slip_probability = self._compute_slip_probability(accel_diff)
             self.slip_detected = self.slip_probability > 0.5
         else:
-            self.slip_probability = 0.0
-            self.slip_detected = False
+            # odom 加速度数据过旧，不进行打滑检测
+            # 保持上一次的打滑状态，但逐渐衰减概率
+            if self.slip_probability > 0:
+                self.slip_probability = max(0, self.slip_probability - 0.05)
+            self.slip_detected = self.slip_probability > 0.5
         
-        self.last_imu_time = _get_monotonic_time()
+        self.last_imu_time = current_imu_time
         
         # IMU 观测向量
         z = np.array([

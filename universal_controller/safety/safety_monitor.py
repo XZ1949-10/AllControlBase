@@ -62,6 +62,11 @@ class BasicSafetyMonitor(ISafetyMonitor):
         
         这可以减少由于速度测量噪声导致的加速度估计噪声
         
+        初始化策略:
+        - 第一次调用时，使用原始值初始化滤波器
+        - 但如果原始值异常大（超过限制的 2 倍），使用限制值初始化
+        - 这可以避免启动时的异常值影响后续滤波
+        
         Args:
             raw_ax, raw_ay, raw_az: 原始加速度估计
             raw_alpha: 原始角加速度估计
@@ -88,12 +93,19 @@ class BasicSafetyMonitor(ISafetyMonitor):
             avg_alpha = raw_alpha
         
         # 应用低通滤波（指数移动平均）
-        # 第一次调用时直接使用原始值初始化，避免从零开始的滞后
         if self._filtered_ax is None:
-            self._filtered_ax = avg_ax
-            self._filtered_ay = avg_ay
-            self._filtered_az = avg_az
-            self._filtered_alpha = avg_alpha
+            # 第一次调用时初始化滤波器
+            # 如果初始值异常大，使用限制值初始化，避免异常值影响
+            INIT_CLAMP_FACTOR = 2.0  # 初始化时的限制因子
+            init_ax = np.clip(avg_ax, -self.a_max * INIT_CLAMP_FACTOR, self.a_max * INIT_CLAMP_FACTOR)
+            init_ay = np.clip(avg_ay, -self.a_max * INIT_CLAMP_FACTOR, self.a_max * INIT_CLAMP_FACTOR)
+            init_az = np.clip(avg_az, -self.az_max * INIT_CLAMP_FACTOR, self.az_max * INIT_CLAMP_FACTOR)
+            init_alpha = np.clip(avg_alpha, -self.alpha_max * INIT_CLAMP_FACTOR, self.alpha_max * INIT_CLAMP_FACTOR)
+            
+            self._filtered_ax = init_ax
+            self._filtered_ay = init_ay
+            self._filtered_az = init_az
+            self._filtered_alpha = init_alpha
         else:
             self._filtered_ax = self.accel_filter_alpha * avg_ax + (1 - self.accel_filter_alpha) * self._filtered_ax
             self._filtered_ay = self.accel_filter_alpha * avg_ay + (1 - self.accel_filter_alpha) * self._filtered_ay

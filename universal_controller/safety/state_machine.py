@@ -117,7 +117,10 @@ class StateMachine:
             # 尝试恢复到 NORMAL
             if alpha > self.alpha_recovery_value and data_valid:
                 self.alpha_recovery_count += 1
-                mpc_is_healthy = mpc_health is None or mpc_health.healthy
+                # mpc_health 为 None 表示 MPC 未运行或未初始化
+                # 在这种情况下，我们应该保守地认为 MPC 不健康
+                # 只有当 mpc_health 存在且 healthy=True 时才认为健康
+                mpc_is_healthy = mpc_health is not None and mpc_health.healthy
                 if self.alpha_recovery_count >= self.alpha_recovery_thresh and mpc_is_healthy:
                     self.state = ControllerState.NORMAL
                     self._reset_all_counters()
@@ -167,7 +170,9 @@ class StateMachine:
         elif self.state == ControllerState.STOPPED:
             # 从 STOPPED 恢复
             if has_valid_data and not odom_timeout and not traj_timeout_exceeded:
-                mpc_is_healthy = mpc_health is None or mpc_health.healthy
+                # mpc_health 为 None 表示 MPC 未运行或未初始化
+                # 从 STOPPED 恢复时，如果 MPC 状态未知，应该先进入 MPC_DEGRADED 观察
+                mpc_is_healthy = mpc_health is not None and mpc_health.healthy
                 if mpc_is_healthy and not safety_failed:
                     self.state = ControllerState.NORMAL
                 else:

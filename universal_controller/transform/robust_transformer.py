@@ -282,6 +282,19 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self._last_status = status
         
         # 使用 odom 积分计算变换
+        # 
+        # 注意坐标系处理:
+        # - _fallback_start_tf2_position 和 _fallback_start_tf2_yaw 是 TF2 变换
+        #   表示 source_frame 到 target_frame 的变换
+        # - delta_position 是状态估计器在世界坐标系 (odom) 下的位移
+        # - 如果 TF2 变换包含旋转，需要将 delta_position 旋转到正确的坐标系
+        #
+        # 对于典型的 base_link -> odom 变换:
+        # - TF2 变换表示机器人在 odom 坐标系下的位姿
+        # - 状态估计器的位移也是在 odom 坐标系下
+        # - 因此可以直接相加
+        #
+        # 对于更复杂的变换链，需要考虑旋转
         if (self.state_estimator is not None and 
             self._fallback_start_estimator_position is not None and
             self._fallback_start_tf2_position is not None):
@@ -290,14 +303,30 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             current_estimator_position = state.state[:3]
             current_estimator_theta = state.state[6]
             
-            # 计算相对位移
+            # 计算相对位移（在状态估计器的坐标系下，通常是 odom）
             delta_position = current_estimator_position - self._fallback_start_estimator_position
             delta_theta = current_estimator_theta - self._fallback_start_estimator_theta
             delta_theta = np.arctan2(np.sin(delta_theta), np.cos(delta_theta))
             
+            # 如果 TF2 变换的 yaw 不为零，需要将 delta_position 旋转到 TF2 坐标系
+            # 这是因为 TF2 变换可能包含一个初始旋转
+            # 
+            # 对于 base_link -> odom 的情况:
+            # - _fallback_start_tf2_yaw 是机器人在 odom 坐标系下的初始航向
+            # - delta_position 已经是在 odom 坐标系下的位移
+            # - 不需要额外旋转
+            #
+            # 对于其他情况（如 base_link -> map，其中 map 和 odom 有旋转偏移）:
+            # - 需要将 delta_position 从 odom 坐标系旋转到 map 坐标系
+            # - 但这需要知道 odom -> map 的旋转，这里没有这个信息
+            #
+            # 因此，这里假设 TF2 变换的目标坐标系与状态估计器的坐标系一致
+            # 这是大多数实际应用的情况
+            
             # 估计当前变换
             estimated_position = self._fallback_start_tf2_position + delta_position
             estimated_yaw = self._fallback_start_tf2_yaw + delta_theta
+            estimated_yaw = np.arctan2(np.sin(estimated_yaw), np.cos(estimated_yaw))
             
             transformed_traj = self._apply_tf2_transform(
                 traj, estimated_position, estimated_yaw, target_frame)
