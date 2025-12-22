@@ -19,7 +19,7 @@ def create_test_trajectory(
     num_points: int = 20,
     dt: float = 0.1,
     trajectory_type: str = 'sine',
-    frame_id: str = 'world',
+    frame_id: str = 'base_link',
     confidence: float = 0.9,
     soft_enabled: bool = False,
     **kwargs
@@ -31,13 +31,17 @@ def create_test_trajectory(
         num_points: 轨迹点数
         dt: 时间步长 (秒)
         trajectory_type: 轨迹类型 ('sine', 'circle', 'straight', 'figure8')
-        frame_id: 坐标系 ID
+        frame_id: 坐标系 ID，默认 'base_link' (网络输出的局部坐标系)
         confidence: 置信度
         soft_enabled: 是否启用 Soft Head
         **kwargs: 轨迹类型特定参数
     
     Returns:
         Trajectory 对象
+        
+    Note:
+        默认 frame_id='base_link' 模拟网络输出的局部轨迹，
+        轨迹点是相对于当前机器人位置的局部坐标。
     """
     points = []
     velocities = [] if soft_enabled else None
@@ -218,6 +222,12 @@ def create_test_state_sequence(
     
     用于模拟控制循环的输入数据。
     
+    注意: 此函数生成的轨迹是在世界坐标系下的 (frame_id='world')，
+    因为它会根据当前位置偏移轨迹点。这模拟的是已经变换后的轨迹。
+    
+    如果需要测试坐标变换功能，应该使用 create_test_trajectory() 
+    生成局部坐标系的轨迹 (frame_id='base_link')。
+    
     Args:
         num_steps: 步数
         dt: 时间步长
@@ -234,14 +244,16 @@ def create_test_state_sequence(
     
     for i in range(num_steps):
         # 创建轨迹 (从当前位置开始)
+        # 注意: 这里使用 frame_id='world' 因为我们会手动偏移轨迹点
         traj = create_test_trajectory(
             num_points=20,
             dt=0.1,
             trajectory_type=trajectory_type,
+            frame_id='world',  # 偏移后的轨迹在世界坐标系
             **kwargs
         )
         
-        # 偏移轨迹到当前位置
+        # 偏移轨迹到当前位置 (模拟坐标变换后的结果)
         for j, pt in enumerate(traj.points):
             # 旋转并平移
             px = pt.x * math.cos(theta) - pt.y * math.sin(theta) + x
@@ -282,3 +294,69 @@ def create_test_state_sequence(
                 theta += omega * dt
     
     return sequence
+
+
+def create_local_trajectory_with_transform(
+    robot_x: float,
+    robot_y: float,
+    robot_theta: float,
+    num_points: int = 20,
+    dt: float = 0.1,
+    trajectory_type: str = 'straight',
+    soft_enabled: bool = False,
+    **kwargs
+) -> Tuple[Trajectory, Trajectory]:
+    """
+    创建局部轨迹和对应的世界坐标系轨迹
+    
+    用于测试坐标变换功能。
+    
+    Args:
+        robot_x, robot_y, robot_theta: 机器人在世界坐标系中的位姿
+        num_points: 轨迹点数
+        dt: 时间步长
+        trajectory_type: 轨迹类型
+        soft_enabled: 是否启用 Soft Head
+        **kwargs: 轨迹参数
+    
+    Returns:
+        (local_traj, world_traj): 局部坐标系轨迹和世界坐标系轨迹
+    """
+    # 创建局部坐标系轨迹
+    local_traj = create_test_trajectory(
+        num_points=num_points,
+        dt=dt,
+        trajectory_type=trajectory_type,
+        frame_id='base_link',
+        soft_enabled=soft_enabled,
+        **kwargs
+    )
+    
+    # 手动变换到世界坐标系 (用于验证)
+    cos_theta = math.cos(robot_theta)
+    sin_theta = math.sin(robot_theta)
+    
+    world_points = []
+    for p in local_traj.points:
+        wx = p.x * cos_theta - p.y * sin_theta + robot_x
+        wy = p.x * sin_theta + p.y * cos_theta + robot_y
+        world_points.append(Point3D(wx, wy, p.z))
+    
+    world_velocities = None
+    if local_traj.velocities is not None:
+        world_velocities = local_traj.velocities.copy()
+        for i in range(len(world_velocities)):
+            vx, vy = world_velocities[i, 0], world_velocities[i, 1]
+            world_velocities[i, 0] = vx * cos_theta - vy * sin_theta
+            world_velocities[i, 1] = vx * sin_theta + vy * cos_theta
+    
+    world_traj = Trajectory(
+        header=Header(stamp=local_traj.header.stamp, frame_id='world'),
+        points=world_points,
+        velocities=world_velocities,
+        dt_sec=local_traj.dt_sec,
+        confidence=local_traj.confidence,
+        soft_enabled=local_traj.soft_enabled
+    )
+    
+    return local_traj, world_traj

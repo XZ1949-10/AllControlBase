@@ -7,8 +7,18 @@
 - F3.3: TF2 降级策略 (降级到 odom 积分，记录持续时间，恢复后校正)
 - F3.4: TF2 降级超过 1000ms 触发 MPC_DEGRADED 状态
 - F3.5: TF2 恢复时校正状态估计器的漂移
+
+坐标系约定:
+- 网络输出轨迹: base_link_0 (推理时刻冻结的机体坐标系，当前位置为原点)
+- 控制器工作坐标系: odom (世界坐标系)
+- 变换方向: base_link -> odom
+
+延迟补偿说明:
+- 网络推理有延迟，输出的轨迹是基于推理开始时刻的机体坐标系
+- 控制执行时机器人已经移动，需要将轨迹变换到当前的世界坐标系
+- TF2 提供 base_link -> odom 的变换，即机器人在世界坐标系中的位姿
 """
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 import numpy as np
 import logging
 
@@ -36,6 +46,12 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
     - TF2 不可用时降级到 odom 积分
     - 降级超过阈值时触发警告/临界状态
     - TF2 恢复时执行漂移校正
+    
+    坐标系处理:
+    - 网络输出轨迹在 base_link (或 base_link_0) 坐标系下
+    - 轨迹点是相对于推理时刻机器人位置的局部坐标
+    - 变换后轨迹在 odom (世界) 坐标系下
+    - 控制器使用世界坐标系下的轨迹进行跟踪
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -48,9 +64,15 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self.drift_estimation_enabled = transform_config.get('drift_estimation_enabled', True)
         self.recovery_correction_enabled = transform_config.get('recovery_correction_enabled', True)
         self.drift_rate = transform_config.get('drift_rate', 0.01)
-        self.max_drift_dt = transform_config.get('max_drift_dt', 0.5)  # 从配置读取
+        self.max_drift_dt = transform_config.get('max_drift_dt', 0.5)
         self.source_frame = transform_config.get('source_frame', 'base_link')
-        self.drift_correction_thresh = transform_config.get('drift_correction_thresh', 0.01)  # 漂移校正阈值
+        self.drift_correction_thresh = transform_config.get('drift_correction_thresh', 0.01)
+        
+        # 坐标系验证配置
+        self.expected_source_frames: List[str] = transform_config.get(
+            'expected_source_frames', ['base_link', 'base_link_0', ''])
+        self.warn_unexpected_frame = transform_config.get('warn_unexpected_frame', True)
+        self._warned_frames: set = set()  # 已警告过的坐标系，避免重复警告
         
         # 状态变量
         self.fallback_start_time: Optional[float] = None
@@ -181,13 +203,48 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         """
         变换轨迹到目标坐标系
         
+        实现 F3.1: 补偿网络推理延迟
         实现 F3.2: 使用 TF2 lookupTransform 获取坐标变换
         实现 F3.3: TF2 降级策略
+        
+        坐标变换说明:
+        - 输入轨迹在 source_frame (通常是 base_link) 坐标系下
+        - 轨迹点是相对于推理时刻机器人位置的局部坐标 (原点在机器人位置)
+        - 输出轨迹在 target_frame (通常是 odom) 坐标系下
+        - 变换使用 TF2 获取的 base_link -> odom 变换
+        
+        延迟补偿:
+        - traj.header.stamp 是轨迹生成时刻 (网络推理时刻)
+        - target_time 是当前控制时刻
+        - 理想情况下应使用 traj.header.stamp 时刻的 TF 变换
+        - 但由于 TF2 缓存限制，可能需要使用最新的变换
+        
+        Args:
+            traj: 输入轨迹 (局部坐标系)
+            target_frame: 目标坐标系 (通常是 'odom')
+            target_time: 目标时间戳 (当前控制时刻)
+        
+        Returns:
+            (transformed_traj, status): 变换后的轨迹和状态
         """
+        # 确定源坐标系
         source_frame = traj.header.frame_id if traj.header.frame_id else self.source_frame
         
+        # 坐标系验证
+        self._validate_source_frame(source_frame)
+        
+        # 确定查询时间：优先使用轨迹时间戳进行延迟补偿
+        # 如果轨迹时间戳有效且不太旧，使用它来获取更准确的变换
+        lookup_time = target_time
+        traj_stamp = traj.header.stamp
+        if traj_stamp > 0:
+            time_diff = target_time - traj_stamp
+            # 如果轨迹时间戳在合理范围内 (0-500ms 延迟)，使用它
+            if 0 <= time_diff <= 0.5:
+                lookup_time = traj_stamp
+        
         # 尝试 TF2 查找
-        position, yaw, tf2_success = self._try_tf2_lookup(target_frame, source_frame, target_time)
+        position, yaw, tf2_success = self._try_tf2_lookup(target_frame, source_frame, lookup_time)
         
         if tf2_success:
             # TF2 可用
@@ -211,28 +268,71 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             # TF2 不可用，降级处理
             return self._handle_fallback(traj, target_time, target_frame)
     
+    def _validate_source_frame(self, source_frame: str) -> None:
+        """
+        验证源坐标系是否符合预期
+        
+        网络输出的轨迹应该在 base_link 或 base_link_0 坐标系下。
+        如果收到其他坐标系的轨迹，发出警告。
+        """
+        if not self.warn_unexpected_frame:
+            return
+        
+        if source_frame not in self.expected_source_frames:
+            if source_frame not in self._warned_frames:
+                self._warned_frames.add(source_frame)
+                logger.warning(
+                    f"Unexpected trajectory frame_id: '{source_frame}'. "
+                    f"Expected one of {self.expected_source_frames}. "
+                    f"Network output should be in local (base_link) frame. "
+                    f"If this is intentional, add '{source_frame}' to "
+                    f"transform.expected_source_frames config."
+                )
+    
     def _apply_tf2_transform(self, traj: Trajectory, position: np.ndarray,
                             yaw: float, target_frame: str) -> Trajectory:
-        """应用 TF2 变换到轨迹"""
+        """
+        应用 TF2 变换到轨迹
+        
+        变换说明:
+        - position 和 yaw 表示 source_frame (base_link) 在 target_frame (odom) 中的位姿
+        - 即机器人在世界坐标系中的位置和航向
+        - 轨迹点是相对于机器人的局部坐标
+        - 变换公式: p_world = R(yaw) @ p_local + position
+        
+        Args:
+            traj: 输入轨迹 (局部坐标系)
+            position: 机器人在世界坐标系中的位置 [x, y, z]
+            yaw: 机器人在世界坐标系中的航向角
+            target_frame: 目标坐标系名称
+        
+        Returns:
+            变换后的轨迹 (世界坐标系)
+        """
         cos_yaw = np.cos(yaw)
         sin_yaw = np.sin(yaw)
         
         transformed_points = []
         for p in traj.points:
-            # 旋转 + 平移
+            # 旋转 + 平移: p_world = R(yaw) @ p_local + position
+            # 这里 p.x, p.y 是局部坐标 (相对于机器人)
+            # new_x, new_y 是世界坐标
             new_x = p.x * cos_yaw - p.y * sin_yaw + position[0]
             new_y = p.x * sin_yaw + p.y * cos_yaw + position[1]
             new_z = p.z + position[2]
             transformed_points.append(Point3D(new_x, new_y, new_z))
         
         # 变换速度 (如果有)
+        # 速度是向量，只需要旋转，不需要平移
         new_velocities = None
         if traj.velocities is not None and len(traj.velocities) > 0:
             new_velocities = traj.velocities.copy()
             for i in range(len(new_velocities)):
                 vx, vy = new_velocities[i, 0], new_velocities[i, 1]
+                # 旋转速度向量: v_world = R(yaw) @ v_local
                 new_velocities[i, 0] = vx * cos_yaw - vy * sin_yaw
                 new_velocities[i, 1] = vx * sin_yaw + vy * cos_yaw
+                # vz 不受 yaw 旋转影响
         
         new_traj = traj.copy()
         new_traj.points = transformed_points
@@ -453,3 +553,5 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self._last_status = TransformStatus.TF2_OK
         # 重置漂移估计时间跟踪
         self._last_fallback_update_time = None
+        # 重置警告记录
+        self._warned_frames.clear()

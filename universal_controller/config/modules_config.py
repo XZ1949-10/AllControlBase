@@ -25,16 +25,19 @@ CONSISTENCY_CONFIG = {
 
 # 坐标变换配置
 TRANSFORM_CONFIG = {
-    'target_frame': 'odom',           # 目标坐标系
-    'source_frame': 'odom',           # 源坐标系
+    'target_frame': 'odom',           # 目标坐标系 (控制器工作坐标系)
+    'source_frame': 'base_link',      # 源坐标系 (网络输出轨迹的坐标系)
     'fallback_duration_limit_ms': 500,   # 降级持续限制 (ms)
     'fallback_critical_limit_ms': 1000,  # 临界降级限制 (ms)
     'tf2_timeout_ms': 10,             # TF2 超时 (ms)
-    'drift_estimation_enabled': False,   # 漂移估计开关
-    'recovery_correction_enabled': False,  # 恢复校正开关
-    'drift_rate': 0.01,               # 漂移率
+    'drift_estimation_enabled': True,    # 漂移估计开关
+    'recovery_correction_enabled': True, # 恢复校正开关
+    'drift_rate': 0.01,               # 漂移率 (米/秒)
     'max_drift_dt': 0.5,              # 漂移估计最大时间间隔 (秒)
     'drift_correction_thresh': 0.01,  # 漂移校正阈值 (米/弧度)
+    # 坐标系验证
+    'expected_source_frames': ['base_link', 'base_link_0', ''],  # 期望的源坐标系列表
+    'warn_unexpected_frame': True,    # 对非期望坐标系发出警告
 }
 
 # 平滑过渡配置

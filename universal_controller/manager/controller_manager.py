@@ -400,6 +400,12 @@ class ControllerManager:
         """
         坐标变换
         
+        将网络输出的局部轨迹变换到控制器工作坐标系。
+        
+        坐标系说明:
+        - 输入轨迹: base_link (局部坐标系，当前位置为原点)
+        - 输出轨迹: odom (世界坐标系)
+        
         Returns:
             (transformed_traj, tf2_critical): 变换后轨迹和是否临界
         """
@@ -408,8 +414,19 @@ class ControllerManager:
                 trajectory, self.transform_target_frame, current_time)
             tf2_critical = tf_status.is_critical()
         else:
+            # 无坐标变换器时，假设轨迹已经在正确的坐标系
+            # 这种情况下，轨迹应该已经是世界坐标系
             transformed_traj = trajectory
             tf2_critical = False
+            
+            # 如果轨迹声明在局部坐标系但没有变换器，发出警告
+            if trajectory.header.frame_id in ['base_link', 'base_link_0']:
+                logger.warning(
+                    f"Trajectory in local frame '{trajectory.header.frame_id}' "
+                    f"but no coordinate transformer configured. "
+                    f"Control may be incorrect."
+                )
+        
         return transformed_traj, tf2_critical
     
     def _compute_mpc(self, state: np.ndarray, trajectory: Trajectory,
