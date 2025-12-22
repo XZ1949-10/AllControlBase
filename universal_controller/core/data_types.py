@@ -1,4 +1,33 @@
-"""数据类型定义"""
+"""
+数据类型定义
+
+本模块定义了控制器使用的核心数据类型。
+
+坐标系说明 (不需要建图/定位):
+==================================
+
+系统使用两个坐标系:
+
+1. base_link (机体坐标系)
+   - 原点在机器人中心
+   - X轴朝前，Y轴朝左，Z轴朝上
+   - 随机器人移动和旋转
+   - 网络输出的轨迹在此坐标系下 (局部坐标，当前位置为原点)
+
+2. odom (里程计坐标系)
+   - 从机器人启动位置开始累积
+   - 固定不动（相对于启动位置）
+   - 会有漂移，但不需要建图/定位
+   - 控制器在此坐标系下工作
+
+数据流:
+   Trajectory (base_link) → 坐标变换 → 控制器 (odom) → ControlOutput
+
+关键数据类型:
+   - Trajectory: 轨迹数据，frame_id 指定坐标系
+   - Odometry: 里程计数据，包含位姿和速度
+   - ControlOutput: 控制输出，frame_id 指定输出坐标系
+"""
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np

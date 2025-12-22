@@ -100,12 +100,19 @@ class StateMachine:
         
         两个条件都满足才允许恢复，确保恢复决策的稳健性
         """
-        if len(self._mpc_success_history) < self.mpc_recovery_history_min:
+        history_len = len(self._mpc_success_history)
+        if history_len < self.mpc_recovery_history_min:
             return False
         
-        recent_count = min(self.mpc_recovery_recent_count, len(self._mpc_success_history))
-        recent_history = list(self._mpc_success_history)[-recent_count:]
-        recent_successes = sum(1 for s in recent_history if s)
+        recent_count = min(self.mpc_recovery_recent_count, history_len)
+        
+        # 直接从 deque 末尾迭代，避免 list() 转换的内存分配
+        # deque 支持负索引和迭代
+        recent_successes = 0
+        for i in range(recent_count):
+            # 从末尾开始访问: -1, -2, -3, ...
+            if self._mpc_success_history[-(i + 1)]:
+                recent_successes += 1
         
         # 条件1: 绝对容错 - 失败次数不超过 tolerance
         failures = recent_count - recent_successes

@@ -8,15 +8,19 @@
 - F3.4: TF2 降级超过 1000ms 触发 MPC_DEGRADED 状态
 - F3.5: TF2 恢复时校正状态估计器的漂移
 
-坐标系约定:
-- 网络输出轨迹: base_link_0 (推理时刻冻结的机体坐标系，当前位置为原点)
-- 控制器工作坐标系: odom (世界坐标系)
+坐标系约定 (不需要建图):
+- base_link: 机体坐标系，原点在机器人中心，X轴朝前
+- odom: 里程计坐标系，从启动位置开始累积 (这就是"世界坐标系")
+
+数据流:
+- 网络输出轨迹: base_link (局部坐标系，当前位置为原点)
+- 控制器工作坐标系: odom (里程计坐标系)
 - 变换方向: base_link -> odom
 
 延迟补偿说明:
 - 网络推理有延迟，输出的轨迹是基于推理开始时刻的机体坐标系
-- 控制执行时机器人已经移动，需要将轨迹变换到当前的世界坐标系
-- TF2 提供 base_link -> odom 的变换，即机器人在世界坐标系中的位姿
+- 控制执行时机器人已经移动，需要将轨迹变换到当前的里程计坐标系
+- TF2 提供 base_link -> odom 的变换，即机器人在里程计坐标系中的位姿
 """
 from typing import Dict, Any, Tuple, Optional, List
 import numpy as np
@@ -47,11 +51,12 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
     - 降级超过阈值时触发警告/临界状态
     - TF2 恢复时执行漂移校正
     
-    坐标系处理:
-    - 网络输出轨迹在 base_link (或 base_link_0) 坐标系下
-    - 轨迹点是相对于推理时刻机器人位置的局部坐标
-    - 变换后轨迹在 odom (世界) 坐标系下
-    - 控制器使用世界坐标系下的轨迹进行跟踪
+    坐标系处理 (不需要建图):
+    - 网络输出轨迹在 base_link 坐标系下 (局部坐标，当前位置为原点)
+    - 变换后轨迹在 odom 坐标系下 (里程计坐标系)
+    - 控制器使用 odom 坐标系下的轨迹进行跟踪
+    
+    注意: 这里的 odom 就是你的"世界坐标系"，不需要建图或定位。
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -213,6 +218,9 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         - 输出轨迹在 target_frame (通常是 odom) 坐标系下
         - 变换使用 TF2 获取的 base_link -> odom 变换
         
+        特殊情况:
+        - 如果轨迹已经在目标坐标系 (world/odom)，则不进行变换
+        
         延迟补偿:
         - traj.header.stamp 是轨迹生成时刻 (网络推理时刻)
         - target_time 是当前控制时刻
@@ -232,6 +240,13 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         
         # 坐标系验证
         self._validate_source_frame(source_frame)
+        
+        # 如果轨迹已经在目标坐标系 (odom)，不需要变换
+        if source_frame == target_frame or source_frame == 'odom':
+            # 轨迹已经在里程计坐标系，直接返回
+            new_traj = traj.copy()
+            new_traj.header.frame_id = target_frame
+            return new_traj, TransformStatus.TF2_OK
         
         # 确定查询时间：优先使用轨迹时间戳进行延迟补偿
         # 如果轨迹时间戳有效且不太旧，使用它来获取更准确的变换
@@ -295,19 +310,19 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         应用 TF2 变换到轨迹
         
         变换说明:
-        - position 和 yaw 表示 source_frame (base_link) 在 target_frame (odom) 中的位姿
-        - 即机器人在世界坐标系中的位置和航向
+        - position 和 yaw 表示 base_link 在 odom 中的位姿
+        - 即机器人在里程计坐标系中的位置和航向
         - 轨迹点是相对于机器人的局部坐标
-        - 变换公式: p_world = R(yaw) @ p_local + position
+        - 变换公式: p_odom = R(yaw) @ p_local + position
         
         Args:
-            traj: 输入轨迹 (局部坐标系)
-            position: 机器人在世界坐标系中的位置 [x, y, z]
-            yaw: 机器人在世界坐标系中的航向角
-            target_frame: 目标坐标系名称
+            traj: 输入轨迹 (局部坐标系 base_link)
+            position: 机器人在 odom 坐标系中的位置 [x, y, z]
+            yaw: 机器人在 odom 坐标系中的航向角
+            target_frame: 目标坐标系名称 (通常是 'odom')
         
         Returns:
-            变换后的轨迹 (世界坐标系)
+            变换后的轨迹 (odom 坐标系)
         """
         cos_yaw = np.cos(yaw)
         sin_yaw = np.sin(yaw)
@@ -368,7 +383,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         fallback_duration = current_time - self.fallback_start_time
         
         # 累积漂移估计
-        # 使用实际时间间隔而非假设的固定频率
+        # 使用实际时间间隔和速度相关的漂移率
         if self.drift_estimation_enabled:
             # 计算自上次更新以来的时间间隔
             if self._last_fallback_update_time is None:
@@ -378,7 +393,17 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             # 限制 dt 在合理范围内，避免异常值 (使用配置值)
             dt = np.clip(dt, 0.0, self.max_drift_dt)
             
-            self.accumulated_drift += self.drift_rate * dt
+            # 使用速度相关的漂移率
+            # 高速运动时漂移更大（轮子打滑、IMU 积分误差等）
+            effective_drift_rate = self.drift_rate
+            if self.state_estimator is not None:
+                state = self.state_estimator.get_state()
+                velocity = np.linalg.norm(state.state[3:6])
+                # 漂移率 = 基础漂移率 * (1 + 速度因子)
+                # 速度因子使用 0.1，即每 1 m/s 增加 10% 的漂移率
+                effective_drift_rate = self.drift_rate * (1.0 + velocity * 0.1)
+            
+            self.accumulated_drift += effective_drift_rate * dt
             self._last_fallback_update_time = current_time
         
         # 确定降级状态

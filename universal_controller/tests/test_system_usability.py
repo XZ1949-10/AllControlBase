@@ -153,6 +153,7 @@ def test_trajectory_tracking_accuracy():
 def test_differential_platform():
     """测试差速车平台"""
     config = DEFAULT_CONFIG.copy()
+    config['system'] = DEFAULT_CONFIG['system'].copy()
     config['system']['platform'] = 'differential'
     
     manager = ControllerManager(config)
@@ -175,6 +176,7 @@ def test_differential_platform():
 def test_omni_platform():
     """测试全向车平台"""
     config = DEFAULT_CONFIG.copy()
+    config['system'] = DEFAULT_CONFIG['system'].copy()
     config['system']['platform'] = 'omni'
     
     manager = ControllerManager(config)
@@ -195,6 +197,7 @@ def test_omni_platform():
 def test_quadrotor_platform():
     """测试四旋翼平台"""
     config = DEFAULT_CONFIG.copy()
+    config['system'] = DEFAULT_CONFIG['system'].copy()
     config['system']['platform'] = 'quadrotor'
     
     manager = ControllerManager(config)
@@ -228,6 +231,7 @@ def test_quadrotor_platform():
 def test_ackermann_platform():
     """测试阿克曼车平台"""
     config = DEFAULT_CONFIG.copy()
+    config['system'] = DEFAULT_CONFIG['system'].copy()
     config['system']['platform'] = 'ackermann'
     
     manager = ControllerManager(config)
@@ -283,6 +287,7 @@ def test_state_machine_timeout_handling():
     """测试状态机超时处理"""
     config = DEFAULT_CONFIG.copy()
     # 设置较短的超时时间便于测试
+    config['watchdog'] = DEFAULT_CONFIG['watchdog'].copy()
     config['watchdog']['odom_timeout_ms'] = 50
     config['watchdog']['startup_grace_ms'] = 10
     
@@ -327,9 +332,9 @@ def test_empty_trajectory_handling():
     
     odom = create_test_odom(vx=1.0)
     
-    # 创建空轨迹
+    # 创建空轨迹 (使用 odom 坐标系，因为空轨迹不需要变换)
     empty_trajectory = Trajectory(
-        header=Header(stamp=time.time(), frame_id='world'),
+        header=Header(stamp=time.time(), frame_id='odom'),
         points=[],
         velocities=None,
         dt_sec=0.1,

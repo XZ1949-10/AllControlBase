@@ -172,29 +172,34 @@ class BasicSafetyMonitor(ISafetyMonitor):
                 # 应用滤波
                 ax, ay, az, alpha = self._filter_acceleration(raw_ax, raw_ay, raw_az, raw_alpha)
                 
-                # 只有在滤波器预热完成后才进行加速度限制检查
-                # 预热期间滤波值可能不准确，跳过检查避免误报
+                # 预热期间使用更宽松的阈值 (2倍)，而非完全跳过检查
+                # 这样可以防止启动时的极端加速度，同时避免误报
                 if self.is_filter_warmed_up():
-                    accel_horizontal = np.sqrt(ax**2 + ay**2)
-                    
-                    if accel_horizontal > self.a_max * self.accel_margin:
-                        reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds limit")
-                        if accel_horizontal > 1e-6:
-                            scale = self.a_max / accel_horizontal
-                            limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
-                            limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
+                    accel_margin_effective = self.accel_margin
+                else:
+                    # 预热期间使用 2 倍的裕度
+                    accel_margin_effective = self.accel_margin * 2.0
+                
+                accel_horizontal = np.sqrt(ax**2 + ay**2)
+                
+                if accel_horizontal > self.a_max * accel_margin_effective:
+                    reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds limit")
+                    if accel_horizontal > 1e-6:
+                        scale = self.a_max / accel_horizontal
+                        limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
+                        limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
+                    needs_limiting = True
+                
+                if self.is_3d:
+                    if abs(az) > self.az_max * accel_margin_effective:
+                        reasons.append(f"az {az:.2f} exceeds limit")
+                        limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
                         needs_limiting = True
-                    
-                    if self.is_3d:
-                        if abs(az) > self.az_max * self.accel_margin:
-                            reasons.append(f"az {az:.2f} exceeds limit")
-                            limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
-                            needs_limiting = True
-                    
-                    if abs(alpha) > self.alpha_max * self.accel_margin:
-                        reasons.append(f"alpha {alpha:.2f} exceeds limit")
-                        limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
-                        needs_limiting = True
+                
+                if abs(alpha) > self.alpha_max * accel_margin_effective:
+                    reasons.append(f"alpha {alpha:.2f} exceeds limit")
+                    limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
+                    needs_limiting = True
         
         self._last_cmd = limited_cmd.copy() if needs_limiting else cmd.copy()
         self._last_time = current_time

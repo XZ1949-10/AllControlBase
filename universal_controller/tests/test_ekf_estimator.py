@@ -257,6 +257,7 @@ def test_ekf_continuous_operation():
 def test_ekf_heading_fallback():
     """测试航向备选方案"""
     config = DEFAULT_CONFIG.copy()
+    config['ekf'] = DEFAULT_CONFIG['ekf'].copy()
     config['ekf']['use_odom_orientation_fallback'] = True
     config['ekf']['theta_covariance_fallback_thresh'] = 0.1
     

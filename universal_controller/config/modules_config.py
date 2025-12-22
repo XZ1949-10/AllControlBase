@@ -5,6 +5,22 @@
 - 坐标变换器
 - 平滑过渡
 - 备份控制器 (Pure Pursuit)
+
+坐标系说明 (不需要建图/定位):
+==================================
+
+    base_link (机体坐标系)              odom (里程计坐标系)
+    ┌───────────────┐                   ┌─────────────────────┐
+    │       ↑ X     │                   │                     │
+    │       │       │    坐标变换        │    机器人轨迹       │
+    │    ←──┼──→    │  ───────────→     │    ○──○──○──○       │
+    │     Y │       │  base_link→odom   │                     │
+    │       ↓       │                   │    启动位置 ●       │
+    └───────────────┘                   └─────────────────────┘
+
+- base_link: 网络输出轨迹的坐标系 (局部坐标，当前位置为原点)
+- odom: 控制器工作坐标系 (里程计坐标系，从启动位置累积)
+- odom 就是你的"世界坐标系"，不需要建图
 """
 
 # 一致性检查配置
@@ -24,9 +40,17 @@ CONSISTENCY_CONFIG = {
 }
 
 # 坐标变换配置
+#
+# 坐标系说明 (不需要建图/定位):
+# - base_link: 机体坐标系，原点在机器人中心，X轴朝前
+# - odom: 里程计坐标系，从启动位置开始累积 (这就是你的"世界坐标系")
+#
+# 数据流:
+# 网络输出 (base_link, 局部) → 坐标变换 → 控制器 (odom) → 控制输出
+#
 TRANSFORM_CONFIG = {
-    'target_frame': 'odom',           # 目标坐标系 (控制器工作坐标系)
-    'source_frame': 'base_link',      # 源坐标系 (网络输出轨迹的坐标系)
+    'target_frame': 'odom',           # 目标坐标系 (里程计坐标系，控制器工作坐标系)
+    'source_frame': 'base_link',      # 源坐标系 (网络输出轨迹的坐标系，局部坐标)
     'fallback_duration_limit_ms': 500,   # 降级持续限制 (ms)
     'fallback_critical_limit_ms': 1000,  # 临界降级限制 (ms)
     'tf2_timeout_ms': 10,             # TF2 超时 (ms)
@@ -36,7 +60,12 @@ TRANSFORM_CONFIG = {
     'max_drift_dt': 0.5,              # 漂移估计最大时间间隔 (秒)
     'drift_correction_thresh': 0.01,  # 漂移校正阈值 (米/弧度)
     # 坐标系验证
-    'expected_source_frames': ['base_link', 'base_link_0', ''],  # 期望的源坐标系列表
+    # 期望的源坐标系列表:
+    # - base_link: 标准机体坐标系 (网络输出的局部轨迹)
+    # - base_link_0: 推理时刻冻结的机体坐标系 (同 base_link)
+    # - '': 空字符串，使用默认 source_frame
+    # - odom: 已经在里程计坐标系的轨迹 (不需要变换，直接使用)
+    'expected_source_frames': ['base_link', 'base_link_0', '', 'odom'],
     'warn_unexpected_frame': True,    # 对非期望坐标系发出警告
 }
 

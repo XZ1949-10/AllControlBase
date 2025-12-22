@@ -70,6 +70,13 @@ class PurePursuitController(ITrajectoryTracker):
         else:
             self.omega_rate_limit = self.alpha_max * self.dt
         
+        # 正后方检测阈值 (当 heading_error 接近 ±π 时)
+        # 用于避免 arctan2 在 +π 和 -π 之间跳变导致的角速度突变
+        self.rear_angle_thresh = backup_config.get('rear_angle_thresh', 0.9 * np.pi)  # ~162°
+        
+        # 记录上一次的转向方向，用于正后方情况下保持一致的转向
+        self._last_turn_direction: Optional[int] = None  # +1 左转, -1 右转
+        
         self.last_cmd: Optional[ControlOutput] = None
         self._horizon: int = 20
         self._current_position: Optional[np.ndarray] = None
@@ -200,13 +207,37 @@ class PurePursuitController(ITrajectoryTracker):
                 # 差速车可以原地转向，所以先转向再前进
                 target_heading = np.arctan2(dy, dx)
                 heading_error = angle_difference(target_heading, theta)
+                abs_heading_error = abs(heading_error)
                 
-                # 计算期望角速度
-                omega_desired = self.kp_heading * heading_error
-                omega_desired = np.clip(omega_desired, -omega_limit, omega_limit)
+                # 正后方跳变处理：当目标点几乎在正后方时
+                # heading_error 可能在 +π 和 -π 之间跳变
+                # 使用一致的转向方向避免震荡
+                if abs_heading_error > self.rear_angle_thresh:
+                    # 目标点几乎在正后方
+                    if self._last_turn_direction is not None:
+                        # 保持上一次的转向方向
+                        omega_desired = self._last_turn_direction * omega_limit
+                    elif self.last_cmd is not None and abs(self.last_cmd.omega) > 0.1:
+                        # 根据当前转向方向继续
+                        self._last_turn_direction = 1 if self.last_cmd.omega > 0 else -1
+                        omega_desired = self._last_turn_direction * omega_limit
+                    else:
+                        # 首次遇到正后方情况，选择较短的转向方向
+                        # 使用 local_y 的符号来决定（目标点偏左还是偏右）
+                        if abs(local_y) > 1e-3:
+                            self._last_turn_direction = 1 if local_y > 0 else -1
+                        else:
+                            # 完全在正后方，默认左转
+                            self._last_turn_direction = 1
+                        omega_desired = self._last_turn_direction * omega_limit
+                else:
+                    # 不在正后方，清除转向方向记录
+                    self._last_turn_direction = None
+                    # 计算期望角速度
+                    omega_desired = self.kp_heading * heading_error
+                    omega_desired = np.clip(omega_desired, -omega_limit, omega_limit)
                 
                 # 应用角速度变化率限制，防止跳变
-                # 特别是当目标点在正后方时（heading_error ≈ ±π）
                 if self.last_cmd is not None:
                     omega_change = omega_desired - self.last_cmd.omega
                     omega_change = np.clip(omega_change, -self.omega_rate_limit, self.omega_rate_limit)
@@ -218,7 +249,6 @@ class PurePursuitController(ITrajectoryTracker):
                 
                 # 当航向误差较大时，减速或停止前进
                 # 使用平滑的速度衰减函数，避免突变
-                abs_heading_error = abs(heading_error)
                 if abs_heading_error > self.heading_error_thresh:
                     # 航向误差大于阈值，完全停止前进，专注于旋转
                     vx = 0.0

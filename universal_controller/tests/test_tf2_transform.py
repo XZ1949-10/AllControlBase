@@ -57,6 +57,7 @@ def test_tf2_transform_basic():
 def test_tf2_fallback_degradation():
     """测试 TF2 降级策略 (F3.3)"""
     config = DEFAULT_CONFIG.copy()
+    config['transform'] = DEFAULT_CONFIG['transform'].copy()
     config['transform']['fallback_duration_limit_ms'] = 100  # 100ms 警告
     config['transform']['fallback_critical_limit_ms'] = 200  # 200ms 临界
     
@@ -96,6 +97,7 @@ def test_tf2_fallback_degradation():
 def test_tf2_recovery_correction():
     """测试 TF2 恢复时的漂移校正 (F3.5)"""
     config = DEFAULT_CONFIG.copy()
+    config['transform'] = DEFAULT_CONFIG['transform'].copy()
     config['transform']['recovery_correction_enabled'] = True
     
     transformer = RobustCoordinateTransformer(config)

@@ -48,6 +48,7 @@ def test_mpc_basic_compute():
 def test_mpc_velocity_constraints():
     """测试 MPC 速度约束"""
     config = DEFAULT_CONFIG.copy()
+    config['constraints'] = DEFAULT_CONFIG['constraints'].copy()
     config['constraints']['v_max'] = 1.0
     platform_config = PLATFORM_CONFIG['differential']
     mpc = MPCController(config, platform_config)
@@ -165,6 +166,7 @@ def test_pure_pursuit_basic():
 def test_pure_pursuit_lookahead():
     """测试 Pure Pursuit 前瞻距离计算"""
     config = DEFAULT_CONFIG.copy()
+    config['backup'] = DEFAULT_CONFIG['backup'].copy()
     config['backup']['lookahead_dist'] = 1.0
     config['backup']['lookahead_ratio'] = 0.5
     config['backup']['min_lookahead'] = 0.5
@@ -237,6 +239,8 @@ def test_pure_pursuit_heading_modes():
     platform_config = PLATFORM_CONFIG['omni']
     
     # 测试 FOLLOW_VELOCITY 模式
+    config = DEFAULT_CONFIG.copy()
+    config['backup'] = DEFAULT_CONFIG['backup'].copy()
     config['backup']['heading_mode'] = 'follow_velocity'
     pp = PurePursuitController(config, platform_config)
     
@@ -253,9 +257,11 @@ def test_pure_pursuit_heading_modes():
     pp.shutdown()
     
     # 测试 FIXED 模式
-    config['backup']['heading_mode'] = 'fixed'
-    config['backup']['fixed_heading'] = 0.5
-    pp2 = PurePursuitController(config, platform_config)
+    config2 = DEFAULT_CONFIG.copy()
+    config2['backup'] = DEFAULT_CONFIG['backup'].copy()
+    config2['backup']['heading_mode'] = 'fixed'
+    config2['backup']['fixed_heading'] = 0.5
+    pp2 = PurePursuitController(config2, platform_config)
     
     cmd2 = pp2.compute(state, trajectory, consistency)
     assert cmd2 is not None

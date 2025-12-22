@@ -519,6 +519,7 @@ def test_platform_output_frame_config():
     """测试平台输出坐标系配置"""
     # 差速车应该输出 base_link
     config = DEFAULT_CONFIG.copy()
+    config['system'] = DEFAULT_CONFIG['system'].copy()
     config['system']['platform'] = 'differential'
     manager = ControllerManager(config)
     manager.initialize_default_components()
@@ -531,8 +532,10 @@ def test_platform_output_frame_config():
     manager.shutdown()
     
     # 全向车应该输出 world
-    config['system']['platform'] = 'omni'
-    manager2 = ControllerManager(config)
+    config2 = DEFAULT_CONFIG.copy()
+    config2['system'] = DEFAULT_CONFIG['system'].copy()
+    config2['system']['platform'] = 'omni'
+    manager2 = ControllerManager(config2)
     manager2.initialize_default_components()
     
     cmd2 = manager2.update(odom, trajectory)
@@ -547,6 +550,7 @@ def test_platform_constraints_config():
     # 测试不同平台的约束
     for platform in ['differential', 'omni', 'quadrotor', 'ackermann']:
         config = DEFAULT_CONFIG.copy()
+        config['system'] = DEFAULT_CONFIG['system'].copy()
         config['system']['platform'] = platform
         
         manager = ControllerManager(config)
@@ -571,8 +575,9 @@ def test_platform_constraints_config():
 
 def test_full_config_integration():
     """测试完整配置集成"""
-    # 创建自定义配置
-    config = DEFAULT_CONFIG.copy()
+    import copy
+    # 创建自定义配置 - 使用深拷贝避免污染 DEFAULT_CONFIG
+    config = copy.deepcopy(DEFAULT_CONFIG)
     
     # 修改多个配置
     config['system']['ctrl_freq'] = 100

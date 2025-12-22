@@ -54,6 +54,8 @@ class VelocitySmoother:
         """
         平滑控制命令
         
+        对水平速度使用向量限制，确保合成加速度不超过 a_max。
+        
         Args:
             cmd: 新的控制命令
             last_cmd: 上一次的控制命令，如果为 None 则不进行平滑
@@ -64,8 +66,22 @@ class VelocitySmoother:
         if last_cmd is None:
             return cmd
         
-        smoothed_vx = np.clip(cmd.vx, last_cmd.vx - self.max_dv, last_cmd.vx + self.max_dv)
-        smoothed_vy = np.clip(cmd.vy, last_cmd.vy - self.max_dv, last_cmd.vy + self.max_dv)
+        # 水平速度变化向量限制
+        # 确保合成加速度不超过 a_max
+        dvx = cmd.vx - last_cmd.vx
+        dvy = cmd.vy - last_cmd.vy
+        dv_magnitude = np.sqrt(dvx**2 + dvy**2)
+        
+        if dv_magnitude > self.max_dv:
+            # 按比例缩放，保持方向
+            scale = self.max_dv / dv_magnitude
+            dvx *= scale
+            dvy *= scale
+        
+        smoothed_vx = last_cmd.vx + dvx
+        smoothed_vy = last_cmd.vy + dvy
+        
+        # 垂直速度和角速度仍然独立限制
         smoothed_vz = np.clip(cmd.vz, last_cmd.vz - self.max_dvz, last_cmd.vz + self.max_dvz)
         smoothed_omega = np.clip(cmd.omega, last_cmd.omega - self.max_domega, 
                                  last_cmd.omega + self.max_domega)

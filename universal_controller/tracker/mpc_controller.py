@@ -128,18 +128,33 @@ class MPCController(ITrajectoryTracker):
             
             # 动力学
             if self.is_omni or self.is_3d:
+                # 全向移动或无人机：世界坐标系下的简单积分模型
                 xdot = ca.vertcat(vx, vy, vz, ax, ay, az, omega, alpha)
             else:
-                v_body = ca.sqrt(vx**2 + vy**2)
+                # 差速车动力学模型
+                # 状态: [px, py, pz, vx_world, vy_world, vz, theta, omega]
+                # 控制: [a_body, ay(unused), az, alpha]
+                # 
+                # 差速车约束: 速度方向与航向一致
+                # vx_world = v_body * cos(theta)
+                # vy_world = v_body * sin(theta)
+                # 
+                # 动力学方程 (考虑向心加速度):
+                # dvx_world/dt = a_body * cos(theta) - v_body * omega * sin(theta)
+                # dvy_world/dt = a_body * sin(theta) + v_body * omega * cos(theta)
+                # 
+                # 其中 a_body 是沿车辆前进方向的加速度 (控制输入 ax)
+                # 第二项是由于旋转产生的向心加速度
+                v_body = ca.sqrt(vx**2 + vy**2 + 1e-6)  # 添加小量避免除零
                 xdot = ca.vertcat(
-                    v_body * ca.cos(theta),
-                    v_body * ca.sin(theta),
-                    vz,
-                    ax * ca.cos(theta),
-                    ax * ca.sin(theta),
-                    az,
-                    omega,
-                    alpha
+                    v_body * ca.cos(theta),                                    # dpx/dt
+                    v_body * ca.sin(theta),                                    # dpy/dt
+                    vz,                                                        # dpz/dt
+                    ax * ca.cos(theta) - v_body * omega * ca.sin(theta),       # dvx_world/dt
+                    ax * ca.sin(theta) + v_body * omega * ca.cos(theta),       # dvy_world/dt
+                    az,                                                        # dvz/dt
+                    omega,                                                     # dtheta/dt
+                    alpha                                                      # domega/dt
                 )
             
             model.x = x

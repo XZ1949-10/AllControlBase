@@ -222,7 +222,7 @@ def create_test_state_sequence(
     
     用于模拟控制循环的输入数据。
     
-    注意: 此函数生成的轨迹是在世界坐标系下的 (frame_id='world')，
+    注意: 此函数生成的轨迹是在 odom 坐标系下的 (frame_id='odom')，
     因为它会根据当前位置偏移轨迹点。这模拟的是已经变换后的轨迹。
     
     如果需要测试坐标变换功能，应该使用 create_test_trajectory() 
@@ -244,12 +244,12 @@ def create_test_state_sequence(
     
     for i in range(num_steps):
         # 创建轨迹 (从当前位置开始)
-        # 注意: 这里使用 frame_id='world' 因为我们会手动偏移轨迹点
+        # 注意: 这里使用 frame_id='odom' 因为我们会手动偏移轨迹点
         traj = create_test_trajectory(
             num_points=20,
             dt=0.1,
             trajectory_type=trajectory_type,
-            frame_id='world',  # 偏移后的轨迹在世界坐标系
+            frame_id='odom',  # 偏移后的轨迹在 odom 坐标系
             **kwargs
         )
         
@@ -307,12 +307,12 @@ def create_local_trajectory_with_transform(
     **kwargs
 ) -> Tuple[Trajectory, Trajectory]:
     """
-    创建局部轨迹和对应的世界坐标系轨迹
+    创建局部轨迹和对应的 odom 坐标系轨迹
     
     用于测试坐标变换功能。
     
     Args:
-        robot_x, robot_y, robot_theta: 机器人在世界坐标系中的位姿
+        robot_x, robot_y, robot_theta: 机器人在 odom 坐标系中的位姿
         num_points: 轨迹点数
         dt: 时间步长
         trajectory_type: 轨迹类型
@@ -320,7 +320,7 @@ def create_local_trajectory_with_transform(
         **kwargs: 轨迹参数
     
     Returns:
-        (local_traj, world_traj): 局部坐标系轨迹和世界坐标系轨迹
+        (local_traj, odom_traj): 局部坐标系轨迹 (base_link) 和 odom 坐标系轨迹
     """
     # 创建局部坐标系轨迹
     local_traj = create_test_trajectory(
@@ -332,31 +332,31 @@ def create_local_trajectory_with_transform(
         **kwargs
     )
     
-    # 手动变换到世界坐标系 (用于验证)
+    # 手动变换到 odom 坐标系 (用于验证)
     cos_theta = math.cos(robot_theta)
     sin_theta = math.sin(robot_theta)
     
-    world_points = []
+    odom_points = []
     for p in local_traj.points:
-        wx = p.x * cos_theta - p.y * sin_theta + robot_x
-        wy = p.x * sin_theta + p.y * cos_theta + robot_y
-        world_points.append(Point3D(wx, wy, p.z))
+        ox = p.x * cos_theta - p.y * sin_theta + robot_x
+        oy = p.x * sin_theta + p.y * cos_theta + robot_y
+        odom_points.append(Point3D(ox, oy, p.z))
     
-    world_velocities = None
+    odom_velocities = None
     if local_traj.velocities is not None:
-        world_velocities = local_traj.velocities.copy()
-        for i in range(len(world_velocities)):
-            vx, vy = world_velocities[i, 0], world_velocities[i, 1]
-            world_velocities[i, 0] = vx * cos_theta - vy * sin_theta
-            world_velocities[i, 1] = vx * sin_theta + vy * cos_theta
+        odom_velocities = local_traj.velocities.copy()
+        for i in range(len(odom_velocities)):
+            vx, vy = odom_velocities[i, 0], odom_velocities[i, 1]
+            odom_velocities[i, 0] = vx * cos_theta - vy * sin_theta
+            odom_velocities[i, 1] = vx * sin_theta + vy * cos_theta
     
-    world_traj = Trajectory(
-        header=Header(stamp=local_traj.header.stamp, frame_id='world'),
-        points=world_points,
-        velocities=world_velocities,
+    odom_traj = Trajectory(
+        header=Header(stamp=local_traj.header.stamp, frame_id='odom'),
+        points=odom_points,
+        velocities=odom_velocities,
         dt_sec=local_traj.dt_sec,
         confidence=local_traj.confidence,
         soft_enabled=local_traj.soft_enabled
     )
     
-    return local_traj, world_traj
+    return local_traj, odom_traj
