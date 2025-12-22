@@ -76,27 +76,30 @@ class MockRospy:
     
     @staticmethod
     def loginfo(msg: str):
-        print(f"[INFO] {msg}")
+        logger.info(msg)
     
     @staticmethod
     def logwarn(msg: str):
-        print(f"[WARN] {msg}")
+        logger.warning(msg)
     
     @staticmethod
     def logerr(msg: str):
-        print(f"[ERROR] {msg}")
+        logger.error(msg)
     
     @staticmethod
     def logwarn_throttle(period: float, msg: str):
-        print(f"[WARN] {msg}")
+        # 简化实现：不做节流，直接输出
+        logger.warning(msg)
     
     @staticmethod
     def loginfo_throttle(period: float, msg: str):
-        print(f"[INFO] {msg}")
+        # 简化实现：不做节流，直接输出
+        logger.info(msg)
     
     @staticmethod
     def logwarn_once(msg: str):
-        print(f"[WARN] {msg}")
+        # 简化实现：不做去重，直接输出
+        logger.warning(msg)
 
 
 class MockTF2BufferCore:

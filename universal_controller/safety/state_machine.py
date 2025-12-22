@@ -41,6 +41,7 @@ class StateMachine:
         self.mpc_recovery_history_min = sm_config.get('mpc_recovery_history_min', 3)
         self.mpc_recovery_recent_count = sm_config.get('mpc_recovery_recent_count', 5)
         self.mpc_recovery_tolerance = sm_config.get('mpc_recovery_tolerance', 1)  # 恢复容错次数
+        self.mpc_recovery_success_ratio = sm_config.get('mpc_recovery_success_ratio', 0.8)  # 恢复所需成功率
         
         self.v_stop_thresh = safety_config.get('v_stop_thresh', 0.05)
         self.vz_stop_thresh = safety_config.get('vz_stop_thresh', 0.1)
@@ -90,15 +91,32 @@ class StateMachine:
                 fail_ratio >= self.mpc_fail_ratio_thresh)
     
     def _check_mpc_can_recover(self) -> bool:
-        """检查 MPC 是否可以恢复"""
+        """
+        检查 MPC 是否可以恢复
+        
+        使用两种策略的组合:
+        1. 绝对容错: 最近 N 次中允许最多 tolerance 次失败
+        2. 比例要求: 成功率必须达到 mpc_recovery_success_ratio
+        
+        两个条件都满足才允许恢复，确保恢复决策的稳健性
+        """
         if len(self._mpc_success_history) < self.mpc_recovery_history_min:
             return False
         
         recent_count = min(self.mpc_recovery_recent_count, len(self._mpc_success_history))
-        recent_successes = sum(1 for s in list(self._mpc_success_history)[-recent_count:] if s)
+        recent_history = list(self._mpc_success_history)[-recent_count:]
+        recent_successes = sum(1 for s in recent_history if s)
         
-        # 使用配置的恢复容错次数
-        return recent_successes >= recent_count - self.mpc_recovery_tolerance
+        # 条件1: 绝对容错 - 失败次数不超过 tolerance
+        failures = recent_count - recent_successes
+        absolute_condition = failures <= self.mpc_recovery_tolerance
+        
+        # 条件2: 比例要求 - 成功率达到阈值
+        success_ratio = recent_successes / recent_count if recent_count > 0 else 0.0
+        ratio_condition = success_ratio >= self.mpc_recovery_success_ratio
+        
+        # 两个条件都满足才允许恢复
+        return absolute_condition and ratio_condition
     
     def update(self, diagnostics: DiagnosticsInput) -> ControllerState:
         """更新状态机"""

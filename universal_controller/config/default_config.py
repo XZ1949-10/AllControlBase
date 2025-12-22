@@ -177,6 +177,7 @@ DEFAULT_CONFIG = {
             'mpc_recovery_history_min': 3,  # MPC 恢复检测最小历史记录数
             'mpc_recovery_recent_count': 5,  # MPC 恢复检测最近检查次数
             'mpc_recovery_tolerance': 1,  # MPC 恢复检测容错次数 (最近 N 次中允许失败的次数)
+            'mpc_recovery_success_ratio': 0.8,  # MPC 恢复检测成功率阈值
         },
     },
     'transform': {
@@ -220,6 +221,9 @@ DEFAULT_CONFIG = {
         'curvature_speed_limit_thresh': 0.1,  # 曲率阈值，超过此值时限制速度 (1/m)
         # 距离阈值
         'min_distance_thresh': 0.1,  # 最小距离阈值，用于判断是否到达目标 (m)
+        # 角速度变化率限制 (用于防止目标点在正后方时的跳变)
+        # 默认值 None 表示使用 alpha_max * dt
+        'omega_rate_limit': None,
     },
     'constraints': {
         'v_max': 2.0,
@@ -310,6 +314,7 @@ DEFAULT_CONFIG = {
         'thrust_rate_max': 2.0,  # 推力变化率限制 (每秒)
         'min_thrust_factor': 0.1,  # 最小推力加速度因子 (相对于重力)
         'attitude_factor_min': 0.1,  # 姿态角饱和后推力重计算的最小因子
+        'invert_pitch_sign': True,  # pitch 符号反转 (True: 正 pitch = 前向加速度)
         'dt': 0.02,
     },
 }
@@ -360,6 +365,13 @@ CONFIG_VALIDATION_RULES = {
     'mpc.fallback.min_turn_speed': (0.0, 1.0, 'Fallback 最小转向速度 (m/s)'),
     'mpc.fallback.default_speed_ratio': (0.0, 1.0, 'Fallback 默认速度比例'),
     
+    # MPC 权重配置 (必须为正数)
+    'mpc.weights.position': (0.0, None, 'MPC 位置权重'),
+    'mpc.weights.velocity': (0.0, None, 'MPC 速度权重'),
+    'mpc.weights.heading': (0.0, None, 'MPC 航向权重'),
+    'mpc.weights.control_v': (0.0, None, 'MPC 速度控制权重'),
+    'mpc.weights.control_omega': (0.0, None, 'MPC 角速度控制权重'),
+    
     # 约束配置
     'constraints.v_max': (0.01, 100.0, '最大速度 (m/s)'),
     'constraints.omega_max': (0.01, 50.0, '最大角速度 (rad/s)'),
@@ -380,10 +392,18 @@ CONFIG_VALIDATION_RULES = {
     'safety.accel_filter_alpha': (0.0, 1.0, '加速度滤波系数'),
     'safety.accel_filter_warmup_period': (1, 20, '滤波器预热期长度'),
     
+    # 状态机配置
+    'safety.state_machine.mpc_recovery_success_ratio': (0.0, 1.0, 'MPC 恢复成功率阈值'),
+    
     # 一致性配置
     'consistency.alpha_min': (0.0, 1.0, '最小 alpha 值'),
     'consistency.kappa_thresh': (0.0, 10.0, '曲率一致性阈值'),
     'consistency.v_dir_thresh': (0.0, 1.0, '速度方向一致性阈值'),
+    
+    # 一致性权重配置 (必须为非负数)
+    'consistency.weights.kappa': (0.0, None, '曲率一致性权重'),
+    'consistency.weights.velocity': (0.0, None, '速度方向一致性权重'),
+    'consistency.weights.temporal': (0.0, None, '时序平滑度权重'),
     
     # 过渡配置
     'transition.tau': (0.001, 10.0, '过渡时间常数 (秒)'),
@@ -402,6 +422,19 @@ CONFIG_VALIDATION_RULES = {
     'attitude.pitch_max': (0.01, 1.57, '最大俯仰角 (rad)'),
     'attitude.thrust_min': (0.01, 1.0, '最小推力'),
     'attitude.thrust_max': (1.0, 10.0, '最大推力'),
+    
+    # EKF 测量噪声配置 (必须为正数)
+    'ekf.measurement_noise.odom_position': (1e-9, 10.0, 'Odom 位置测量噪声'),
+    'ekf.measurement_noise.odom_velocity': (1e-9, 10.0, 'Odom 速度测量噪声'),
+    'ekf.measurement_noise.imu_accel': (1e-9, 10.0, 'IMU 加速度测量噪声'),
+    'ekf.measurement_noise.imu_gyro': (1e-9, 10.0, 'IMU 陀螺仪测量噪声'),
+    
+    # EKF 过程噪声配置 (必须为正数)
+    'ekf.process_noise.position': (1e-9, 1.0, '位置过程噪声'),
+    'ekf.process_noise.velocity': (1e-9, 10.0, '速度过程噪声'),
+    'ekf.process_noise.orientation': (1e-9, 1.0, '航向过程噪声'),
+    'ekf.process_noise.angular_velocity': (1e-9, 10.0, '角速度过程噪声'),
+    'ekf.process_noise.imu_bias': (1e-12, 0.1, 'IMU 偏置过程噪声'),
 }
 
 

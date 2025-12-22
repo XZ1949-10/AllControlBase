@@ -141,6 +141,11 @@ class QuadrotorAttitudeController(IAttitudeController):
         # 姿态角饱和后推力重计算的最小因子
         self.attitude_factor_min = attitude_config.get('attitude_factor_min', 0.1)
         
+        # pitch 符号反转选项
+        # True (默认): 正 pitch 命令 -> 前向加速度 (更直观的控制接口)
+        # False: 标准 ZYX 欧拉角约定 (正 pitch = 机头向上)
+        self.invert_pitch_sign = attitude_config.get('invert_pitch_sign', True)
+        
         # 状态
         self._last_attitude: Optional[AttitudeCommand] = None
         self._last_time: Optional[float] = None
@@ -348,8 +353,15 @@ class QuadrotorAttitudeController(IAttitudeController):
             cos_pitch = np.clip(cos_pitch, -1.0, 1.0)
             
             # 使用 atan2 获得正确象限
-            # 注意: 取负号以匹配常见无人机约定 (负 pitch = 前倾 = 前向加速度)
-            pitch = -np.arctan2(sin_pitch, cos_pitch)
+            pitch_raw = np.arctan2(sin_pitch, cos_pitch)
+            
+            # 根据配置决定是否反转 pitch 符号
+            # 反转后: 正 pitch 命令 -> 前倾 -> 前向加速度 (更直观)
+            # 不反转: 标准 ZYX 约定，正 pitch = 机头向上
+            if self.invert_pitch_sign:
+                pitch = -pitch_raw
+            else:
+                pitch = pitch_raw
         else:
             # 奇异情况: roll ≈ ±90°
             # 此时推力几乎完全在水平面内，pitch 的定义变得模糊

@@ -62,6 +62,14 @@ class PurePursuitController(ITrajectoryTracker):
         self.curvature_speed_limit_thresh = backup_config.get('curvature_speed_limit_thresh', 0.1)
         self.min_distance_thresh = backup_config.get('min_distance_thresh', 0.1)
         
+        # 角速度变化率限制 (用于防止目标点在正后方时的跳变)
+        # 默认使用 alpha_max * dt，但可以单独配置
+        omega_rate_config = backup_config.get('omega_rate_limit')
+        if omega_rate_config is not None:
+            self.omega_rate_limit = omega_rate_config
+        else:
+            self.omega_rate_limit = self.alpha_max * self.dt
+        
         self.last_cmd: Optional[ControlOutput] = None
         self._horizon: int = 20
         self._current_position: Optional[np.ndarray] = None
@@ -179,10 +187,6 @@ class PurePursuitController(ITrajectoryTracker):
         
         L_sq = local_x**2 + local_y**2
         
-        # 角速度变化率限制（用于平滑角速度命令）
-        # 这可以防止目标点在正后方时的角速度跳变
-        MAX_OMEGA_RATE = self.alpha_max * self.dt
-        
         if L_sq > 1e-6:
             # 计算目标点相对于车辆的角度
             # 当目标点在正前方时，angle = 0
@@ -205,7 +209,7 @@ class PurePursuitController(ITrajectoryTracker):
                 # 特别是当目标点在正后方时（heading_error ≈ ±π）
                 if self.last_cmd is not None:
                     omega_change = omega_desired - self.last_cmd.omega
-                    omega_change = np.clip(omega_change, -MAX_OMEGA_RATE, MAX_OMEGA_RATE)
+                    omega_change = np.clip(omega_change, -self.omega_rate_limit, self.omega_rate_limit)
                     omega = self.last_cmd.omega + omega_change
                 else:
                     omega = omega_desired

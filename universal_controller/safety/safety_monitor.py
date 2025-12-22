@@ -62,9 +62,9 @@ class BasicSafetyMonitor(ISafetyMonitor):
         这可以减少由于速度测量噪声导致的加速度估计噪声
         
         初始化策略:
-        - 第一次调用时，使用原始值初始化滤波器
-        - 但如果原始值异常大（超过限制的 2 倍），使用限制值初始化
-        - 这可以避免启动时的异常值影响后续滤波
+        - 第一次调用时，使用限幅后的原始值初始化滤波器
+        - 如果原始值异常大（超过限制的 2 倍），使用限制值初始化
+        - 这可以避免启动时的异常值影响后续滤波，同时保持合理的初始估计
         
         Args:
             raw_ax, raw_ay, raw_az: 原始加速度估计
@@ -94,12 +94,15 @@ class BasicSafetyMonitor(ISafetyMonitor):
         # 应用低通滤波（指数移动平均）
         if self._filtered_ax is None:
             # 第一次调用时初始化滤波器
-            # 使用零初始化，让滤波器逐渐收敛到真实值
-            # 这样可以避免启动瞬态的影响
-            self._filtered_ax = 0.0
-            self._filtered_ay = 0.0
-            self._filtered_az = 0.0
-            self._filtered_alpha = 0.0
+            # 使用限幅后的原始值初始化，避免零初始化导致的收敛延迟
+            # 同时限制异常大的初始值
+            max_init_accel = self.a_max * 2.0  # 允许初始值为限制的 2 倍
+            max_init_alpha = self.alpha_max * 2.0
+            
+            self._filtered_ax = np.clip(raw_ax, -max_init_accel, max_init_accel)
+            self._filtered_ay = np.clip(raw_ay, -max_init_accel, max_init_accel)
+            self._filtered_az = np.clip(raw_az, -max_init_accel, max_init_accel)
+            self._filtered_alpha = np.clip(raw_alpha, -max_init_alpha, max_init_alpha)
             # 重置预热计数
             self._filter_warmup_count = 0
         
@@ -119,6 +122,10 @@ class BasicSafetyMonitor(ISafetyMonitor):
             self._filtered_alpha = self.accel_filter_alpha * avg_alpha + (1 - self.accel_filter_alpha) * self._filtered_alpha
         
         return self._filtered_ax, self._filtered_ay, self._filtered_az, self._filtered_alpha
+    
+    def is_filter_warmed_up(self) -> bool:
+        """检查滤波器是否已完成预热"""
+        return self._filter_warmup_count >= self._filter_warmup_period
     
     def check(self, state: np.ndarray, cmd: ControlOutput, 
               diagnostics: DiagnosticsInput) -> SafetyDecision:
@@ -165,26 +172,29 @@ class BasicSafetyMonitor(ISafetyMonitor):
                 # 应用滤波
                 ax, ay, az, alpha = self._filter_acceleration(raw_ax, raw_ay, raw_az, raw_alpha)
                 
-                accel_horizontal = np.sqrt(ax**2 + ay**2)
-                
-                if accel_horizontal > self.a_max * self.accel_margin:
-                    reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds limit")
-                    if accel_horizontal > 1e-6:
-                        scale = self.a_max / accel_horizontal
-                        limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
-                        limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
-                    needs_limiting = True
-                
-                if self.is_3d:
-                    if abs(az) > self.az_max * self.accel_margin:
-                        reasons.append(f"az {az:.2f} exceeds limit")
-                        limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
+                # 只有在滤波器预热完成后才进行加速度限制检查
+                # 预热期间滤波值可能不准确，跳过检查避免误报
+                if self.is_filter_warmed_up():
+                    accel_horizontal = np.sqrt(ax**2 + ay**2)
+                    
+                    if accel_horizontal > self.a_max * self.accel_margin:
+                        reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds limit")
+                        if accel_horizontal > 1e-6:
+                            scale = self.a_max / accel_horizontal
+                            limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
+                            limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
                         needs_limiting = True
-                
-                if abs(alpha) > self.alpha_max * self.accel_margin:
-                    reasons.append(f"alpha {alpha:.2f} exceeds limit")
-                    limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
-                    needs_limiting = True
+                    
+                    if self.is_3d:
+                        if abs(az) > self.az_max * self.accel_margin:
+                            reasons.append(f"az {az:.2f} exceeds limit")
+                            limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
+                            needs_limiting = True
+                    
+                    if abs(alpha) > self.alpha_max * self.accel_margin:
+                        reasons.append(f"alpha {alpha:.2f} exceeds limit")
+                        limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
+                        needs_limiting = True
         
         self._last_cmd = limited_cmd.copy() if needs_limiting else cmd.copy()
         self._last_time = current_time
