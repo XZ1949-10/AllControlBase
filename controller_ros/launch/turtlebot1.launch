@@ -15,7 +15,7 @@
 <launch>
   <!-- ========== 参数 ========== -->
   <arg name="use_sim_time" default="false" doc="Use simulation time"/>
-  <arg name="dashboard" default="false" doc="Launch Dashboard GUI for monitoring"/>
+  <arg name="dashboard" default="true" doc="Launch Dashboard GUI for monitoring"/>
   <arg name="max_linear" default="0.5" doc="Maximum linear velocity (m/s)"/>
   <arg name="max_angular" default="1.0" doc="Maximum angular velocity (rad/s)"/>
   
