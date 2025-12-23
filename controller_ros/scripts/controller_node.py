@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 立即添加 catkin devel 路径 - 必须在最开头
+import sys as _sys
+_sys.path.insert(0, '/home/oamr/turtlebot_ws/devel/lib/python3/dist-packages')
+
 """
 控制器 ROS1 节点
 """
 import sys
 import os
-
-# 立即添加 catkin devel 路径 - 必须在任何其他导入之前
-_home = os.environ.get('HOME', os.path.expanduser('~'))
-_devel_path = os.path.join(_home, 'turtlebot_ws', 'devel', 'lib', 'python3', 'dist-packages')
-if os.path.exists(_devel_path):
-    sys.path.insert(0, _devel_path)
 
 # 添加 src 目录到路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
