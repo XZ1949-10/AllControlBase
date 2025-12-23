@@ -75,6 +75,7 @@ class MockDiagnosticsV2:
         self.transition_progress = 1.0
         self.error_message = ''
         self.consecutive_errors = 0
+        self.emergency_stop = False
 
 
 class TestROSDashboardDataSource:

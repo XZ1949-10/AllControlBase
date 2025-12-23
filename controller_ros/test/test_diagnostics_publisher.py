@@ -262,6 +262,9 @@ class MockDiagnosticsMsg:
         # 错误信息字段
         self.error_message = ''
         self.consecutive_errors = 0
+        
+        # 紧急停止状态
+        self.emergency_stop = False
 
 
 class MockHeader:
@@ -416,6 +419,28 @@ class TestFillDiagnosticsMsg:
         
         assert msg.transform_tf2_available == True
         assert msg.transform_tf2_injected == True
+
+    def test_emergency_stop_field(self):
+        """测试 emergency_stop 字段"""
+        msg = MockDiagnosticsMsg()
+        
+        # 测试 emergency_stop = True
+        diag = {
+            'state': 5,  # STOPPING
+            'emergency_stop': True,
+        }
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.emergency_stop == True
+        
+        # 测试 emergency_stop = False (默认)
+        msg2 = MockDiagnosticsMsg()
+        diag2 = {'state': 1}
+        
+        fill_diagnostics_msg(msg2, diag2)
+        
+        assert msg2.emergency_stop == False
 
 
 if __name__ == '__main__':
