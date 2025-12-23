@@ -7,7 +7,15 @@
 # 
 # 使用方法:
 #   chmod +x install_all.sh
+#   
+#   # 默认安装 (catkin_ws 在 ~/catkin_ws, acados 在 ~/acados)
 #   ./install_all.sh
+#   
+#   # 指定安装目录
+#   ./install_all.sh --catkin-ws /path/to/catkin_ws --acados /path/to/acados
+#   
+#   # 简写
+#   ./install_all.sh -c /path/to/catkin_ws -a /path/to/acados
 #
 # 作者: Auto-generated
 # 日期: 2024-12-23
@@ -25,16 +33,50 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # ============================================================================
-# 配置变量 (根据你的实际路径修改)
+# 默认配置变量
 # ============================================================================
 # AllControlBase 的路径 (包含 universal_controller 和 controller_ros)
 ALLCONTROLBASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# catkin 工作空间路径
+# catkin 工作空间路径 (默认值，可通过参数覆盖)
 CATKIN_WS="$HOME/catkin_ws"
 
-# ACADOS 安装路径
+# ACADOS 安装路径 (默认值，可通过参数覆盖)
 ACADOS_INSTALL_DIR="$HOME/acados"
+
+# ============================================================================
+# 解析命令行参数
+# ============================================================================
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -c|--catkin-ws)
+            CATKIN_WS="$2"
+            shift 2
+            ;;
+        -a|--acados)
+            ACADOS_INSTALL_DIR="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "使用方法: $0 [选项]"
+            echo ""
+            echo "选项:"
+            echo "  -c, --catkin-ws PATH    指定 catkin 工作空间路径 (默认: ~/catkin_ws)"
+            echo "  -a, --acados PATH       指定 ACADOS 安装路径 (默认: ~/acados)"
+            echo "  -h, --help              显示帮助信息"
+            echo ""
+            echo "示例:"
+            echo "  $0                                    # 使用默认路径"
+            echo "  $0 -c /opt/ros_ws -a /opt/acados     # 指定路径"
+            exit 0
+            ;;
+        *)
+            echo "未知参数: $1"
+            echo "使用 -h 或 --help 查看帮助"
+            exit 1
+            ;;
+    esac
+done
 
 # ============================================================================
 # 辅助函数
@@ -75,6 +117,13 @@ check_command() {
 # 步骤 0: 检查环境
 # ============================================================================
 print_header "步骤 0: 检查环境"
+
+# 显示安装路径配置
+echo -e "${BLUE}安装路径配置:${NC}"
+echo "  AllControlBase:    $ALLCONTROLBASE_PATH"
+echo "  catkin 工作空间:   $CATKIN_WS"
+echo "  ACADOS 安装目录:   $ACADOS_INSTALL_DIR"
+echo ""
 
 # 检查 Ubuntu 版本
 if [ -f /etc/os-release ]; then
