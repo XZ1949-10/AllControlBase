@@ -442,9 +442,9 @@ def test_time_sync_key_aliases():
 
 
 def test_diag_filler_numpy_imu_bias():
-    """测试 diag_filler 处理 numpy array 类型的 imu_bias"""
+    """测试 diagnostics_publisher 处理 numpy array 类型的 imu_bias"""
     import numpy as np
-    from controller_ros.utils.diag_filler import fill_diagnostics_msg
+    from controller_ros.utils.diagnostics_publisher import fill_diagnostics_msg
     
     # 模拟 DiagnosticsV2 消息
     class MockDiagMsg:

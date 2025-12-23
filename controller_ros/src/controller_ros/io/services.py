@@ -99,7 +99,7 @@ class ServiceManager:
                     response.success = True
                     response.message = "Diagnostics retrieved successfully"
                     # 使用共享工具填充诊断数据
-                    from ..utils.diag_filler import fill_diagnostics_msg
+                    from ..utils.diagnostics_publisher import fill_diagnostics_msg
                     fill_diagnostics_msg(
                         response.diagnostics, diag,
                         get_time_func=lambda: self._node.get_clock().now().to_msg()

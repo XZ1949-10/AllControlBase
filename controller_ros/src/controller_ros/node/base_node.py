@@ -56,6 +56,7 @@ class ControllerNodeBase(ABC):
         self._waiting_for_data = True
         self._consecutive_errors = 0
         self._max_consecutive_errors = 10
+        self._traj_msg_available = True  # 子类可设置为 False 表示轨迹消息类型不可用
     
     def _initialize(self):
         """
@@ -90,6 +91,7 @@ class ControllerNodeBase(ABC):
         将 TF2 注入到坐标变换器
         
         子类应在创建 TF 桥接后调用此方法。
+        包含 TF2 buffer 预热等待逻辑。
         """
         if self._tf_bridge is None:
             return
@@ -107,6 +109,35 @@ class ControllerNodeBase(ABC):
         if coord_transformer is None:
             self._log_info("ControllerManager has no coord_transformer, TF2 injection skipped")
             return
+        
+        # TF2 buffer 预热等待
+        # 等待 TF2 buffer 填充，最多等待 2 秒
+        import time
+        tf_config = self._params.get('tf', {})
+        source_frame = tf_config.get('source_frame', 'base_link')
+        target_frame = tf_config.get('target_frame', 'odom')
+        max_wait_sec = 2.0
+        wait_interval = 0.1
+        
+        can_transform_func = getattr(self._tf_bridge, 'can_transform', None)
+        if can_transform_func is not None:
+            start_time = time.time()
+            while time.time() - start_time < max_wait_sec:
+                try:
+                    if can_transform_func(target_frame, source_frame, timeout_sec=0.01):
+                        self._log_info(
+                            f"TF2 buffer ready: {source_frame} -> {target_frame} "
+                            f"(waited {time.time() - start_time:.2f}s)"
+                        )
+                        break
+                except Exception:
+                    pass
+                time.sleep(wait_interval)
+            else:
+                self._log_warn(
+                    f"TF2 buffer not ready after {max_wait_sec}s, "
+                    f"will use fallback until TF becomes available"
+                )
         
         # 尝试注入
         if hasattr(coord_transformer, 'set_tf2_lookup_callback'):
@@ -127,6 +158,16 @@ class ControllerNodeBase(ABC):
         Returns:
             控制输出，如果无法执行控制则返回 None
         """
+        # 0. 检查轨迹消息类型是否可用
+        if not self._traj_msg_available:
+            self._log_warn_throttle(
+                10.0, 
+                "Trajectory message type not available! "
+                "Controller cannot work. Please build the package with message generation."
+            )
+            self._publish_stop_cmd()
+            return None
+        
         # 1. 获取最新数据
         odom = self._data_manager.get_latest_odom()
         imu = self._data_manager.get_latest_imu()

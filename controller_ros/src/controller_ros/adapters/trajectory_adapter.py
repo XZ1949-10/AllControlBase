@@ -66,7 +66,9 @@ class TrajectoryAdapter(IMsgConverter):
         # 检查长度是否为 4 的倍数
         if flat_len % 4 != 0:
             logger.warning(
-                f"velocities_flat length {flat_len} is not a multiple of 4, truncating"
+                f"velocities_flat length {flat_len} is not a multiple of 4 "
+                f"(expected multiple of 4 for [vx, vy, vz, wz]), truncating to {(flat_len // 4) * 4}. "
+                f"This may indicate upstream data corruption."
             )
             flat_len = (flat_len // 4) * 4
         

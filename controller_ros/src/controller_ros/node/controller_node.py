@@ -60,7 +60,8 @@ class ControllerNode(ControllerNodeBase, Node):
         self._create_ros_interfaces()
         
         # 7. 创建控制定时器
-        control_rate = self._params.get('node', {}).get('control_rate', 50.0)
+        # 统一从 system.ctrl_freq 读取控制频率 (ParamLoader._merge_params 已将 node.control_rate 合并到此)
+        control_rate = self._params.get('system', {}).get('ctrl_freq', 50)
         control_period = 1.0 / control_rate
         self._control_timer = self.create_timer(
             control_period,
@@ -131,12 +132,16 @@ class ControllerNode(ControllerNodeBase, Node):
                 10,
                 callback_group=self._sensor_cb_group
             )
+            self._traj_msg_available = True
             self.get_logger().info(f"Subscribed to trajectory: {traj_topic}")
         except ImportError:
-            self.get_logger().warn(
-                f"LocalTrajectoryV4 message not available, trajectory subscription disabled"
+            self.get_logger().error(
+                f"LocalTrajectoryV4 message not available! "
+                f"Controller will not work without trajectory data. "
+                f"Please build the controller_ros package with message generation."
             )
             self._traj_sub = None
+            self._traj_msg_available = False
     
     # ==================== 订阅回调 ====================
     

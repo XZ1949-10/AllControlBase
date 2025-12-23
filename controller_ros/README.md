@@ -11,7 +11,7 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 - 消息格式转换 (ROS 消息 ↔ universal_controller 数据类型)
 - TF2 集成 (管理坐标变换，注入到 universal_controller)
 - 调用控制算法 (封装 `ControllerManager.update()`)
-- 发布统一输出 (`/cmd_unified`, `/controller/diagnostics`)
+- 发布统一输出 (`/cmd_unified`, `/controller/diagnostics`, `/controller/state`)
 
 ## 架构
 
@@ -36,7 +36,8 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 ├─────────────────────────────────────────────────────────────────┤
 │  输出层 (Publishers)                                            │
 │    ├── /cmd_unified (UnifiedCmd)                                │
-│    └── /controller/diagnostics (DiagnosticsV2)                  │
+│    ├── /controller/diagnostics (DiagnosticsV2)                  │
+│    └── /controller/state (Int32)                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -133,7 +134,17 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 | 话题 | 类型 | 说明 |
 |------|------|------|
 | `/cmd_unified` | controller_ros/UnifiedCmd | 统一控制命令 |
-| `/controller/diagnostics` | controller_ros/DiagnosticsV2 | 诊断信息 |
+| `/controller/diagnostics` | controller_ros/DiagnosticsV2 | 诊断信息 (降频发布) |
+| `/controller/state` | std_msgs/Int32 | 控制器状态 (每次控制循环发布) |
+
+**状态值说明** (ControllerState 枚举):
+- 0: INIT - 初始化
+- 1: NORMAL - 正常运行
+- 2: SOFT_DISABLED - Soft Head 禁用
+- 3: MPC_DEGRADED - MPC 降级
+- 4: BACKUP_ACTIVE - 备用控制器激活
+- 5: STOPPING - 正在停止
+- 6: STOPPED - 已停止
 
 ### 服务
 

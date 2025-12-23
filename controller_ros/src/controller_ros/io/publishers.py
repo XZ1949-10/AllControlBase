@@ -1,25 +1,24 @@
 """
 发布管理器
 
-管理所有 ROS 发布器。
+管理所有 ROS2 发布器。
 """
 from typing import Dict, Any, Optional
 
 from rclpy.node import Node
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Int32
 
 from universal_controller.core.data_types import ControlOutput, Trajectory
 from ..adapters import OutputAdapter
 from ..utils.ros_compat import get_time_sec
-
-# 默认诊断发布降频率 (每 N 次控制循环发布一次)
-DEFAULT_DIAG_PUBLISH_RATE = 5
+from ..utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsPublishHelper
 
 
 class PublisherManager:
     """
-    发布管理器
+    发布管理器 (ROS2)
     
     职责:
     - 创建和管理所有发布器
@@ -30,7 +29,7 @@ class PublisherManager:
     
     def __init__(self, node: Node, topics: Dict[str, str],
                  default_frame_id: str = 'base_link',
-                 diag_publish_rate: int = DEFAULT_DIAG_PUBLISH_RATE):
+                 diag_publish_rate: int = 5):
         """
         初始化发布管理器
         
@@ -52,13 +51,8 @@ class PublisherManager:
         # 创建发布器
         self._create_publishers()
         
-        # 诊断降频计数器
-        # 初始化为 publish_rate - 1，确保首次调用时立即发布
-        self._diag_publish_rate = max(1, diag_publish_rate)  # 至少为 1
-        self._diag_counter = self._diag_publish_rate - 1
-        
-        # 上一次发布的状态，用于检测状态变化
-        self._last_state: Optional[int] = None
+        # 使用统一的诊断发布辅助器
+        self._diag_helper = DiagnosticsPublishHelper(publish_rate=diag_publish_rate)
     
     def _create_publishers(self):
         """创建所有发布器"""
@@ -85,6 +79,12 @@ class PublisherManager:
         except ImportError:
             self._node.get_logger().warn("DiagnosticsV2 message not available")
             self._diag_pub = None
+        
+        # 状态发布器 (需求文档要求)
+        self._state_pub = self._node.create_publisher(
+            Int32, '/controller/state', 1
+        )
+        self._node.get_logger().info("Publishing state to: /controller/state")
         
         # 调试路径发布
         self._path_pub = self._node.create_publisher(
@@ -115,23 +115,21 @@ class PublisherManager:
             diag: 诊断数据字典
             force: 是否强制发布 (忽略降频)
         """
+        # 始终发布状态话题 (不降频)
+        current_state = diag.get('state', 0)
+        state_msg = Int32()
+        state_msg.data = current_state
+        self._state_pub.publish(state_msg)
+        
+        # 使用辅助器判断是否发布诊断
+        if not self._diag_helper.should_publish(diag, force=force):
+            return
+        
         if self._diag_pub is None:
             return
         
-        # 检测状态变化，状态变化时强制发布
-        current_state = diag.get('state', 0)
-        state_changed = self._last_state is not None and current_state != self._last_state
-        self._last_state = current_state
-        
-        # 降频发布，但状态变化时强制发布
-        self._diag_counter += 1
-        if not force and not state_changed and self._diag_counter < self._diag_publish_rate:
-            return
-        self._diag_counter = 0
-        
         try:
             from controller_ros.msg import DiagnosticsV2
-            from ..utils.diag_filler import fill_diagnostics_msg
             
             msg = DiagnosticsV2()
             fill_diagnostics_msg(

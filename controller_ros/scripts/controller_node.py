@@ -12,7 +12,7 @@
 - 使用 DataManager 管理数据缓存
 - 使用 ParamLoader 加载参数
 - 使用 adapters 模块进行数据转换
-- 使用 diag_filler 进行诊断消息填充
+- 使用 diagnostics_publisher 进行诊断消息填充
 - 使用 ros_compat 的 TF2Compat 类
 """
 import sys
@@ -26,6 +26,7 @@ from typing import Dict, Any, Optional
 
 from nav_msgs.msg import Odometry as RosOdometry
 from sensor_msgs.msg import Imu as RosImu
+from std_msgs.msg import Int32
 from std_srvs.srv import Trigger, TriggerResponse
 
 # 导入自定义消息
@@ -33,12 +34,13 @@ from controller_ros.msg import LocalTrajectoryV4, UnifiedCmd, DiagnosticsV2
 
 # 导入 universal_controller
 from universal_controller.core.data_types import ControlOutput
+from universal_controller.core.enums import ControllerState
 
 # 导入共享模块
 from controller_ros.node.base_node import ControllerNodeBase
 from controller_ros.io import DataManager
 from controller_ros.adapters import OutputAdapter
-from controller_ros.utils.diag_filler import fill_diagnostics_msg
+from controller_ros.utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsPublishHelper
 from controller_ros.utils.ros_compat import TF2Compat, get_time_sec
 from controller_ros.utils.param_loader import ParamLoader
 
@@ -49,6 +51,11 @@ class ControllerNodeROS1(ControllerNodeBase):
     
     继承 ControllerNodeBase 获取共享逻辑，
     实现 ROS1 特定的接口。
+    
+    输出:
+    - /cmd_unified (UnifiedCmd)
+    - /controller/diagnostics (DiagnosticsV2)
+    - /controller/state (Int32)
     """
     
     def __init__(self):
@@ -80,7 +87,12 @@ class ControllerNodeROS1(ControllerNodeBase):
         # 6. 创建 ROS1 接口
         self._create_ros_interfaces()
         
-        # 7. 创建控制定时器
+        # 7. 初始化诊断发布辅助器
+        diag_publish_rate = self._params.get('diagnostics', {}).get('publish_rate', 5)
+        self._diag_helper = DiagnosticsPublishHelper(publish_rate=diag_publish_rate)
+        
+        # 8. 创建控制定时器
+        # 统一从 system.ctrl_freq 读取控制频率
         control_rate = self._params.get('system', {}).get('ctrl_freq', 50)
         control_period = 1.0 / control_rate
         self._timer = rospy.Timer(rospy.Duration(control_period), self._control_callback)
@@ -133,8 +145,12 @@ class ControllerNodeROS1(ControllerNodeBase):
         self._cmd_pub = rospy.Publisher(cmd_topic, UnifiedCmd, queue_size=1)
         self._diag_pub = rospy.Publisher(diag_topic, DiagnosticsV2, queue_size=10)
         
+        # 状态发布器 (需求文档要求)
+        self._state_pub = rospy.Publisher('/controller/state', Int32, queue_size=1)
+        
         rospy.loginfo(
-            f"Publishing to: cmd={cmd_topic}, diagnostics={diag_topic}"
+            f"Publishing to: cmd={cmd_topic}, diagnostics={diag_topic}, "
+            f"state=/controller/state"
         )
     
     def _create_services(self):
@@ -279,7 +295,24 @@ class ControllerNodeROS1(ControllerNodeBase):
         self._cmd_pub.publish(ros_msg)
     
     def _publish_diagnostics(self, diag: Dict[str, Any], force: bool = False):
-        """发布诊断信息"""
+        """
+        发布诊断信息
+        
+        Args:
+            diag: 诊断数据字典
+            force: 是否强制发布 (忽略降频)
+        """
+        # 始终发布状态话题 (不降频)
+        current_state = diag.get('state', 0)
+        state_msg = Int32()
+        state_msg.data = current_state
+        self._state_pub.publish(state_msg)
+        
+        # 使用辅助器判断是否发布诊断
+        if not self._diag_helper.should_publish(diag, force=force):
+            return
+        
+        # 发布诊断消息
         msg = DiagnosticsV2()
         fill_diagnostics_msg(msg, diag, get_time_func=lambda: rospy.Time.now())
         self._diag_pub.publish(msg)
