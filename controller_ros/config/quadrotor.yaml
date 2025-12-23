@@ -1,0 +1,17 @@
+# quadrotor.yaml
+# 四旋翼平台配置
+
+controller_ros:
+  ros__parameters:
+    platform:
+      type: "quadrotor"
+
+controller:
+  system:
+    platform: "quadrotor"
+  mpc:
+    horizon: 20
+    dt: 0.1
+    v_max: 3.0
+    vz_max: 2.0
+    omega_max: 2.0

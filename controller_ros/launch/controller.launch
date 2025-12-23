@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 参数 -->
+  <arg name="platform" default="differential" doc="Platform type: differential, omni, ackermann, quadrotor"/>
+  <arg name="use_sim_time" default="false"/>
+  
+  <!-- 设置仿真时间 -->
+  <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+  
+  <!-- 加载参数 -->
+  <rosparam file="$(find controller_ros)/config/controller_params.yaml" command="load"/>
+  <rosparam file="$(find controller_ros)/config/$(arg platform).yaml" command="load"/>
+  
+  <!-- 控制器节点 -->
+  <node pkg="controller_ros" type="controller_node.py" name="universal_controller_node" output="screen">
+    <param name="platform_type" value="$(arg platform)"/>
+    
+    <!-- 话题重映射 -->
+    <remap from="~odom" to="/odom"/>
+    <remap from="~imu" to="/imu"/>
+    <remap from="~trajectory" to="/nn/local_trajectory"/>
+    <remap from="~cmd_unified" to="/cmd_unified"/>
+    <remap from="~diagnostics" to="/controller/diagnostics"/>
+  </node>
+</launch>

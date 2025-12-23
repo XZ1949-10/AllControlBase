@@ -1,0 +1,44 @@
+# controller_params.yaml
+# 控制器 ROS 节点参数配置 (ROS1 Noetic)
+
+# 节点配置
+node:
+  control_rate: 50.0          # 控制频率 (Hz)
+
+# 话题配置
+topics:
+  odom: "/odom"
+  imu: "/imu"
+  trajectory: "/nn/local_trajectory"
+  cmd_unified: "/cmd_unified"
+  diagnostics: "/controller/diagnostics"
+
+# 平台配置
+platform:
+  type: "differential"        # differential/omni/ackermann/quadrotor
+
+# TF 配置
+tf:
+  source_frame: "base_link"
+  target_frame: "odom"
+  timeout_sec: 0.01
+
+# 时间同步配置
+time_sync:
+  max_odom_age_ms: 100
+  max_traj_age_ms: 200
+  max_imu_age_ms: 50
+
+# 控制器算法参数 (传递给 universal_controller)
+controller:
+  system:
+    ctrl_freq: 50
+    platform: "differential"
+  mpc:
+    horizon: 20
+    dt: 0.1
+  watchdog:
+    odom_timeout_ms: 200
+    traj_timeout_ms: 500
+    imu_timeout_ms: 100
+    startup_grace_ms: 1000

@@ -1,0 +1,9 @@
+# SetControllerState.srv
+# 设置控制器状态
+
+# 请求
+uint8 target_state  # 目标状态 (ControllerState 枚举值)
+---
+# 响应
+bool success
+string message

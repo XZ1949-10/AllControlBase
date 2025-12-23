@@ -1,0 +1,16 @@
+# differential.yaml
+# 差速车平台配置
+
+controller_ros:
+  ros__parameters:
+    platform:
+      type: "differential"
+
+controller:
+  system:
+    platform: "differential"
+  mpc:
+    horizon: 20
+    dt: 0.1
+    v_max: 1.5
+    omega_max: 1.0

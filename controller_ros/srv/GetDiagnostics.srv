@@ -1,0 +1,8 @@
+# GetDiagnostics.srv
+# 获取诊断信息
+
+# 请求 (空)
+---
+# 响应
+controller_ros/DiagnosticsV2 diagnostics
+bool success
