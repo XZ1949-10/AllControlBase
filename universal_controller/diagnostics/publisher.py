@@ -105,33 +105,20 @@ class DiagnosticsPublisher:
         return self._diagnostics_topic
     
     def _init_ros_publishers(self) -> None:
-        """初始化 ROS Publishers"""
-        if not ROS_AVAILABLE:
-            return
+        """初始化 ROS Publishers
         
-        try:
-            import rospy
-            from std_msgs.msg import String
-            from geometry_msgs.msg import Twist
-            
-            self._diagnostics_pub = rospy.Publisher(
-                self._diagnostics_topic,
-                String,
-                queue_size=1
-            )
-            
-            self._cmd_pub = rospy.Publisher(
-                self._cmd_topic,
-                Twist,
-                queue_size=1
-            )
-            
-            logger.info(f"ROS publishers initialized: "
-                  f"{self._diagnostics_topic}, {self._cmd_topic}")
-        except Exception as e:
-            logger.warning(f"ROS publisher init failed: {e}")
-            self._diagnostics_pub = None
-            self._cmd_pub = None
+        注意: 在 ROS 环境下，诊断发布由 controller_ros 的 controller_node.py 处理，
+        使用 DiagnosticsV2 消息类型。这里不再创建发布器，避免话题类型冲突。
+        
+        如果需要在非 ROS 环境下使用 ROS 发布功能，可以通过 enable_ros_publish=True 参数启用。
+        """
+        # 在 ROS 环境下，不自动创建发布器
+        # 诊断发布由 controller_ros/controller_node.py 处理 (使用 DiagnosticsV2)
+        # 这里只使用回调机制传递数据
+        self._diagnostics_pub = None
+        self._cmd_pub = None
+        
+        logger.debug("DiagnosticsPublisher: ROS publishers disabled (handled by controller_node)")
     
     def add_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """
