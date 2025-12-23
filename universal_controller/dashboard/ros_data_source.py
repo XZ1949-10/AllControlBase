@@ -14,6 +14,14 @@ ROS 数据源适配器 - 订阅 ROS 话题获取诊断数据
     window = DashboardWindow(data_source)
 """
 
+import sys
+import os
+
+# 添加 catkin devel 路径 - 用于导入 controller_ros.msg
+_devel_path = os.path.expanduser('~/turtlebot_ws/devel/lib/python3/dist-packages')
+if os.path.exists(_devel_path) and _devel_path not in sys.path:
+    sys.path.insert(0, _devel_path)
+
 import time
 import math
 import threading
