@@ -1,49 +1,82 @@
 # controller_params.yaml
 # 控制器 ROS 节点参数配置 (ROS1 Noetic)
+#
+# 配置层次说明:
+# - 本文件定义 ROS 节点层面的配置 (话题、TF、诊断等)
+# - 控制器算法参数由 universal_controller 的 DEFAULT_CONFIG 提供默认值
+# - 本文件中的 system 配置会覆盖 DEFAULT_CONFIG 中的对应值
+#
+# 参数优先级: 本文件 > DEFAULT_CONFIG
 
-# 节点配置
+# =============================================================================
+# 系统配置 (映射到 universal_controller 的 system 配置)
+# =============================================================================
+system:
+  ctrl_freq: 50                   # 控制频率 (Hz)
+  platform: "differential"        # 平台类型: differential/omni/ackermann/quadrotor
+
+# =============================================================================
+# ROS 节点配置
+# =============================================================================
 node:
-  control_rate: 50.0          # 控制频率 (Hz)
-  use_sim_time: false         # 是否使用仿真时间
+  use_sim_time: false             # 是否使用仿真时间
 
+# =============================================================================
 # 话题配置
+# =============================================================================
 topics:
-  odom: "/odom"
-  imu: "/imu"
-  trajectory: "/nn/local_trajectory"
-  cmd_unified: "/cmd_unified"
-  diagnostics: "/controller/diagnostics"
+  # 输入话题
+  odom: "/odom"                           # 里程计输入
+  imu: "/imu"                             # IMU 输入 (可选)
+  trajectory: "/nn/local_trajectory"      # 轨迹输入
+  emergency_stop: "/controller/emergency_stop"  # 紧急停止话题 (std_msgs/Empty)
+  
+  # 输出话题
+  cmd_unified: "/cmd_unified"             # 统一控制命令输出
+  diagnostics: "/controller/diagnostics"  # 诊断信息输出
+  state: "/controller/state"              # 控制器状态输出 (std_msgs/Int32)
+  
+  # 姿态控制话题 (仅四旋翼平台)
+  attitude_cmd: "/controller/attitude_cmd"  # 姿态命令输出
 
-# 平台配置
-platform:
-  type: "differential"        # differential/omni/ackermann/quadrotor
-
+# =============================================================================
 # TF 配置
+# =============================================================================
 tf:
-  source_frame: "base_link"
-  target_frame: "odom"
-  timeout_ms: 10              # TF 查询超时 (毫秒)
+  source_frame: "base_link"       # 源坐标系 (机体坐标系)
+  target_frame: "odom"            # 目标坐标系 (里程计坐标系)
+  timeout_ms: 10                  # TF 查询超时 (毫秒)
+  buffer_warmup_timeout_sec: 2.0  # TF buffer 预热超时 (秒)
+  buffer_warmup_interval_sec: 0.1 # TF buffer 预热检查间隔 (秒)
 
-# 时间同步配置
-time_sync:
-  max_odom_age_ms: 100
-  max_traj_age_ms: 200
-  max_imu_age_ms: 50
+# =============================================================================
+# 超时配置 (映射到 universal_controller 的 watchdog 配置)
+# =============================================================================
+watchdog:
+  odom_timeout_ms: 200            # 里程计超时 (ms)
+  traj_timeout_ms: 500            # 轨迹超时 (ms)
+  imu_timeout_ms: 100             # IMU 超时 (ms)
+  startup_grace_ms: 1000          # 启动宽限期 (ms)
 
+# =============================================================================
 # 诊断配置
+# =============================================================================
 diagnostics:
-  publish_rate: 5             # 诊断发布降频率 (每 N 次控制循环发布一次)
+  publish_rate: 5                 # 诊断发布降频率 (每 N 次控制循环发布一次)
 
-# 控制器算法参数 (传递给 universal_controller)
-controller:
-  system:
-    ctrl_freq: 50
-    platform: "differential"
-  mpc:
-    horizon: 20
-    dt: 0.1
-  watchdog:
-    odom_timeout_ms: 200
-    traj_timeout_ms: 500
-    imu_timeout_ms: 100
-    startup_grace_ms: 1000
+# =============================================================================
+# MPC 配置 (映射到 universal_controller 的 mpc 配置)
+# =============================================================================
+mpc:
+  horizon: 20                     # MPC 预测时域
+  horizon_degraded: 10            # 降级模式预测时域
+  dt: 0.1                         # MPC 时间步长 (秒)
+
+# =============================================================================
+# 姿态控制配置 (仅四旋翼平台，映射到 universal_controller 的 attitude 配置)
+# =============================================================================
+attitude:
+  mass: 1.5                       # 质量 (kg)
+  roll_max: 0.5                   # 最大滚转角 (rad, ~30°)
+  pitch_max: 0.5                  # 最大俯仰角 (rad, ~30°)
+  hover_yaw_compensation: true    # 是否启用悬停 yaw 补偿

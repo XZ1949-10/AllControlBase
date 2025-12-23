@@ -1,0 +1,13 @@
+# GetAttitudeRateLimits.srv
+# 获取姿态角速度限制 (仅四旋翼平台)
+#
+# 用于查询当前的姿态角速度限制配置
+
+# 请求 (空)
+---
+# 响应
+bool success
+string message
+float32 roll_rate_max       # 最大滚转角速度 (rad/s)
+float32 pitch_rate_max      # 最大俯仰角速度 (rad/s)
+float32 yaw_rate_max        # 最大偏航角速度 (rad/s)

@@ -365,6 +365,9 @@ def test_data_manager_clock_rollback():
     dm = DataManager(get_time_func=custom_time)
     dm.update_odom(MockRosOdometry())
     
+    # 先正常获取一次年龄，建立基准时间
+    dm.get_data_ages()
+    
     # 时间回退（模拟仿真重置）
     mock_time[0] = 50.0
     
@@ -373,6 +376,64 @@ def test_data_manager_clock_rollback():
     # 年龄应该被 clamp 到 0，而不是负值
     assert ages['odom'] >= 0.0, f"Age should not be negative, got {ages['odom']}"
     assert ages['odom'] == 0.0, f"Age should be clamped to 0 on clock rollback"
+    
+    # 应该检测到时钟回退
+    assert dm.did_clock_jump_back() == True
+
+
+def test_data_manager_clock_jump_flag():
+    """测试时钟回退标志"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    
+    # 初始状态：无时钟回退
+    assert dm.did_clock_jump_back() == False
+    
+    dm.update_odom(MockRosOdometry())
+    dm.get_data_ages()  # 触发时间检查，建立基准
+    
+    # 正常时间前进
+    mock_time[0] = 101.0
+    dm.get_data_ages()
+    assert dm.did_clock_jump_back() == False
+    
+    # 时钟回退
+    mock_time[0] = 50.0
+    dm.get_data_ages()
+    assert dm.did_clock_jump_back() == True
+    
+    # 清除标志
+    dm.clear_clock_jump_flag()
+    assert dm.did_clock_jump_back() == False
+
+
+def test_data_manager_clear_resets_clock_state():
+    """测试 clear() 重置时钟状态"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    dm.update_odom(MockRosOdometry())
+    
+    # 先建立基准时间
+    dm.get_data_ages()
+    
+    # 触发时钟回退
+    mock_time[0] = 50.0
+    dm.get_data_ages()
+    assert dm.did_clock_jump_back() == True
+    
+    # clear 应该重置所有状态
+    dm.clear()
+    assert dm.did_clock_jump_back() == False
 
 
 if __name__ == '__main__':

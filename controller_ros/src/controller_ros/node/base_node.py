@@ -2,6 +2,13 @@
 控制器节点基类
 
 封装 ROS1 和 ROS2 节点的共享逻辑，避免代码重复。
+
+功能:
+- 控制器初始化和生命周期管理
+- 数据管理和控制循环
+- TF2 集成
+- 紧急停止处理
+- 姿态控制接口 (四旋翼平台)
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
@@ -9,8 +16,10 @@ import logging
 import time
 
 from universal_controller.config.default_config import DEFAULT_CONFIG, PLATFORM_CONFIG
-from universal_controller.core.data_types import Odometry, Imu, Trajectory, ControlOutput
-from universal_controller.core.enums import ControllerState
+from universal_controller.core.data_types import (
+    Odometry, Imu, Trajectory, ControlOutput, AttitudeCommand
+)
+from universal_controller.core.enums import ControllerState, PlatformType
 
 from ..bridge import ControllerBridge
 from ..io.data_manager import DataManager
@@ -29,19 +38,22 @@ class ControllerNodeBase(ABC):
     - 控制循环核心逻辑
     - TF2 注入
     - 诊断处理
+    - 紧急停止处理
+    - 姿态控制接口 (四旋翼平台)
     
     子类需要实现：
-    - _create_ros_interfaces(): 创建 ROS 特定的接口（订阅、发布、服务）
+    - _create_ros_interfaces(): 创建 ROS 特定的接口
     - _get_time(): 获取当前 ROS 时间
     - _log_info/warn/error(): 日志方法
     - _publish_cmd(): 发布控制命令
     - _publish_stop_cmd(): 发布停止命令
     - _publish_diagnostics(): 发布诊断信息
+    - _publish_attitude_cmd(): 发布姿态命令 (四旋翼平台)
     """
     
     def __init__(self):
         """初始化基类（子类应在调用 super().__init__() 前完成 ROS 节点初始化）"""
-        # 这些属性由子类在调用 _initialize() 前设置
+        # 配置属性（由子类在调用 _initialize() 前设置）
         self._params: Dict[str, Any] = {}
         self._topics: Dict[str, str] = {}
         self._default_frame_id: str = 'base_link'
@@ -51,18 +63,27 @@ class ControllerNodeBase(ABC):
         self._controller_bridge: Optional[ControllerBridge] = None
         self._data_manager: Optional[DataManager] = None
         self._time_sync: Optional[TimeSync] = None
-        self._tf_bridge: Any = None  # TFBridge 或 TF2Compat
+        self._tf_bridge: Any = None
         
         # 状态
         self._waiting_for_data = True
         self._consecutive_errors = 0
         self._max_consecutive_errors = 10
-        self._traj_msg_available = True  # 子类可设置为 False 表示轨迹消息类型不可用
+        self._traj_msg_available = True
+        
+        # 紧急停止状态
+        self._emergency_stop_requested = False
+        self._emergency_stop_time: Optional[float] = None
         
         # TF2 注入状态
         self._tf2_injected = False
         self._tf2_injection_attempted = False
-        self._tf2_retry_counter = 0  # TF2 重试计数器
+        self._tf2_retry_counter = 0
+        
+        # 姿态控制状态 (四旋翼平台)
+        self._is_quadrotor = False
+        self._last_attitude_cmd: Optional[AttitudeCommand] = None
+        self._attitude_yaw_mode: int = 0  # 0=FOLLOW_VELOCITY
     
     def _initialize(self):
         """
@@ -75,6 +96,9 @@ class ControllerNodeBase(ABC):
         platform_config = PLATFORM_CONFIG.get(self._platform_type, PLATFORM_CONFIG['differential'])
         self._default_frame_id = platform_config.get('output_frame', 'base_link')
         
+        # 检查是否为四旋翼平台
+        self._is_quadrotor = platform_config.get('type') == PlatformType.QUADROTOR
+        
         # 2. 创建数据管理器
         self._data_manager = DataManager(get_time_func=self._get_time)
         
@@ -84,9 +108,9 @@ class ControllerNodeBase(ABC):
         # 4. 创建时间同步
         watchdog_config = self._params.get('watchdog', {})
         self._time_sync = TimeSync(
-            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 100),
-            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 200),
-            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', 50)
+            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 200),
+            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 500),
+            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', 100)
         )
         
         # 5. 设置诊断回调
@@ -96,13 +120,8 @@ class ControllerNodeBase(ABC):
         """
         将 TF2 注入到坐标变换器
         
-        子类应在创建 TF 桥接后调用此方法。
-        支持阻塞和非阻塞两种模式。
-        
         Args:
             blocking: 是否阻塞等待 TF2 buffer 预热
-                - True: 阻塞等待（适用于节点初始化时）
-                - False: 非阻塞尝试（适用于运行时重试）
         """
         if self._tf_bridge is None:
             return
@@ -111,7 +130,6 @@ class ControllerNodeBase(ABC):
             self._log_info("TF2 not available, using fallback coordinate transform")
             return
         
-        # 获取 universal_controller 的坐标变换器
         manager = self._controller_bridge.manager
         if manager is None:
             return
@@ -125,8 +143,6 @@ class ControllerNodeBase(ABC):
         tf_config = self._params.get('tf', {})
         source_frame = tf_config.get('source_frame', 'base_link')
         target_frame = tf_config.get('target_frame', 'odom')
-        
-        # 可配置的预热等待参数
         max_wait_sec = tf_config.get('buffer_warmup_timeout_sec', 2.0)
         wait_interval = tf_config.get('buffer_warmup_interval_sec', 0.1)
         
@@ -135,7 +151,6 @@ class ControllerNodeBase(ABC):
         
         if can_transform_func is not None:
             if blocking:
-                # 阻塞模式：等待 TF2 buffer 填充
                 start_time = time.time()
                 while time.time() - start_time < max_wait_sec:
                     try:
@@ -156,16 +171,13 @@ class ControllerNodeBase(ABC):
                         f"will use fallback until TF becomes available"
                     )
             else:
-                # 非阻塞模式：只尝试一次
                 try:
                     tf2_ready = can_transform_func(target_frame, source_frame, timeout_sec=0.01)
                 except Exception:
                     tf2_ready = False
         
-        # 标记已尝试注入
         self._tf2_injection_attempted = True
         
-        # 尝试注入（即使 TF2 buffer 未就绪也注入回调，让 RobustCoordinateTransformer 处理 fallback）
         if hasattr(coord_transformer, 'set_tf2_lookup_callback'):
             lookup_func = getattr(self._tf_bridge, 'lookup_transform', None)
             if lookup_func is not None:
@@ -184,25 +196,130 @@ class ControllerNodeBase(ABC):
             self._log_warn("Coordinate transformer does not support TF2 injection")
     
     def _try_tf2_reinjection(self):
-        """
-        尝试重新注入 TF2（运行时调用）
-        
-        如果初始化时 TF2 未就绪，可以在运行时重试。
-        这个方法应该在控制循环中周期性调用（低频）。
-        """
-        # 如果已经成功注入，不需要重试
+        """尝试重新注入 TF2（运行时调用）"""
         if self._tf2_injected:
             return
-        
-        # 如果 TF bridge 不可用，不重试
         if self._tf_bridge is None:
             return
-        
         if not getattr(self._tf_bridge, 'is_initialized', False):
             return
-        
-        # 非阻塞尝试注入
         self._inject_tf2_to_controller(blocking=False)
+    
+    # ==================== 紧急停止处理 ====================
+    
+    def _handle_emergency_stop(self):
+        """
+        处理紧急停止请求
+        
+        当收到紧急停止信号时调用此方法。
+        """
+        if not self._emergency_stop_requested:
+            self._emergency_stop_requested = True
+            self._emergency_stop_time = self._get_time()
+            self._log_warn("Emergency stop requested!")
+            
+            # 请求控制器进入停止状态
+            if self._controller_bridge is not None:
+                self._controller_bridge.request_stop()
+    
+    def _clear_emergency_stop(self):
+        """
+        清除紧急停止状态
+        
+        通过 reset 服务调用时会清除紧急停止状态。
+        """
+        self._emergency_stop_requested = False
+        self._emergency_stop_time = None
+        self._log_info("Emergency stop cleared")
+    
+    def _is_emergency_stopped(self) -> bool:
+        """检查是否处于紧急停止状态"""
+        return self._emergency_stop_requested
+    
+    # ==================== 姿态控制接口 ====================
+    
+    def _compute_and_publish_attitude(self, cmd: ControlOutput, state_array) -> Optional[AttitudeCommand]:
+        """
+        计算并发布姿态命令 (仅四旋翼平台)
+        
+        Args:
+            cmd: 速度控制命令
+            state_array: 当前状态数组
+        
+        Returns:
+            姿态命令，非四旋翼平台返回 None
+        """
+        if not self._is_quadrotor:
+            return None
+        
+        if self._controller_bridge is None or self._controller_bridge.manager is None:
+            return None
+        
+        manager = self._controller_bridge.manager
+        
+        # 使用 ControllerManager 的姿态控制接口
+        attitude_cmd = manager.compute_attitude_command(
+            cmd, state_array, 
+            yaw_mode=self._get_yaw_mode_string()
+        )
+        
+        if attitude_cmd is not None:
+            self._last_attitude_cmd = attitude_cmd
+            self._publish_attitude_cmd(attitude_cmd)
+        
+        return attitude_cmd
+    
+    def _get_yaw_mode_string(self) -> str:
+        """将航向模式整数转换为字符串"""
+        mode_map = {
+            0: 'velocity',
+            1: 'fixed',
+            2: 'target_point',
+            3: 'manual',
+        }
+        return mode_map.get(self._attitude_yaw_mode, 'velocity')
+    
+    def _handle_set_hover_yaw(self, yaw: float) -> bool:
+        """
+        处理设置悬停航向请求
+        
+        Args:
+            yaw: 目标航向 (rad)
+        
+        Returns:
+            是否成功
+        """
+        if not self._is_quadrotor:
+            self._log_warn("Set hover yaw is only available for quadrotor platform")
+            return False
+        
+        if self._controller_bridge is None or self._controller_bridge.manager is None:
+            return False
+        
+        self._controller_bridge.manager.set_hover_yaw(yaw)
+        self._log_info(f"Hover yaw set to {yaw:.3f} rad")
+        return True
+    
+    def _handle_get_attitude_rate_limits(self) -> Optional[Dict[str, float]]:
+        """
+        获取姿态角速度限制
+        
+        Returns:
+            角速度限制字典，非四旋翼平台返回 None
+        """
+        if not self._is_quadrotor:
+            return None
+        
+        if self._controller_bridge is None or self._controller_bridge.manager is None:
+            return None
+        
+        manager = self._controller_bridge.manager
+        if manager.attitude_controller is None:
+            return None
+        
+        return manager.attitude_controller.get_attitude_rate_limits()
+    
+    # ==================== 控制循环 ====================
     
     def _control_loop_core(self) -> Optional[ControlOutput]:
         """
@@ -211,7 +328,12 @@ class ControllerNodeBase(ABC):
         Returns:
             控制输出，如果无法执行控制则返回 None
         """
-        # 0. 检查轨迹消息类型是否可用
+        # 0. 检查紧急停止
+        if self._emergency_stop_requested:
+            self._publish_stop_cmd()
+            return None
+        
+        # 0.1 检查轨迹消息类型是否可用
         if not self._traj_msg_available:
             self._log_warn_throttle(
                 10.0, 
@@ -221,10 +343,8 @@ class ControllerNodeBase(ABC):
             self._publish_stop_cmd()
             return None
         
-        # 0.1 尝试 TF2 重新注入（如果之前未成功）
-        # 低频检查，避免每次循环都检查
+        # 0.2 尝试 TF2 重新注入
         if not self._tf2_injected and self._tf2_injection_attempted:
-            # 每 50 次循环尝试一次（约 1 秒一次，假设 50Hz 控制频率）
             self._tf2_retry_counter += 1
             if self._tf2_retry_counter >= 50:
                 self._tf2_retry_counter = 0
@@ -258,8 +378,17 @@ class ControllerNodeBase(ABC):
         # 4. 执行控制更新
         try:
             cmd = self._controller_bridge.update(odom, trajectory, imu)
-            # 成功时重置错误计数
             self._consecutive_errors = 0
+            
+            # 5. 四旋翼平台：计算并发布姿态命令
+            if self._is_quadrotor and self._controller_bridge.manager is not None:
+                state_output = self._controller_bridge.manager.state_estimator
+                if state_output is not None:
+                    state_result = state_output.get_state()
+                    if state_result is not None and hasattr(state_result, 'state'):
+                        state_array = state_result.state
+                        self._compute_and_publish_attitude(cmd, state_array)
+            
             return cmd
         except Exception as e:
             self._consecutive_errors += 1
@@ -267,14 +396,7 @@ class ControllerNodeBase(ABC):
             return None
     
     def _handle_control_error(self, error: Exception, timeouts: Dict[str, bool]):
-        """
-        处理控制更新错误
-        
-        Args:
-            error: 异常对象
-            timeouts: 超时状态字典
-        """
-        # 根据连续错误次数调整日志频率
+        """处理控制更新错误"""
         if self._consecutive_errors <= self._max_consecutive_errors:
             self._log_error(f'Controller update failed ({self._consecutive_errors}): {error}')
         elif self._consecutive_errors % 50 == 0:
@@ -282,29 +404,18 @@ class ControllerNodeBase(ABC):
                 f'Controller update still failing ({self._consecutive_errors} consecutive errors): {error}'
             )
         
-        # 发布停止命令
         self._publish_stop_cmd()
         
-        # 发布错误诊断信息
         error_diag = self._create_error_diagnostics(error, timeouts)
         self._publish_diagnostics(error_diag, force=True)
     
     def _create_error_diagnostics(self, error: Exception, 
                                    timeouts: Dict[str, bool]) -> Dict[str, Any]:
-        """
-        创建错误诊断信息
-        
-        Args:
-            error: 异常对象
-            timeouts: 超时状态字典
-        
-        Returns:
-            诊断信息字典
-        """
+        """创建错误诊断信息"""
         ages = self._data_manager.get_data_ages()
         
         return {
-            'state': 0,  # INIT/ERROR state
+            'state': 0,
             'mpc_success': False,
             'backup_active': False,
             'error_message': str(error),
@@ -323,16 +434,11 @@ class ControllerNodeBase(ABC):
                                  if self._tf_bridge else False,
                 'tf2_injected': self._tf2_injected,
             },
+            'emergency_stop': self._emergency_stop_requested,
         }
     
     def _on_diagnostics(self, diag: Dict[str, Any]):
-        """
-        诊断回调
-        
-        Args:
-            diag: 诊断信息字典
-        """
-        # 添加 TF2 状态
+        """诊断回调"""
         if 'transform' not in diag:
             diag['transform'] = {}
         diag['transform']['tf2_available'] = (
@@ -341,7 +447,12 @@ class ControllerNodeBase(ABC):
         )
         diag['transform']['tf2_injected'] = self._tf2_injected
         
+        # 添加紧急停止状态
+        diag['emergency_stop'] = self._emergency_stop_requested
+        
         self._publish_diagnostics(diag)
+    
+    # ==================== 服务处理 ====================
     
     def _handle_reset(self):
         """处理重置请求"""
@@ -351,8 +462,9 @@ class ControllerNodeBase(ABC):
             self._data_manager.clear()
         self._waiting_for_data = True
         self._consecutive_errors = 0
-        # 重置 TF2 重试计数器
         self._tf2_retry_counter = 0
+        self._clear_emergency_stop()
+        self._last_attitude_cmd = None
         self._log_info('Controller reset')
     
     def _handle_get_diagnostics(self) -> Optional[Dict[str, Any]]:
@@ -366,14 +478,7 @@ class ControllerNodeBase(ABC):
         处理设置状态请求
         
         出于安全考虑，只支持请求 STOPPING 状态。
-        
-        Args:
-            target_state: 目标状态值
-        
-        Returns:
-            是否成功
         """
-        # 只允许请求 STOPPING 状态
         if target_state == ControllerState.STOPPING.value:
             if self._controller_bridge is not None:
                 success = self._controller_bridge.request_stop()
@@ -398,11 +503,7 @@ class ControllerNodeBase(ABC):
     
     @abstractmethod
     def _get_time(self) -> float:
-        """
-        获取当前时间（秒）
-        
-        应返回支持仿真时间的 ROS 时间。
-        """
+        """获取当前时间（秒）"""
         pass
     
     @abstractmethod
@@ -438,4 +539,12 @@ class ControllerNodeBase(ABC):
     @abstractmethod
     def _publish_diagnostics(self, diag: Dict[str, Any], force: bool = False):
         """发布诊断信息"""
+        pass
+    
+    def _publish_attitude_cmd(self, attitude_cmd: AttitudeCommand):
+        """
+        发布姿态命令 (四旋翼平台)
+        
+        子类可选实现。默认实现为空操作。
+        """
         pass

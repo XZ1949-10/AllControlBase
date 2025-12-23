@@ -22,6 +22,7 @@ class DataManager:
     - 提供线程安全的数据访问
     - 管理数据时间戳
     - 计算数据年龄
+    - 检测时钟回退
     
     支持 ROS1 和 ROS2，通过注入时间获取函数实现。
     """
@@ -47,6 +48,10 @@ class DataManager:
         self._lock = threading.Lock()
         self._latest_data: Dict[str, Any] = {}
         self._timestamps: Dict[str, float] = {}
+        
+        # 时钟回退检测
+        self._last_time: float = 0.0
+        self._clock_jumped_back: bool = False
     
     @property
     def odom_adapter(self) -> OdomAdapter:
@@ -150,10 +155,18 @@ class DataManager:
             
         Note:
             如果时钟回退（如仿真时间重置），年龄会被 clamp 到 0，
-            避免返回负值导致超时检测失效。
+            避免返回负值导致超时检测失效。同时会设置 _clock_jumped_back 标志。
         """
         now = self._get_time_func()
         with self._lock:
+            # 检测时钟回退
+            if now < self._last_time - 0.001:  # 允许 1ms 的抖动
+                self._clock_jumped_back = True
+                # 时钟回退时，重置所有时间戳为当前时间，避免数据被误认为新鲜
+                for key in self._timestamps:
+                    self._timestamps[key] = now
+            self._last_time = now
+            
             ages = {}
             for key in ['odom', 'imu', 'trajectory']:
                 if key in self._timestamps:
@@ -199,3 +212,20 @@ class DataManager:
         with self._lock:
             self._latest_data.clear()
             self._timestamps.clear()
+            self._last_time = 0.0
+            self._clock_jumped_back = False
+    
+    def did_clock_jump_back(self) -> bool:
+        """
+        检查时钟是否发生过回退
+        
+        Returns:
+            如果检测到时钟回退返回 True
+        """
+        with self._lock:
+            return self._clock_jumped_back
+    
+    def clear_clock_jump_flag(self):
+        """清除时钟回退标志"""
+        with self._lock:
+            self._clock_jumped_back = False

@@ -238,8 +238,22 @@ python universal_controller/tests/run_all_tests.py
 
 ### 运行可视化 Dashboard
 
+Dashboard 支持两种运行模式：
+
+**独立模式 (使用模拟数据)**
 ```bash
 python -m universal_controller.dashboard.run_dashboard
+```
+
+**ROS 模式 (订阅控制器话题)**
+```bash
+# 需要先启动控制器
+roslaunch controller_ros controller.launch
+
+# 然后启动 Dashboard
+roslaunch controller_ros dashboard.launch
+# 或
+roslaunch controller_ros controller.launch dashboard:=true
 ```
 
 Dashboard 提供实时监控界面，显示：

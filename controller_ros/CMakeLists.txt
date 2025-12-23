@@ -18,6 +18,7 @@ add_message_files(
   LocalTrajectoryV4.msg
   UnifiedCmd.msg
   DiagnosticsV2.msg
+  AttitudeCmd.msg
 )
 
 # 生成服务
@@ -25,6 +26,8 @@ add_service_files(
   FILES
   SetControllerState.srv
   GetDiagnostics.srv
+  SetHoverYaw.srv
+  GetAttitudeRateLimits.srv
 )
 
 generate_messages(
@@ -43,6 +46,7 @@ catkin_package(
 # 安装 Python 模块
 catkin_install_python(PROGRAMS
   scripts/controller_node.py
+  scripts/dashboard_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

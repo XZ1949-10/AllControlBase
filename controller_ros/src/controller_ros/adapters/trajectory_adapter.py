@@ -101,12 +101,36 @@ class TrajectoryAdapter(IMsgConverter):
     
     def to_uc(self, ros_msg: Any) -> UcTrajectory:
         """ROS LocalTrajectoryV4 → UC Trajectory"""
+        # 处理 frame_id，空字符串使用默认值
+        frame_id = ros_msg.header.frame_id
+        if not frame_id:
+            frame_id = DEFAULT_TRAJECTORY_FRAME_ID
+        
         # 转换轨迹点
         points = [
             Point3D(x=p.x, y=p.y, z=p.z)
             for p in ros_msg.points
         ]
         num_points = len(points)
+        
+        # 处理空轨迹的边界情况
+        if num_points == 0:
+            logger.warning(
+                "Received empty trajectory (0 points), returning MODE_STOP trajectory. "
+                "This may indicate upstream trajectory generation issues."
+            )
+            return UcTrajectory(
+                header=Header(
+                    stamp=self._ros_time_to_sec(ros_msg.header.stamp),
+                    frame_id=frame_id
+                ),
+                points=[],
+                velocities=None,
+                dt_sec=ros_msg.dt_sec if ros_msg.dt_sec > 0 else 0.1,
+                confidence=0.0,
+                mode=TrajectoryMode.MODE_STOP,
+                soft_enabled=False
+            )
         
         # 处理速度数组
         velocities, soft_enabled = self._process_velocities(
@@ -123,11 +147,6 @@ class TrajectoryAdapter(IMsgConverter):
         except ValueError:
             logger.warning(f"Unknown trajectory mode {ros_msg.mode}, using MODE_TRACK")
             mode = TrajectoryMode.MODE_TRACK
-        
-        # 处理 frame_id，空字符串使用默认值
-        frame_id = ros_msg.header.frame_id
-        if not frame_id:
-            frame_id = DEFAULT_TRAJECTORY_FRAME_ID
         
         return UcTrajectory(
             header=Header(

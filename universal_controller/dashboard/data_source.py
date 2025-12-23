@@ -372,6 +372,7 @@ class DashboardDataSource:
             current_omega=abs(cmd.get('omega', 0)),
             low_speed_protection_active=current_v < 0.1,
             safety_check_passed=True,
+            emergency_stop=diag.get('emergency_stop', False),
         )
 
     def _build_control_command(self, diag: Dict) -> ControlCommand:

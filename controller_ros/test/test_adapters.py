@@ -320,5 +320,75 @@ def test_output_adapter_stop_cmd():
     assert adapter._default_frame_id == 'base_link'
 
 
+def test_trajectory_adapter_empty_trajectory():
+    """测试轨迹适配器处理空轨迹"""
+    from controller_ros.adapters.trajectory_adapter import TrajectoryAdapter
+    
+    adapter = TrajectoryAdapter()
+    ros_msg = MockRosTrajectory()
+    ros_msg.points = []  # 空轨迹
+    ros_msg.dt_sec = 0.1
+    ros_msg.confidence = 0.9
+    ros_msg.soft_enabled = False
+    
+    uc_traj = adapter.to_uc(ros_msg)
+    
+    # 应该返回 MODE_STOP 轨迹
+    assert isinstance(uc_traj, Trajectory)
+    assert len(uc_traj.points) == 0
+    assert uc_traj.mode == TrajectoryMode.MODE_STOP
+    assert uc_traj.confidence == 0.0
+    assert uc_traj.soft_enabled == False
+    assert uc_traj.velocities is None
+
+
+def test_trajectory_adapter_empty_trajectory_with_soft():
+    """测试轨迹适配器处理空轨迹 (soft_enabled=True)"""
+    from controller_ros.adapters.trajectory_adapter import TrajectoryAdapter
+    
+    adapter = TrajectoryAdapter()
+    ros_msg = MockRosTrajectory()
+    ros_msg.points = []  # 空轨迹
+    ros_msg.soft_enabled = True
+    ros_msg.velocities_flat = [1.0, 0.0, 0.0, 0.0]  # 有速度数据但无位置点
+    
+    uc_traj = adapter.to_uc(ros_msg)
+    
+    # 应该返回 MODE_STOP 轨迹，忽略速度数据
+    assert len(uc_traj.points) == 0
+    assert uc_traj.mode == TrajectoryMode.MODE_STOP
+    assert uc_traj.soft_enabled == False
+    assert uc_traj.velocities is None
+
+
+def test_trajectory_adapter_empty_frame_id():
+    """测试轨迹适配器处理空 frame_id"""
+    from controller_ros.adapters.trajectory_adapter import TrajectoryAdapter
+    
+    adapter = TrajectoryAdapter()
+    ros_msg = MockRosTrajectory()
+    ros_msg.header.frame_id = ''  # 空 frame_id
+    
+    uc_traj = adapter.to_uc(ros_msg)
+    
+    # 应该使用默认 frame_id
+    assert uc_traj.header.frame_id == 'base_link'
+
+
+def test_trajectory_adapter_zero_dt_sec():
+    """测试轨迹适配器处理零 dt_sec (空轨迹情况)"""
+    from controller_ros.adapters.trajectory_adapter import TrajectoryAdapter
+    
+    adapter = TrajectoryAdapter()
+    ros_msg = MockRosTrajectory()
+    ros_msg.points = []  # 空轨迹
+    ros_msg.dt_sec = 0.0  # 零 dt_sec
+    
+    uc_traj = adapter.to_uc(ros_msg)
+    
+    # 空轨迹时应该使用默认 dt_sec
+    assert uc_traj.dt_sec == 0.1
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

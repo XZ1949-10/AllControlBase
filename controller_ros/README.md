@@ -12,6 +12,8 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 - TF2 集成 (管理坐标变换，注入到 universal_controller)
 - 调用控制算法 (封装 `ControllerManager.update()`)
 - 发布统一输出 (`/cmd_unified`, `/controller/diagnostics`, `/controller/state`)
+- 紧急停止处理 (`/controller/emergency_stop`)
+- 姿态控制接口 (四旋翼平台)
 
 ## 架构
 
@@ -22,13 +24,15 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 │  输入层 (Subscribers)                                           │
 │    ├── OdomSubscriber (/odom)                                   │
 │    ├── IMUSubscriber (/imu)                                     │
-│    └── TrajSubscriber (/nn/local_trajectory)                    │
+│    ├── TrajSubscriber (/nn/local_trajectory)                    │
+│    └── EmergencyStopSubscriber (/controller/emergency_stop)     │
 ├─────────────────────────────────────────────────────────────────┤
 │  适配器层 (Adapters)                                            │
 │    ├── OdomAdapter (ROS → UC)                                   │
 │    ├── ImuAdapter (ROS → UC)                                    │
 │    ├── TrajectoryAdapter (ROS → UC)                             │
-│    └── OutputAdapter (UC → ROS)                                 │
+│    ├── OutputAdapter (UC → ROS)                                 │
+│    └── AttitudeAdapter (UC → ROS, 四旋翼)                       │
 ├─────────────────────────────────────────────────────────────────┤
 │  桥接层 (Bridge)                                                │
 │    ├── ControllerBridge (封装 ControllerManager)                │
@@ -37,7 +41,8 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 │  输出层 (Publishers)                                            │
 │    ├── /cmd_unified (UnifiedCmd)                                │
 │    ├── /controller/diagnostics (DiagnosticsV2)                  │
-│    └── /controller/state (Int32)                                │
+│    ├── /controller/state (Int32)                                │
+│    └── /controller/attitude_cmd (AttitudeCmd, 四旋翼)           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,7 +76,6 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 
 **方法 1: 设置 PYTHONPATH (推荐开发时使用)**
 ```bash
-# 假设 universal_controller 和 controller_ros 在同一父目录下
 export PYTHONPATH=$PYTHONPATH:/path/to/AllControlBase
 ```
 
@@ -81,20 +85,12 @@ cd /path/to/universal_controller
 pip install -e .
 ```
 
-**方法 3: 在 .bashrc 中永久设置**
-```bash
-echo 'export PYTHONPATH=$PYTHONPATH:/path/to/AllControlBase' >> ~/.bashrc
-source ~/.bashrc
-```
-
 ### 构建 (ROS1)
 
 ```bash
-# 在 catkin 工作空间中
 cd ~/catkin_ws/src
 ln -s /path/to/controller_ros .
 
-# 确保 universal_controller 在 Python 路径中
 export PYTHONPATH=$PYTHONPATH:/path/to/universal_controller/..
 
 cd ~/catkin_ws
@@ -128,6 +124,7 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 | `/odom` | nav_msgs/Odometry | 里程计 |
 | `/imu` | sensor_msgs/Imu | IMU (可选) |
 | `/nn/local_trajectory` | controller_ros/LocalTrajectoryV4 | 网络预测轨迹 |
+| `/controller/emergency_stop` | std_msgs/Empty | 紧急停止信号 |
 
 #### 发布 (输出)
 
@@ -136,6 +133,7 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 | `/cmd_unified` | controller_ros/UnifiedCmd | 统一控制命令 |
 | `/controller/diagnostics` | controller_ros/DiagnosticsV2 | 诊断信息 (降频发布) |
 | `/controller/state` | std_msgs/Int32 | 控制器状态 (每次控制循环发布) |
+| `/controller/attitude_cmd` | controller_ros/AttitudeCmd | 姿态命令 (仅四旋翼) |
 
 **状态值说明** (ControllerState 枚举):
 - 0: INIT - 初始化
@@ -153,6 +151,23 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 | `/controller/reset` | std_srvs/Trigger | 重置控制器 |
 | `/controller/set_state` | controller_ros/SetControllerState | 设置控制器状态 (仅支持 STOPPING) |
 | `/controller/get_diagnostics` | controller_ros/GetDiagnostics | 获取诊断信息 |
+| `/controller/set_hover_yaw` | controller_ros/SetHoverYaw | 设置悬停航向 (仅四旋翼) |
+| `/controller/get_attitude_rate_limits` | controller_ros/GetAttitudeRateLimits | 获取姿态角速度限制 (仅四旋翼) |
+
+### 紧急停止
+
+发送空消息到 `/controller/emergency_stop` 话题即可触发紧急停止：
+
+```bash
+rostopic pub /controller/emergency_stop std_msgs/Empty "{}"
+```
+
+紧急停止后，控制器会：
+1. 立即发布零速度命令
+2. 请求进入 STOPPING 状态
+3. 在诊断信息中标记 `emergency_stop=true`
+
+通过 `/controller/reset` 服务可以清除紧急停止状态。
 
 ## TF2 集成
 
@@ -161,6 +176,7 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 1. **自动检测**: 启动时自动检测 tf2_ros 是否可用
 2. **回调注入**: 将 TF2 查找回调注入到 `universal_controller` 的 `RobustCoordinateTransformer`
 3. **降级处理**: TF2 不可用时自动降级到 odom 积分
+4. **运行时重试**: 如果初始化时 TF2 未就绪，会在运行时周期性重试
 
 ```python
 # TF2 注入流程
@@ -172,31 +188,60 @@ TFBridge.inject_to_transformer(coord_transformer)
 
 ### 参数文件
 
-```yaml
-# config/controller_params.yaml
-node:
-  control_rate: 50.0
+配置文件位于 `config/controller_params.yaml`：
 
+```yaml
+# 系统配置
+system:
+  ctrl_freq: 50                   # 控制频率 (Hz)
+  platform: "differential"        # 平台类型
+
+# 话题配置
 topics:
   odom: "/odom"
   imu: "/imu"
   trajectory: "/nn/local_trajectory"
   cmd_unified: "/cmd_unified"
   diagnostics: "/controller/diagnostics"
+  emergency_stop: "/controller/emergency_stop"
+  attitude_cmd: "/controller/attitude_cmd"
 
-platform:
-  type: "differential"  # differential/omni/ackermann/quadrotor
-
+# TF 配置
 tf:
   source_frame: "base_link"
   target_frame: "odom"
-  timeout_sec: 0.01
+  timeout_ms: 10
 
-time_sync:
-  max_odom_age_ms: 100
-  max_traj_age_ms: 200
-  max_imu_age_ms: 50
+# 超时配置
+watchdog:
+  odom_timeout_ms: 200
+  traj_timeout_ms: 500
+  imu_timeout_ms: 100
+
+# MPC 配置
+mpc:
+  horizon: 20
+  dt: 0.1
+
+# 姿态控制配置 (四旋翼)
+attitude:
+  mass: 1.5
+  roll_max: 0.5
+  pitch_max: 0.5
 ```
+
+### 配置映射
+
+ROS 参数与 `universal_controller` 配置的映射关系：
+
+| ROS 参数 | UC 配置 |
+|----------|---------|
+| `system.ctrl_freq` | `system.ctrl_freq` |
+| `system.platform` | `system.platform` |
+| `watchdog.*` | `watchdog.*` |
+| `mpc.*` | `mpc.*` |
+| `attitude.*` | `attitude.*` |
+| `tf.*` | `transform.*` |
 
 ## 平台适配
 
@@ -211,10 +256,60 @@ time_sync:
     └── 四旋翼适配器 → /mavros/setpoint (TwistStamped)
 ```
 
+### 四旋翼平台
+
+四旋翼平台额外提供姿态控制接口：
+
+- **姿态命令话题**: `/controller/attitude_cmd` (AttitudeCmd)
+- **设置悬停航向**: `/controller/set_hover_yaw` 服务
+- **获取角速度限制**: `/controller/get_attitude_rate_limits` 服务
+
+姿态命令包含：
+- `roll`, `pitch`, `yaw`: 姿态角 (rad)
+- `thrust`: 推力 (归一化，1.0 = 悬停)
+- `yaw_mode`: 航向模式 (0=跟随速度, 1=固定, 2=朝向目标, 3=手动)
+- `is_hovering`: 是否处于悬停状态
+
+## Dashboard 可视化
+
+本包支持启动 Dashboard 可视化监控界面，实时显示控制器状态。
+
+### 启动方式
+
+```bash
+# 方式 1: 控制器 + Dashboard 一起启动
+roslaunch controller_ros controller.launch dashboard:=true
+
+# 方式 2: 单独启动 Dashboard (需要先启动控制器)
+roslaunch controller_ros dashboard.launch
+
+# 方式 3: 直接运行 Dashboard 节点
+rosrun controller_ros dashboard_node.py
+```
+
+### 依赖
+
+Dashboard 需要 PyQt5:
+```bash
+pip install PyQt5
+```
+
+### 功能
+
+Dashboard 订阅 `/controller/diagnostics` 话题，显示：
+- 系统状态和 7 级降级状态
+- MPC 健康状态 (求解时间、KKT残差、条件数)
+- 一致性分析 (α_soft、曲率、速度方向、时序平滑)
+- 超时监控 (Odom/Traj/IMU)
+- 跟踪误差
+- 控制输出
+- 状态估计 (EKF)
+- 运行统计
+- 警告日志
+
 ## 测试
 
 ```bash
-# 运行单元测试 (不需要 ROS 环境)
 cd controller_ros
 python -m pytest test/ -v
 ```
@@ -233,26 +328,37 @@ controller_ros/
 │   ├── quadrotor.yaml
 │   └── ackermann.yaml
 ├── launch/
-│   ├── controller.launch    # ROS1 launch 文件
+│   ├── controller.launch    # ROS1 launch 文件 (支持 dashboard:=true)
+│   ├── dashboard.launch     # Dashboard 独立启动
 │   └── controller.launch.py # ROS2 launch 文件 (备用)
 ├── msg/
 │   ├── LocalTrajectoryV4.msg
 │   ├── UnifiedCmd.msg
-│   └── DiagnosticsV2.msg
+│   ├── DiagnosticsV2.msg
+│   └── AttitudeCmd.msg      # 姿态命令 (四旋翼)
 ├── srv/
 │   ├── SetControllerState.srv
-│   └── GetDiagnostics.srv
+│   ├── GetDiagnostics.srv
+│   ├── SetHoverYaw.srv      # 设置悬停航向 (四旋翼)
+│   └── GetAttitudeRateLimits.srv  # 获取角速度限制 (四旋翼)
 ├── scripts/
-│   └── controller_node.py   # 主节点 (ROS1)
+│   ├── controller_node.py   # 主节点 (ROS1)
+│   └── dashboard_node.py    # Dashboard 节点 (ROS1)
 ├── src/controller_ros/      # Python 模块
 │   ├── adapters/            # 消息适配器
+│   │   ├── odom_adapter.py
+│   │   ├── imu_adapter.py
+│   │   ├── trajectory_adapter.py
+│   │   ├── output_adapter.py
+│   │   └── attitude_adapter.py  # 姿态适配器 (四旋翼)
 │   ├── bridge/              # 控制器和 TF2 桥接
 │   ├── io/                  # 订阅/发布管理
-│   ├── node/                # ROS2 节点 (备用)
+│   ├── node/                # 节点基类和 ROS2 节点
 │   └── utils/               # 工具函数和 ROS 兼容层
 └── test/
     ├── test_adapters.py
-    └── test_bridge.py
+    ├── test_bridge.py
+    └── test_diagnostics_publisher.py
 ```
 
 ## 许可证

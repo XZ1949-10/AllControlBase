@@ -70,3 +70,6 @@ float32 transition_progress
 # 错误信息 (用于调试)
 string error_message
 uint32 consecutive_errors
+
+# 紧急停止状态
+bool emergency_stop

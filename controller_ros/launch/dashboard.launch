@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 
+    Dashboard 独立启动文件
+    
+    用法:
+      roslaunch controller_ros dashboard.launch
+      roslaunch controller_ros dashboard.launch platform:=quadrotor
+    
+    注意:
+      - 需要先启动控制器节点 (controller.launch)
+      - Dashboard 订阅 /controller/diagnostics 话题
+  -->
+  
+  <!-- ========== 参数 ========== -->
+  <arg name="platform" default="differential" doc="Platform type for config loading"/>
+  
+  <!-- ========== 加载配置文件 (用于 Dashboard 显示) ========== -->
+  <!-- 基础配置 -->
+  <rosparam file="$(find controller_ros)/config/controller_params.yaml" command="load"/>
+  
+  <!-- 平台特定配置 -->
+  <rosparam file="$(find controller_ros)/config/$(arg platform).yaml" command="load"/>
+  
+  <!-- 覆盖平台参数 -->
+  <param name="system/platform" value="$(arg platform)"/>
+  
+  <!-- ========== Dashboard 节点 ========== -->
+  <node pkg="controller_ros" type="dashboard_node.py" name="controller_dashboard" 
+        output="screen" required="false">
+    <!-- 
+    Dashboard 订阅话题:
+    - /controller/diagnostics (DiagnosticsV2)
+    - /controller/state (Int32)
+    
+    Dashboard 不发布任何话题，仅用于监控显示。
+    -->
+  </node>
+</launch>

@@ -1,26 +1,54 @@
 <?xml version="1.0"?>
 <launch>
-  <!-- 参数 -->
+  <!-- ========== 参数 ========== -->
   <arg name="platform" default="differential" doc="Platform type: differential, omni, ackermann, quadrotor"/>
-  <arg name="use_sim_time" default="false"/>
+  <arg name="use_sim_time" default="false" doc="Use simulation time"/>
+  <arg name="ctrl_freq" default="50" doc="Control frequency (Hz)"/>
+  <arg name="dashboard" default="false" doc="Launch Dashboard GUI for monitoring"/>
   
-  <!-- 设置仿真时间 -->
+  <!-- ========== 全局参数 ========== -->
   <param name="/use_sim_time" value="$(arg use_sim_time)"/>
   
-  <!-- 加载参数 -->
+  <!-- ========== 加载配置文件 ========== -->
+  <!-- 基础配置 -->
   <rosparam file="$(find controller_ros)/config/controller_params.yaml" command="load"/>
+  
+  <!-- 平台特定配置 (覆盖基础配置) -->
   <rosparam file="$(find controller_ros)/config/$(arg platform).yaml" command="load"/>
   
-  <!-- 控制器节点 -->
+  <!-- ========== 覆盖参数 ========== -->
+  <!-- 允许通过 launch 参数覆盖配置文件中的值 -->
+  <param name="system/platform" value="$(arg platform)"/>
+  <param name="system/ctrl_freq" value="$(arg ctrl_freq)"/>
+  
+  <!-- ========== 控制器节点 ========== -->
   <node pkg="controller_ros" type="controller_node.py" name="universal_controller_node" output="screen">
-    <param name="platform_type" value="$(arg platform)"/>
-    
     <!-- 
     话题配置说明:
-    话题名通过参数配置 (topics/* 或 ~topic_name)，不使用 remap。
-    默认话题在 controller_params.yaml 中定义。
-    如需修改话题，请修改 YAML 配置或使用私有参数覆盖:
-      <param name="~odom" value="/custom/odom"/>
+    - 话题名通过参数配置 (topics/*)，不使用 remap
+    - 默认话题在 controller_params.yaml 中定义
+    - 如需修改话题，请修改 YAML 配置或使用参数覆盖:
+        <param name="topics/odom" value="/custom/odom"/>
+    
+    紧急停止:
+    - 发送 std_msgs/Empty 到 /controller/emergency_stop 触发紧急停止
+    - 通过 /controller/reset 服务清除紧急停止状态
+    
+    四旋翼平台:
+    - 额外发布 /controller/attitude_cmd (AttitudeCmd)
+    - 提供 /controller/set_hover_yaw 服务
+    - 提供 /controller/get_attitude_rate_limits 服务
+    -->
+  </node>
+  
+  <!-- ========== Dashboard 节点 (可选) ========== -->
+  <node pkg="controller_ros" type="dashboard_node.py" name="controller_dashboard" 
+        output="screen" if="$(arg dashboard)">
+    <!-- 
+    Dashboard 可视化监控界面
+    - 订阅 /controller/diagnostics 和 /controller/state
+    - 显示实时状态、MPC 健康、一致性分析等
+    - 需要 PyQt5: pip install PyQt5
     -->
   </node>
 </launch>

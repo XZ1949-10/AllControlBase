@@ -182,6 +182,7 @@ class SafetyStatus:
     current_omega: float = 0.0
     low_speed_protection_active: bool = False
     safety_check_passed: bool = True
+    emergency_stop: bool = False
 
 
 @dataclass 

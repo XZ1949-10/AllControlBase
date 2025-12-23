@@ -1,0 +1,11 @@
+# SetHoverYaw.srv
+# 设置悬停时的目标航向 (仅四旋翼平台)
+#
+# 用于 F14.3 悬停 yaw 漂移补偿功能
+
+# 请求
+float32 yaw                 # 目标航向 (rad)
+---
+# 响应
+bool success
+string message
