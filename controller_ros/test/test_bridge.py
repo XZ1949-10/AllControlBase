@@ -137,3 +137,46 @@ def test_controller_bridge_platform_types():
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+def test_controller_bridge_request_stop():
+    """测试控制器桥接请求停止功能"""
+    from controller_ros.bridge.controller_bridge import ControllerBridge
+    
+    config = DEFAULT_CONFIG.copy()
+    bridge = ControllerBridge(config)
+    
+    # 先运行几次更新，让状态机进入 NORMAL 状态
+    odom = create_test_odom(vx=1.0)
+    trajectory = create_test_trajectory()
+    
+    for _ in range(5):
+        bridge.update(odom, trajectory)
+    
+    # 请求停止
+    success = bridge.request_stop()
+    assert success, "request_stop should return True"
+    
+    # 新方案：状态转换发生在下一次 update() 时
+    # 再执行一次 update，状态机会处理停止请求
+    bridge.update(odom, trajectory)
+    
+    # 验证状态已变为 STOPPING
+    assert bridge.get_state() == ControllerState.STOPPING, \
+        f"State should be STOPPING, got {bridge.get_state()}"
+    
+    bridge.shutdown()
+    print("✓ test_controller_bridge_request_stop passed")
+
+
+def test_controller_bridge_request_stop_not_initialized():
+    """测试未初始化时请求停止"""
+    from controller_ros.bridge.controller_bridge import ControllerBridge
+    
+    config = DEFAULT_CONFIG.copy()
+    bridge = ControllerBridge(config)
+    bridge.shutdown()  # 关闭后再测试
+    
+    success = bridge.request_stop()
+    assert not success, "request_stop should return False when not initialized"
+    
+    print("✓ test_controller_bridge_request_stop_not_initialized passed")

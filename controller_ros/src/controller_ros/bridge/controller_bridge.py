@@ -99,24 +99,20 @@ class ControllerBridge:
         请求控制器进入停止状态
         
         这是唯一允许的外部状态干预，用于紧急停止场景。
-        状态机会在下一次 update 时检测到停止请求并转换到 STOPPING 状态。
+        使用 StateMachine 的官方 request_stop() 接口，状态转换会在
+        下一次 update() 时由状态机统一处理。
         
         Returns:
             是否成功请求停止
         """
-        if self._manager is None or self._manager.state_machine is None:
+        if not self._initialized or self._manager is None:
             return False
         
-        # 直接设置状态机状态为 STOPPING
-        # 这是安全的，因为 STOPPING 状态会让控制器输出零速度
-        from universal_controller.core.enums import ControllerState
-        from universal_controller.core.ros_compat import get_monotonic_time
+        if self._manager.state_machine is None:
+            return False
         
-        self._manager.state_machine.state = ControllerState.STOPPING
-        self._manager.state_machine._stopping_start_time = get_monotonic_time()
-        self._manager.state_machine._reset_all_counters()
-        logger.info("Stop requested, transitioning to STOPPING state")
-        return True
+        # 使用状态机的官方接口请求停止
+        return self._manager.state_machine.request_stop()
     
     def shutdown(self):
         """关闭控制器"""

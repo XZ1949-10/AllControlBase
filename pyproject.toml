@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "universal-controller"
+version = "3.18.0"
+description = "基于 MPC 的通用轨迹跟踪控制器"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "PyYAML>=5.4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["universal_controller*"]

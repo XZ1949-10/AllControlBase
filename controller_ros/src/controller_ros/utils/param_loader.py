@@ -4,27 +4,14 @@
 从 ROS 参数服务器加载配置。
 支持 ROS1 和 ROS2，以及非 ROS 环境。
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 import weakref
 
 from universal_controller.config.default_config import DEFAULT_CONFIG
+from .ros_compat import ROS_VERSION  # 统一使用 ros_compat 的版本检测
 
 logger = logging.getLogger(__name__)
-
-# 检测 ROS 版本
-ROS_VERSION = 0
-try:
-    import rclpy
-    from rclpy.node import Node as ROS2Node
-    ROS_VERSION = 2
-except ImportError:
-    ROS2Node = None
-    try:
-        import rospy
-        ROS_VERSION = 1
-    except ImportError:
-        pass
 
 
 # 参数定义：(参数名, 默认值)

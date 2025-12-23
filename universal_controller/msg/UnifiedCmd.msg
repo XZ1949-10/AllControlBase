@@ -5,6 +5,10 @@
 # - 差速车: 使用 vx, omega
 # - 全向车: 使用 vx, vy, omega
 # - 无人机: 使用 vx, vy, vz, omega
+#
+# 坐标系说明 (通过 header.frame_id 指定):
+# - "base_link": 机体坐标系 (差速车/阿克曼车)
+# - "world" 或 "odom": 世界/里程计坐标系 (全向车/无人机)
 
 std_msgs/Header header
 
@@ -15,11 +19,6 @@ float32 vz      # Z 方向速度 (无人机)
 
 # 角速度 (rad/s)
 float32 omega   # 偏航角速度
-
-# 坐标系
-# "base_link": 机体坐标系 (差速车)
-# "world" 或 "odom": 世界/里程计坐标系 (全向/无人机)
-string frame_id
 
 # 命令是否有效
 bool success

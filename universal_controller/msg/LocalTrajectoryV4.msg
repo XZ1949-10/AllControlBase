@@ -7,10 +7,11 @@
 
 std_msgs/Header header
 
-# 轨迹模式
+# 轨迹模式 (与 universal_controller.core.enums.TrajectoryMode 对应)
 # 0=MODE_TRACK (跟踪模式)
 # 1=MODE_STOP (停止模式)
-# 2=MODE_HOLD (保持模式)
+# 2=MODE_HOVER (悬停/保持模式)
+# 3=MODE_EMERGENCY (紧急模式)
 uint8 mode
 
 # 轨迹点 (3D 位置)
@@ -18,7 +19,7 @@ geometry_msgs/Point[] points
 
 # 速度数组 (Soft 模式使用)
 # 每个元素: [vx, vy, vz, wz]
-# 长度应与 points 相同，或为空 (Hard 模式)
+# 长度应与 points 相同 * 4，或为空 (Hard 模式)
 float32[] velocities_flat  # 扁平化数组，每 4 个元素为一组
 
 # 轨迹点时间间隔 (秒)

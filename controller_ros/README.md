@@ -42,14 +42,18 @@ ROS 胶水层 - 将 `universal_controller` 纯算法库与 ROS 生态系统集�
 
 ## ROS 版本支持
 
-本包支持 ROS1 和 ROS2 双版本：
+本包支持 ROS1 和 ROS2 双版本，采用分离实现策略：
 
-| 版本 | 入口文件 | 状态 |
-|------|---------|------|
-| ROS1 Noetic | `scripts/controller_node.py` | 主要支持 |
-| ROS2 Humble | `src/controller_ros/node/controller_node.py` | 备用支持 |
+| 版本 | 入口文件 | 模块位置 | 状态 |
+|------|---------|---------|------|
+| ROS1 Noetic | `scripts/controller_node.py` | 独立实现 | 主要支持 |
+| ROS2 Humble | `src/controller_ros/node/controller_node.py` | 模块化实现 | 备用支持 |
 
-构建系统使用 catkin (ROS1)，ROS2 版本需要单独配置 ament_python。
+**设计说明**:
+- ROS1 版本在 `scripts/` 中是独立的单文件实现，便于直接运行
+- ROS2 版本在 `src/` 中是模块化实现，使用 `io/`, `bridge/`, `adapters/` 等子模块
+- 两个版本共享 `universal_controller` 算法库，但 ROS 接口层分别实现
+- 构建系统使用 catkin (ROS1)，ROS2 版本需要单独配置 ament_python
 
 ## 安装
 
@@ -136,6 +140,8 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 | 服务 | 类型 | 说明 |
 |------|------|------|
 | `/controller/reset` | std_srvs/Trigger | 重置控制器 |
+| `/controller/set_state` | controller_ros/SetControllerState | 设置控制器状态 (仅支持 STOPPING) |
+| `/controller/get_diagnostics` | controller_ros/GetDiagnostics | 获取诊断信息 |
 
 ## TF2 集成
 

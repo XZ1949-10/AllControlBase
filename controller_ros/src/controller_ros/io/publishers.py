@@ -4,7 +4,6 @@
 管理所有 ROS 发布器。
 """
 from typing import Dict, Any, Optional
-import time
 
 from rclpy.node import Node
 from nav_msgs.msg import Path
@@ -12,6 +11,7 @@ from geometry_msgs.msg import PoseStamped
 
 from universal_controller.core.data_types import ControlOutput, Trajectory
 from ..adapters import OutputAdapter
+from ..utils.ros_compat import get_time_sec
 
 # 默认诊断发布降频率 (每 N 次控制循环发布一次)
 DEFAULT_DIAG_PUBLISH_RATE = 5
@@ -44,15 +44,10 @@ class PublisherManager:
         self._topics = topics
         
         # 创建时间获取函数，支持仿真时间
-        def get_ros_time() -> float:
-            clock_time = node.get_clock().now().nanoseconds * 1e-9
-            # 检查时间是否有效 (仿真时间模式下可能为 0)
-            if clock_time > 0:
-                return clock_time
-            else:
-                return time.time()
-        
-        self._output_adapter = OutputAdapter(default_frame_id, get_time_func=get_ros_time)
+        self._output_adapter = OutputAdapter(
+            default_frame_id, 
+            get_time_func=lambda: get_time_sec(node)
+        )
         
         # 创建发布器
         self._create_publishers()

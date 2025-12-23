@@ -16,6 +16,10 @@ class StateMachine:
     
     使用状态处理器模式，每个状态有独立的处理方法，
     提高可读性和可维护性。
+    
+    外部请求机制:
+    - request_stop(): 请求紧急停止，这是唯一允许的外部状态干预
+    - 其他状态转换由内部逻辑自动控制
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -48,6 +52,9 @@ class StateMachine:
         self.stopping_timeout = safety_config.get('stopping_timeout', 5.0)
         self._stopping_start_time: Optional[float] = None
         
+        # 外部停止请求标志
+        self._stop_requested = False
+        
         # 状态处理器映射
         self._state_handlers: Dict[ControllerState, Callable[[DiagnosticsInput], Optional[ControllerState]]] = {
             ControllerState.INIT: self._handle_init,
@@ -58,6 +65,29 @@ class StateMachine:
             ControllerState.STOPPING: self._handle_stopping,
             ControllerState.STOPPED: self._handle_stopped,
         }
+    
+    def request_stop(self) -> bool:
+        """
+        请求紧急停止
+        
+        这是唯一允许的外部状态干预。调用后，状态机会在下一次 update() 时
+        转换到 STOPPING 状态。
+        
+        设计说明:
+        - 使用请求标志而非直接修改状态，保持状态转换的一致性
+        - 状态转换在 update() 中统一处理，确保计数器正确重置
+        - 这是安全关键功能，用于紧急停止场景
+        
+        Returns:
+            True 表示请求已接受
+        """
+        self._stop_requested = True
+        logger.info("Stop requested via external interface")
+        return True
+    
+    def is_stop_requested(self) -> bool:
+        """检查是否有外部停止请求"""
+        return self._stop_requested
     
     def _reset_all_counters(self) -> None:
         """重置所有计数器"""
@@ -127,7 +157,16 @@ class StateMachine:
     
     def update(self, diagnostics: DiagnosticsInput) -> ControllerState:
         """更新状态机"""
-        # 超时检查 - 最高优先级
+        # 外部停止请求 - 最高优先级
+        if self._stop_requested:
+            self._stop_requested = False  # 清除请求标志
+            if self.state != ControllerState.STOPPING:
+                self._stopping_start_time = get_monotonic_time()
+                logger.info("Transitioning to STOPPING due to external request")
+                return self._transition_to(ControllerState.STOPPING)
+            return self.state
+        
+        # 超时检查 - 次高优先级
         if diagnostics.odom_timeout or diagnostics.traj_timeout_exceeded:
             if self.state != ControllerState.STOPPING:
                 self._stopping_start_time = get_monotonic_time()
@@ -293,3 +332,4 @@ class StateMachine:
         self.state = ControllerState.INIT
         self._reset_all_counters()
         self._stopping_start_time = None
+        self._stop_requested = False

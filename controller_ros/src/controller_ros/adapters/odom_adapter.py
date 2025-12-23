@@ -17,6 +17,7 @@ class OdomAdapter(IMsgConverter):
     Odometry 消息适配器
     
     将 ROS nav_msgs/Odometry 转换为 UC Odometry 数据类型。
+    注意: Odometry 是输入数据，不需要 to_ros() 方法。
     """
     
     def to_uc(self, ros_msg: Any) -> UcOdometry:
@@ -48,7 +49,3 @@ class OdomAdapter(IMsgConverter):
                 ros_msg.twist.twist.angular.z
             )
         )
-    
-    def to_ros(self, uc_data: UcOdometry) -> Any:
-        """UC Odometry → ROS Odometry (通常不需要)"""
-        raise NotImplementedError("Odom is input-only")

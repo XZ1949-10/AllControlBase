@@ -3,10 +3,11 @@
 
 提供统一的诊断消息填充逻辑，避免代码重复。
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Callable
 
 
-def fill_diagnostics_msg(msg, diag: Dict[str, Any], get_time_func=None) -> None:
+def fill_diagnostics_msg(msg: Any, diag: Dict[str, Any], 
+                         get_time_func: Optional[Callable] = None) -> None:
     """
     填充 DiagnosticsV2 消息的所有字段
     
@@ -50,16 +51,25 @@ def fill_diagnostics_msg(msg, diag: Dict[str, Any], get_time_func=None) -> None:
     msg.estimator_imu_drift_detected = estimator.get('imu_drift_detected', False)
     msg.estimator_imu_available = estimator.get('imu_available', True)
     
-    # IMU bias - 支持 list, tuple 和 numpy array
+    # IMU bias - 支持 list, tuple 和 numpy array，以及 None 值
     imu_bias = estimator.get('imu_bias', [0.0, 0.0, 0.0])
     try:
-        # 尝试转换为列表 (支持 numpy array)
-        if hasattr(imu_bias, 'tolist'):
-            imu_bias = imu_bias.tolist()
-        if isinstance(imu_bias, (list, tuple)) and len(imu_bias) >= 3:
-            msg.estimator_imu_bias = [float(imu_bias[0]), float(imu_bias[1]), float(imu_bias[2])]
-        else:
+        # 处理 None 值
+        if imu_bias is None:
             msg.estimator_imu_bias = [0.0, 0.0, 0.0]
+        else:
+            # 尝试转换为列表 (支持 numpy array)
+            if hasattr(imu_bias, 'tolist'):
+                imu_bias = imu_bias.tolist()
+            if isinstance(imu_bias, (list, tuple)) and len(imu_bias) >= 3:
+                # 安全转换每个元素，处理可能的 None 值
+                bias_values = []
+                for i in range(3):
+                    val = imu_bias[i]
+                    bias_values.append(float(val) if val is not None else 0.0)
+                msg.estimator_imu_bias = bias_values
+            else:
+                msg.estimator_imu_bias = [0.0, 0.0, 0.0]
     except (TypeError, ValueError, IndexError):
         msg.estimator_imu_bias = [0.0, 0.0, 0.0]
     

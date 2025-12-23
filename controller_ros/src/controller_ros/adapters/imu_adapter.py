@@ -17,6 +17,7 @@ class ImuAdapter(IMsgConverter):
     IMU 消息适配器
     
     将 ROS sensor_msgs/Imu 转换为 UC Imu 数据类型。
+    注意: IMU 是输入数据，不需要 to_ros() 方法。
     """
     
     def to_uc(self, ros_msg: Any) -> UcImu:
@@ -43,7 +44,3 @@ class ImuAdapter(IMsgConverter):
                 ros_msg.linear_acceleration.z
             )
         )
-    
-    def to_ros(self, uc_data: UcImu) -> Any:
-        """UC Imu → ROS Imu (通常不需要)"""
-        raise NotImplementedError("IMU is input-only")

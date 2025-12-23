@@ -63,7 +63,7 @@ class ServiceManager:
             logger.info("Created get_diagnostics service")
         except ImportError:
             self._get_diag_srv = None
-            logger.warn("GetDiagnostics service not available")
+            logger.warning("GetDiagnostics service not available")
         
         # 设置状态服务
         try:
@@ -76,7 +76,7 @@ class ServiceManager:
             logger.info("Created set_state service: /controller/set_state")
         except ImportError:
             self._set_state_srv = None
-            logger.warn("SetControllerState service not available")
+            logger.warning("SetControllerState service not available")
     
     def _handle_reset(self, request, response):
         """处理重置请求"""

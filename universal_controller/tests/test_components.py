@@ -391,3 +391,62 @@ if __name__ == '__main__':
     test_mpc_health_monitor()
     test_consistency_analyzer()
     print("\n✅ All component tests passed!")
+
+
+def test_state_machine_request_stop():
+    """测试状态机外部停止请求功能"""
+    from universal_controller.safety.state_machine import StateMachine
+    from universal_controller.core.enums import ControllerState
+    from universal_controller.core.diagnostics_input import DiagnosticsInput
+    
+    config = DEFAULT_CONFIG.copy()
+    sm = StateMachine(config)
+    
+    # 创建有效的诊断输入，让状态机进入 NORMAL 状态
+    diag = DiagnosticsInput(
+        mpc_success=True,
+        alpha=0.5,
+        data_valid=True,
+        has_valid_data=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        safety_failed=False,
+        v_horizontal=1.0,
+        vz=0.0,
+    )
+    
+    # 更新几次让状态机进入 NORMAL
+    for _ in range(3):
+        sm.update(diag)
+    
+    assert sm.state == ControllerState.NORMAL, f"Expected NORMAL, got {sm.state}"
+    
+    # 请求停止
+    success = sm.request_stop()
+    assert success, "request_stop should return True"
+    assert sm.is_stop_requested(), "is_stop_requested should return True after request"
+    
+    # 下一次 update 应该转换到 STOPPING
+    new_state = sm.update(diag)
+    assert new_state == ControllerState.STOPPING, f"Expected STOPPING, got {new_state}"
+    assert not sm.is_stop_requested(), "is_stop_requested should be False after update"
+    
+    print("✓ test_state_machine_request_stop passed")
+
+
+def test_state_machine_request_stop_clears_on_reset():
+    """测试重置时清除停止请求"""
+    from universal_controller.safety.state_machine import StateMachine
+    
+    config = DEFAULT_CONFIG.copy()
+    sm = StateMachine(config)
+    
+    # 请求停止
+    sm.request_stop()
+    assert sm.is_stop_requested()
+    
+    # 重置应该清除请求
+    sm.reset()
+    assert not sm.is_stop_requested(), "reset should clear stop request"
+    
+    print("✓ test_state_machine_request_stop_clears_on_reset passed")

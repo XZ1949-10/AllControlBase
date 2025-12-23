@@ -6,7 +6,7 @@ ROS 兼容层
 使用方法:
     from controller_ros.utils.ros_compat import (
         ROS_VERSION, ROS_AVAILABLE, TF2_AVAILABLE,
-        get_current_time, create_subscriber, create_publisher
+        get_time_sec, ros_time_to_sec, sec_to_ros_time
     )
 """
 import time
@@ -61,21 +61,52 @@ elif ROS_VERSION == 1:
 
 
 # ============================================================================
-# 时间工具
+# 时间工具 (统一接口)
 # ============================================================================
 
-def get_current_time() -> float:
-    """获取当前 ROS 时间（秒）"""
+def get_time_sec(node=None) -> float:
+    """
+    获取当前 ROS 时间（秒）- 统一接口
+    
+    支持仿真时间模式。当时钟返回 0 时（仿真时间未初始化），回退到系统时间。
+    
+    Args:
+        node: ROS2 节点实例 (ROS2 必需，ROS1 可选)
+    
+    Returns:
+        当前时间（秒）
+    
+    Note:
+        - ROS1: 不需要 node 参数，直接使用 rospy.Time.now()
+        - ROS2: 需要 node 参数来获取节点时钟。如果 node 为 None，回退到系统时间。
+    """
     if ROS_VERSION == 1:
         try:
             import rospy
-            return rospy.Time.now().to_sec()
+            ros_time = rospy.Time.now().to_sec()
+            # 仿真时间模式下可能为 0
+            return ros_time if ros_time > 0 else time.time()
         except Exception:
             return time.time()
     elif ROS_VERSION == 2:
-        # ROS2 需要节点上下文，回退到系统时间
-        return time.time()
+        if node is not None:
+            try:
+                clock_time = node.get_clock().now().nanoseconds * 1e-9
+                # 仿真时间模式下可能为 0
+                return clock_time if clock_time > 0 else time.time()
+            except Exception:
+                return time.time()
+        else:
+            # ROS2 需要节点实例来获取时钟，回退到系统时间
+            # 这在某些场景下是预期行为（如单元测试），不记录警告
+            return time.time()
     return time.time()
+
+
+# 保留旧函数名作为别名，保持向后兼容
+def get_current_time() -> float:
+    """获取当前 ROS 时间（秒）- 已废弃，请使用 get_time_sec()"""
+    return get_time_sec(None)
 
 
 def get_monotonic_time() -> float:
@@ -84,16 +115,45 @@ def get_monotonic_time() -> float:
 
 
 def ros_time_to_sec(stamp) -> float:
-    """将 ROS 时间戳转换为秒"""
+    """
+    将 ROS 时间戳转换为秒
+    
+    支持 ROS1 (secs/nsecs 或 to_sec()) 和 ROS2 (sec/nanosec) 格式
+    也支持测试环境中的 Mock 对象
+    """
     if ROS_VERSION == 1:
-        return stamp.to_sec()
+        # ROS1: rospy.Time 有 to_sec() 方法
+        if hasattr(stamp, 'to_sec'):
+            return stamp.to_sec()
+        # 或者直接访问属性
+        if hasattr(stamp, 'secs') and hasattr(stamp, 'nsecs'):
+            return stamp.secs + stamp.nsecs * 1e-9
     elif ROS_VERSION == 2:
+        # ROS2: builtin_interfaces/Time
+        if hasattr(stamp, 'sec') and hasattr(stamp, 'nanosec'):
+            return stamp.sec + stamp.nanosec * 1e-9
+    
+    # 非 ROS 环境或 Mock 对象：尝试通用属性访问
+    # 支持 ROS2 风格 (sec/nanosec)
+    if hasattr(stamp, 'sec') and hasattr(stamp, 'nanosec'):
         return stamp.sec + stamp.nanosec * 1e-9
+    # 支持 ROS1 风格 (secs/nsecs)
+    if hasattr(stamp, 'secs') and hasattr(stamp, 'nsecs'):
+        return stamp.secs + stamp.nsecs * 1e-9
+    # 支持 to_sec() 方法
+    if hasattr(stamp, 'to_sec'):
+        return stamp.to_sec()
+    
+    # 最后尝试直接转换
     return float(stamp)
 
 
 def sec_to_ros_time(sec: float):
-    """将秒转换为 ROS 时间戳"""
+    """
+    将秒转换为 ROS 时间戳
+    
+    支持 ROS1 和 ROS2
+    """
     if ROS_VERSION == 1:
         import rospy
         return rospy.Time.from_sec(sec)

@@ -4,5 +4,6 @@
 # 请求 (空)
 ---
 # 响应
-controller_ros/DiagnosticsV2 diagnostics
 bool success
+string message
+controller_ros/DiagnosticsV2 diagnostics

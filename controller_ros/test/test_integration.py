@@ -385,7 +385,7 @@ if __name__ == '__main__':
 
 
 def test_time_sync_key_aliases():
-    """测试 TimeSync 键名别名功能"""
+    """测试 TimeSync 键名处理"""
     from controller_ros.utils.time_sync import TimeSync
     
     time_sync = TimeSync(
@@ -394,20 +394,19 @@ def test_time_sync_key_aliases():
         max_imu_age_ms=50
     )
     
-    # 测试使用 'trajectory' 作为输入 (应该被映射到 'traj')
+    # 测试使用 'trajectory' 作为输入键名
     ages_with_trajectory = {
         'odom': 0.05,
-        'trajectory': 0.15,  # 使用 'trajectory' 而非 'traj'
+        'trajectory': 0.15,
         'imu': 0.03
     }
     
     timeouts = time_sync.check_freshness(ages_with_trajectory)
     
-    # 返回的键应该是 'traj_timeout' 而非 'trajectory_timeout'
+    # 返回的键应该是 'traj_timeout' (保持向后兼容)
     assert 'traj_timeout' in timeouts
     assert 'odom_timeout' in timeouts
     assert 'imu_timeout' in timeouts
-    assert 'trajectory_timeout' not in timeouts
     
     # 验证超时判断正确
     assert timeouts['odom_timeout'] == False  # 0.05 < 0.1
@@ -416,15 +415,30 @@ def test_time_sync_key_aliases():
     
     # 测试超时情况
     ages_timeout = {
-        'odom': 0.15,      # > 0.1, 超时
+        'odom': 0.15,       # > 0.1, 超时
         'trajectory': 0.25, # > 0.2, 超时
-        'imu': 0.06        # > 0.05, 超时
+        'imu': 0.06         # > 0.05, 超时
     }
     
     timeouts2 = time_sync.check_freshness(ages_timeout)
     assert timeouts2['odom_timeout'] == True
     assert timeouts2['traj_timeout'] == True
     assert timeouts2['imu_timeout'] == True
+    
+    # 测试 is_all_fresh 方法
+    ages_fresh = {
+        'odom': 0.05,
+        'trajectory': 0.15,
+        'imu': 0.03
+    }
+    assert time_sync.is_all_fresh(ages_fresh) == True
+    
+    ages_stale = {
+        'odom': 0.15,
+        'trajectory': 0.15,
+        'imu': 0.03
+    }
+    assert time_sync.is_all_fresh(ages_stale) == False  # odom 超时
 
 
 def test_diag_filler_numpy_imu_bias():

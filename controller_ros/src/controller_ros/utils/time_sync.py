@@ -3,8 +3,7 @@
 
 处理数据时间戳和超时检测。
 """
-from typing import Dict, Optional
-import time
+from typing import Dict, Optional, List
 
 
 class TimeSync:
@@ -14,6 +13,10 @@ class TimeSync:
     职责:
     - 检查数据新鲜度
     - 处理超时
+    
+    键名约定:
+    - 内部和外部统一使用 'odom', 'trajectory', 'imu'
+    - 输出超时键为 'odom_timeout', 'traj_timeout', 'imu_timeout' (保持向后兼容)
     """
     
     def __init__(self, max_odom_age_ms: float = 100,
@@ -29,13 +32,15 @@ class TimeSync:
         """
         self._max_ages = {
             'odom': max_odom_age_ms / 1000.0,
-            'traj': max_traj_age_ms / 1000.0,  # 使用 'traj' 而非 'trajectory' 以保持键名一致性
+            'trajectory': max_traj_age_ms / 1000.0,
             'imu': max_imu_age_ms / 1000.0,
         }
         
-        # 输入键名映射 (支持 'trajectory' 作为 'traj' 的别名)
-        self._key_aliases = {
+        # 输出键名映射 (保持向后兼容，输出使用短名)
+        self._output_key_map = {
+            'odom': 'odom',
             'trajectory': 'traj',
+            'imu': 'imu',
         }
     
     def check_freshness(self, ages: Dict[str, float]) -> Dict[str, bool]:
@@ -43,49 +48,36 @@ class TimeSync:
         检查数据新鲜度
         
         Args:
-            ages: 各数据的年龄 (秒)，支持 'odom', 'traj'/'trajectory', 'imu'
+            ages: 各数据的年龄 (秒)，键为 'odom', 'trajectory', 'imu'
         
         Returns:
             各数据是否超时的字典，键为 'odom_timeout', 'traj_timeout', 'imu_timeout'
         """
-        # 规范化输入键名
-        normalized_ages = {}
-        for key, value in ages.items():
-            normalized_key = self._key_aliases.get(key, key)
-            normalized_ages[normalized_key] = value
-        
         timeouts = {}
         for key, max_age in self._max_ages.items():
-            age = normalized_ages.get(key, float('inf'))
-            timeouts[f'{key}_timeout'] = age > max_age
+            age = ages.get(key, float('inf'))
+            output_key = self._output_key_map.get(key, key)
+            timeouts[f'{output_key}_timeout'] = age > max_age
         return timeouts
     
     def is_all_fresh(self, ages: Dict[str, float], 
-                     required: Optional[list] = None) -> bool:
+                     required: Optional[List[str]] = None) -> bool:
         """
         检查所有必需数据是否新鲜
         
         Args:
             ages: 各数据的年龄 (秒)
-            required: 必需的数据列表，默认 ['odom', 'traj']
+            required: 必需的数据列表，默认 ['odom', 'trajectory']
         
         Returns:
             所有必需数据都新鲜返回 True
         """
         if required is None:
-            required = ['odom', 'traj']
-        
-        # 规范化输入键名
-        normalized_ages = {}
-        for key, value in ages.items():
-            normalized_key = self._key_aliases.get(key, key)
-            normalized_ages[normalized_key] = value
+            required = ['odom', 'trajectory']
         
         for key in required:
-            # 规范化 required 中的键名
-            normalized_key = self._key_aliases.get(key, key)
-            max_age = self._max_ages.get(normalized_key, 0.1)
-            age = normalized_ages.get(normalized_key, float('inf'))
+            max_age = self._max_ages.get(key, 0.1)
+            age = ages.get(key, float('inf'))
             if age > max_age:
                 return False
         return True

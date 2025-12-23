@@ -4,6 +4,7 @@
 UC 数据类型: universal_controller.core.data_types.ControlOutput
 ROS 消息: controller_ros/UnifiedCmd
 """
+import time as _time  # 导入到模块顶部，避免函数内重复导入
 from typing import Any, Dict, Optional, Callable
 
 from universal_controller.core.data_types import ControlOutput as UcControlOutput
@@ -34,8 +35,7 @@ class OutputAdapter(IMsgConverter):
         """获取当前时间（秒）"""
         if self._get_time_func is not None:
             return self._get_time_func()
-        import time
-        return time.time()
+        return _time.time()
     
     def to_uc(self, ros_msg: Any) -> UcControlOutput:
         """ROS UnifiedCmd → UC ControlOutput"""

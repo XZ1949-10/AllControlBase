@@ -152,7 +152,13 @@ class TrajectoryAdapter(IMsgConverter):
         ros_msg = LocalTrajectoryV4()
         ros_msg.header.stamp = self._sec_to_ros_time(uc_data.header.stamp)
         ros_msg.header.frame_id = uc_data.header.frame_id or DEFAULT_TRAJECTORY_FRAME_ID
-        ros_msg.mode = int(uc_data.mode.value) if hasattr(uc_data.mode, 'value') else int(uc_data.mode)
+        
+        # 安全地转换 mode 值，支持枚举和整数
+        if isinstance(uc_data.mode, TrajectoryMode):
+            ros_msg.mode = uc_data.mode.value
+        else:
+            ros_msg.mode = int(uc_data.mode)
+        
         ros_msg.dt_sec = float(uc_data.dt_sec)
         ros_msg.confidence = float(uc_data.confidence)
         ros_msg.soft_enabled = uc_data.soft_enabled
