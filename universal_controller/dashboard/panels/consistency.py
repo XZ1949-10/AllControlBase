@@ -110,6 +110,11 @@ class ConsistencyPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.consistency_data_available:
+            self._show_unavailable()
+            return
+
         c = data.consistency
 
         self.alpha_progress.set_value(c.alpha_soft, 1.0, 0.1)
@@ -127,3 +132,21 @@ class ConsistencyPanel(QGroupBox):
         else:
             self.compare_label.setText(f'✗ 否 ({c.alpha_soft:.2f} ≤ 0.1)')
             self.compare_label.setStyleSheet(f'color: {COLORS["error"]};')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 进度条显示为空
+        self.alpha_progress.set_value(0, 1.0, 0.1)
+        self.kappa_progress.set_value(0, 1.0)
+        self.velocity_progress.set_value(0, 1.0)
+        self.temporal_progress.set_value(0, 1.0)
+        
+        # LED 显示不可用
+        self.soft_led.set_status(None, '无数据')
+        self.valid_led.set_status(None, '无数据')
+        
+        # 标签显示不可用
+        self.compare_label.setText('无数据')
+        self.compare_label.setStyleSheet(unavailable_style)

@@ -140,6 +140,11 @@ class ControlPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.diagnostics_available:
+            self._show_unavailable()
+            return
+
         cmd = data.command
         ctrl = data.controller
         mpc = data.mpc_health
@@ -182,3 +187,45 @@ class ControlPanel(QGroupBox):
 
         # 坐标系
         self.frame_label.setText(f'{cmd.frame_id} (机体)')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 速度命令显示不可用
+        self.vx_progress.set_value(0, 2.0)
+        self.vx_value_label.setText('--')
+        self.vx_value_label.setStyleSheet(unavailable_style)
+        
+        self.vy_progress.set_value(0, 1.5)
+        self.vy_value_label.setText('--')
+        self.vy_value_label.setStyleSheet(unavailable_style)
+        
+        self.vz_progress.set_value(0, 2.0)
+        self.vz_value_label.setText('--')
+        self.vz_value_label.setStyleSheet(unavailable_style)
+        
+        self.omega_progress.set_value(0, 2.0)
+        self.omega_value_label.setText('--')
+        self.omega_value_label.setStyleSheet(unavailable_style)
+        
+        # 控制器信息显示不可用
+        self.controller_label.setText('无数据')
+        self.controller_label.setStyleSheet(unavailable_style)
+        self.success_label.setText('无数据')
+        self.success_label.setStyleSheet(unavailable_style)
+        self.solve_time_label.setText('无数据')
+        self.solve_time_label.setStyleSheet(unavailable_style)
+        
+        # 过渡状态显示不可用
+        self.transition_led.set_status(None, '无数据')
+        self.progress_label.setText('--')
+        self.progress_label.setStyleSheet(unavailable_style)
+        
+        # 安全检查显示不可用
+        self.safety_led.set_status(None, '无数据')
+        self.limit_led.set_status(None, '无数据')
+        
+        # 坐标系显示不可用
+        self.frame_label.setText('无数据')
+        self.frame_label.setStyleSheet(unavailable_style)

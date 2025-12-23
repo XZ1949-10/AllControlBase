@@ -17,7 +17,7 @@ from .models import (
     DisplayData, EnvironmentStatus, PlatformConfig, ControllerStatus,
     MPCHealthStatus, ConsistencyStatus, TimeoutStatus, TrackingStatus,
     EstimatorStatus, TransformStatus, ControlCommand, TrajectoryData,
-    StatisticsData, SafetyStatus, ControllerStateEnum
+    StatisticsData, SafetyStatus, ControllerStateEnum, DataAvailability
 )
 
 # 尝试导入 ROS 相关模块
@@ -26,6 +26,13 @@ try:
 except ImportError:
     ROS_AVAILABLE = False
     TF2_AVAILABLE = False
+
+# 尝试导入 mock 配置
+try:
+    from ..config.mock_config import is_mock_allowed
+except ImportError:
+    def is_mock_allowed(config, module=None, feature=None):
+        return False
 
 # 尝试检测 ACADOS
 try:
@@ -111,15 +118,23 @@ class DashboardDataSource:
         获取统一的显示数据
         
         这是面板获取数据的唯一入口，所有数据处理逻辑集中在此。
+        当没有真实数据时，返回带有 availability 标记的空数据，
+        而不是生成模拟数据。
         """
         # 获取原始数据
         raw_diagnostics = self._get_raw_diagnostics()
+        
+        # 检查数据可用性
+        has_diagnostics = bool(raw_diagnostics)
         
         # 更新统计
         self._update_statistics(raw_diagnostics)
 
         # 构建统一数据模型
         data = DisplayData()
+        
+        # 数据可用性
+        data.availability = self._build_availability(raw_diagnostics)
 
         # 环境状态 (统一处理 mock 模式)
         data.environment = self._build_environment_status()
@@ -166,6 +181,47 @@ class DashboardDataSource:
 
         self._cached_data = data
         return data
+
+    def _build_availability(self, diagnostics: Dict[str, Any]) -> DataAvailability:
+        """构建数据可用性状态"""
+        has_diag = bool(diagnostics)
+        
+        # 检查各类数据是否存在且有效
+        mpc_health = diagnostics.get('mpc_health', {})
+        consistency = diagnostics.get('consistency', {})
+        tracking = diagnostics.get('tracking', {})
+        estimator = diagnostics.get('estimator_health', {})
+        transform = diagnostics.get('transform', {})
+        timeout = diagnostics.get('timeout', {})
+        
+        # 检查轨迹数据
+        has_trajectory = False
+        if self.manager:
+            has_trajectory = (hasattr(self.manager, '_last_trajectory') and 
+                            self.manager._last_trajectory is not None and
+                            len(getattr(self.manager._last_trajectory, 'points', [])) > 0)
+        
+        # 检查位置数据
+        has_position = False
+        if self.manager and hasattr(self.manager, '_state_estimator') and self.manager._state_estimator:
+            state = self.manager._state_estimator.get_state()
+            if state and hasattr(state, 'state'):
+                has_position = True
+        
+        return DataAvailability(
+            diagnostics_available=has_diag,
+            trajectory_available=has_trajectory,
+            position_available=has_position,
+            odom_available=has_diag and not timeout.get('odom_timeout', True),
+            imu_data_available=has_diag and estimator.get('imu_available', False),
+            mpc_data_available=has_diag and isinstance(mpc_health, dict) and bool(mpc_health),
+            consistency_data_available=has_diag and isinstance(consistency, dict) and bool(consistency),
+            tracking_data_available=has_diag and isinstance(tracking, dict) and bool(tracking),
+            estimator_data_available=has_diag and isinstance(estimator, dict) and bool(estimator),
+            transform_data_available=has_diag and isinstance(transform, dict) and bool(transform),
+            last_update_time=time.time(),
+            data_age_ms=0.0,
+        )
 
     def _get_raw_diagnostics(self) -> Dict[str, Any]:
         """获取原始诊断数据"""
@@ -405,7 +461,7 @@ class DashboardDataSource:
         if self.manager:
             return self._get_trajectory_from_manager()
 
-        # Mock 模式返回空数据，让面板自己生成模拟轨迹
+        # 没有 manager 时返回空数据，面板会显示"无真实数据"
         return TrajectoryData()
 
     def _get_trajectory_from_manager(self) -> TrajectoryData:

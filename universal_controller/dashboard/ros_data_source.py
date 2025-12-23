@@ -24,7 +24,7 @@ from .models import (
     DisplayData, EnvironmentStatus, PlatformConfig, ControllerStatus,
     MPCHealthStatus, ConsistencyStatus, TimeoutStatus, TrackingStatus,
     EstimatorStatus, TransformStatus, ControlCommand, TrajectoryData,
-    StatisticsData, SafetyStatus, ControllerStateEnum
+    StatisticsData, SafetyStatus, ControllerStateEnum, DataAvailability
 )
 
 # 检测 ROS 版本
@@ -365,15 +365,20 @@ class ROSDashboardDataSource:
         获取统一的显示数据
         
         这是面板获取数据的唯一入口，与 DashboardDataSource 接口兼容。
+        当没有真实数据时，返回带有 availability 标记的空数据。
         """
         with self._lock:
             raw_diagnostics = self._last_diagnostics.copy()
+            diag_time = self._last_diag_time
         
         # 更新统计
         self._update_statistics(raw_diagnostics)
 
         # 构建统一数据模型
         data = DisplayData()
+        
+        # 数据可用性
+        data.availability = self._build_availability(raw_diagnostics, diag_time)
 
         # 环境状态
         data.environment = self._build_environment_status()
@@ -419,6 +424,38 @@ class ROSDashboardDataSource:
         data.transition_progress = raw_diagnostics.get('transition_progress', 1.0)
 
         return data
+
+    def _build_availability(self, diagnostics: Dict[str, Any], diag_time: float) -> DataAvailability:
+        """构建数据可用性状态"""
+        has_diag = bool(diagnostics) and self._diagnostics_received
+        current_time = time.time()
+        data_age_ms = (current_time - diag_time) * 1000 if diag_time > 0 else float('inf')
+        
+        # 数据超过 1 秒认为不可用
+        data_stale = data_age_ms > 1000
+        
+        # 检查各类数据是否存在且有效
+        mpc_health = diagnostics.get('mpc_health', {})
+        consistency = diagnostics.get('consistency', {})
+        tracking = diagnostics.get('tracking', {})
+        estimator = diagnostics.get('estimator_health', {})
+        transform = diagnostics.get('transform', {})
+        timeout = diagnostics.get('timeout', {})
+        
+        return DataAvailability(
+            diagnostics_available=has_diag and not data_stale,
+            trajectory_available=False,  # ROS 模式暂不支持轨迹可视化
+            position_available=False,    # ROS 模式暂不支持位置可视化
+            odom_available=has_diag and not data_stale and not timeout.get('odom_timeout', True),
+            imu_data_available=has_diag and not data_stale and estimator.get('imu_available', False),
+            mpc_data_available=has_diag and not data_stale and isinstance(mpc_health, dict) and bool(mpc_health),
+            consistency_data_available=has_diag and not data_stale and isinstance(consistency, dict) and bool(consistency),
+            tracking_data_available=has_diag and not data_stale and isinstance(tracking, dict) and bool(tracking),
+            estimator_data_available=has_diag and not data_stale and isinstance(estimator, dict) and bool(estimator),
+            transform_data_available=has_diag and not data_stale and isinstance(transform, dict) and bool(transform),
+            last_update_time=diag_time,
+            data_age_ms=data_age_ms,
+        )
 
     def _update_statistics(self, diagnostics: Dict[str, Any]):
         """更新统计数据"""

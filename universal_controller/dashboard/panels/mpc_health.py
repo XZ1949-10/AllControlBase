@@ -98,6 +98,11 @@ class MPCHealthPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.mpc_data_available:
+            self._show_unavailable()
+            return
+
         mpc = data.mpc_health
         platform = data.platform
 
@@ -119,6 +124,10 @@ class MPCHealthPanel(QGroupBox):
         else:
             self.warn_count_label.setStyleSheet('color: #FFFFFF;')
 
+        # 连续良好次数
+        self.good_count_label.setText('0')
+        self.good_count_label.setStyleSheet('color: #FFFFFF;')
+
         # Horizon
         self.horizon_label.setText(f'{platform.mpc_horizon} (正常) / {platform.mpc_horizon_degraded} (降级)')
 
@@ -126,3 +135,25 @@ class MPCHealthPanel(QGroupBox):
         self.health_led.set_status(mpc.healthy, '✓ 健康' if mpc.healthy else '✗ 异常')
         self.warning_led.set_status(not mpc.degradation_warning, '○ 无' if not mpc.degradation_warning else '⚠ 警告')
         self.recover_led.set_status(mpc.can_recover, '✓ 是' if mpc.can_recover else '✗ 否')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 进度条显示为空
+        self.solve_time_progress.set_value(0, 15, 15)
+        self.kkt_progress.set_value(0, 1, 1)
+        self.condition_progress.set_value(0, 8, 8)
+        
+        # 标签显示不可用
+        self.warn_count_label.setText('--')
+        self.warn_count_label.setStyleSheet(unavailable_style)
+        self.good_count_label.setText('--')
+        self.good_count_label.setStyleSheet(unavailable_style)
+        self.horizon_label.setText('无数据')
+        self.horizon_label.setStyleSheet(unavailable_style)
+        
+        # LED 显示不可用
+        self.health_led.set_status(None, '无数据')
+        self.warning_led.set_status(None, '无数据')
+        self.recover_led.set_status(None, '无数据')

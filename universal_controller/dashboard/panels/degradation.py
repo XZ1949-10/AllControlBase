@@ -55,9 +55,30 @@ class DegradationPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.diagnostics_available:
+            self._show_unavailable()
+            return
+
         # 状态机
         self.state_machine.set_state(data.controller.state)
 
         # 恢复计数器 (目前模型中没有这些字段，显示默认值)
         self.alpha_count_label.setText('0 / 5')
+        self.alpha_count_label.setStyleSheet('')
         self.mpc_count_label.setText('0 / 5')
+        self.mpc_count_label.setStyleSheet('')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 状态机显示未知状态
+        from ..models import ControllerStateEnum
+        self.state_machine.set_state(ControllerStateEnum.INIT)
+        
+        # 恢复计数器显示不可用
+        self.alpha_count_label.setText('--')
+        self.alpha_count_label.setStyleSheet(unavailable_style)
+        self.mpc_count_label.setText('--')
+        self.mpc_count_label.setStyleSheet(unavailable_style)

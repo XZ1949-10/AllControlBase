@@ -318,9 +318,9 @@ class TrajectoryViewPanel(QGroupBox):
             self.heading_label.setText(f'航向: {np.degrees(heading):.1f}°')
             self.heading_label.setStyleSheet('color: #2196F3;')
         else:
-            self.pos_label.setText('位置: 无数据')
+            self.pos_label.setText('位置: 无真实数据')
             self.pos_label.setStyleSheet('color: #757575;')
-            self.heading_label.setText('航向: 无数据')
+            self.heading_label.setText('航向: 无真实数据')
             self.heading_label.setStyleSheet('color: #757575;')
 
         # 轨迹显示
@@ -329,9 +329,9 @@ class TrajectoryViewPanel(QGroupBox):
             self.points_label.setStyleSheet('color: #B0B0B0;')
             self.nearest_label.setText(f'最近点: {nearest_dist:.2f} m' if nearest_dist else '最近点: -- m')
         else:
-            self.points_label.setText('轨迹: 无数据')
+            self.points_label.setText('轨迹: 无真实数据')
             self.points_label.setStyleSheet('color: #757575;')
-            self.nearest_label.setText('最近点: 无数据')
+            self.nearest_label.setText('最近点: 无真实数据')
 
         # Soft 状态
         alpha = consistency.get('alpha_soft', 0)
@@ -376,7 +376,7 @@ class TrajectoryViewPanel(QGroupBox):
 
         # 如果没有任何数据，显示"无数据"提示
         if not has_trajectory and not has_position:
-            self.ax.text(0.5, 0.5, '无轨迹数据', transform=self.ax.transAxes,
+            self.ax.text(0.5, 0.5, '无真实数据', transform=self.ax.transAxes,
                         fontsize=16, color='#757575', ha='center', va='center')
             self.ax.set_xlim(-5, 5)
             self.ax.set_ylim(-5, 5)
@@ -458,7 +458,7 @@ class TrajectoryViewPanel(QGroupBox):
 
         # 如果没有任何数据，显示提示
         if not has_trajectory and not has_position:
-            self.ax.text2D(0.5, 0.5, '无轨迹数据', transform=self.ax.transAxes,
+            self.ax.text2D(0.5, 0.5, '无真实数据', transform=self.ax.transAxes,
                           fontsize=16, color='#757575', ha='center', va='center')
             r = self._view_range
             self.ax.set_xlim(-r, r)

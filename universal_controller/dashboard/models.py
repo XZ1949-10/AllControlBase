@@ -21,13 +21,30 @@ class ControllerStateEnum(IntEnum):
 
 
 @dataclass
+class DataAvailability:
+    """数据可用性状态 - 标记各类数据是否有真实数据"""
+    diagnostics_available: bool = False      # 诊断数据是否可用
+    trajectory_available: bool = False       # 轨迹数据是否可用
+    position_available: bool = False         # 位置数据是否可用
+    odom_available: bool = False             # 里程计数据是否可用
+    imu_data_available: bool = False         # IMU 数据是否可用
+    mpc_data_available: bool = False         # MPC 数据是否可用
+    consistency_data_available: bool = False # 一致性数据是否可用
+    tracking_data_available: bool = False    # 跟踪数据是否可用
+    estimator_data_available: bool = False   # 估计器数据是否可用
+    transform_data_available: bool = False   # 变换数据是否可用
+    last_update_time: float = 0.0            # 最后更新时间戳
+    data_age_ms: float = 0.0                 # 数据年龄 (毫秒)
+
+
+@dataclass
 class EnvironmentStatus:
     """环境状态"""
     ros_available: bool = False
     tf2_available: bool = False
     acados_available: bool = False
     imu_available: bool = False
-    is_mock_mode: bool = True
+    is_mock_mode: bool = False  # 默认为 False，只有明确启用模拟模式时才为 True
 
 
 @dataclass
@@ -192,7 +209,14 @@ class DisplayData:
     
     所有面板都从这个统一的数据结构获取数据，
     避免分散的数据解析和重复的逻辑判断。
+    
+    数据可用性:
+    - availability 字段标记各类数据是否有真实数据
+    - 当数据不可用时，面板应显示"不可用"状态而非默认值
     """
+    # 数据可用性
+    availability: DataAvailability = field(default_factory=DataAvailability)
+    
     # 环境与模式
     environment: EnvironmentStatus = field(default_factory=EnvironmentStatus)
     platform: PlatformConfig = field(default_factory=PlatformConfig)

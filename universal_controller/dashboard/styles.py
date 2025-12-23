@@ -18,14 +18,21 @@ COLORS = {
     'error': '#F44336',
     'info': '#2196F3',
     'disabled': '#9E9E9E',
+    'unavailable': '#757575',   # 数据不可用颜色
     
     # 背景色
     'bg_dark': '#1E1E1E',
     'bg_panel': '#2D2D2D',
     'bg_header': '#3D3D3D',
+    'bg_unavailable': '#252525',  # 数据不可用背景色
     'text': '#FFFFFF',
     'text_secondary': '#B0B0B0',
+    'text_unavailable': '#606060',  # 数据不可用文字颜色
 }
+
+# 数据不可用显示文本
+UNAVAILABLE_TEXT = '无数据'
+UNAVAILABLE_VALUE = '--'
 
 # 进度条颜色阈值
 def get_progress_color(ratio: float) -> str:

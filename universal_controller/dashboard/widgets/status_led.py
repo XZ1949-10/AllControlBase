@@ -32,21 +32,31 @@ class StatusLED(QWidget):
         layout.addStretch()
     
     def set_status(self, status: bool, text: str = None):
-        """设置状态"""
+        """
+        设置状态
+        
+        Args:
+            status: True=成功, False=失败, None=不可用
+            text: 显示文本
+        """
         self._status = status
         
         if text:
             self.label.setText(text)
         
         if status is None:
-            color = COLORS['disabled']
-            symbol = '○'
+            # 数据不可用状态
+            color = COLORS.get('unavailable', COLORS['disabled'])
+            symbol = '?'
+            self.label.setStyleSheet(f'color: {color};')
         elif status:
             color = COLORS['success']
             symbol = '✓'
+            self.label.setStyleSheet('color: #FFFFFF;')
         else:
             color = COLORS['error']
             symbol = '✗'
+            self.label.setStyleSheet('color: #FFFFFF;')
         
         self.led.setStyleSheet(f"""
             QLabel {{

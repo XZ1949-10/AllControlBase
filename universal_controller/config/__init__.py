@@ -37,6 +37,9 @@ from .default_config import (
     get_config_value,
     ConfigValidationError,
     CONFIG_VALIDATION_RULES,
+    # Mock 配置
+    MOCK_CONFIG,
+    is_mock_allowed,
 )
 
 # 可选: 导出子模块配置
@@ -64,6 +67,9 @@ __all__ = [
     'get_config_value',
     'ConfigValidationError',
     'CONFIG_VALIDATION_RULES',
+    # Mock 配置
+    'MOCK_CONFIG',
+    'is_mock_allowed',
     # 子模块配置
     'SYSTEM_CONFIG',
     'MPC_CONFIG',

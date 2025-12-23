@@ -127,6 +127,11 @@ class SafetyPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.diagnostics_available:
+            self._show_unavailable()
+            return
+
         safety = data.safety
         cmd = data.command
 
@@ -157,3 +162,30 @@ class SafetyPanel(QGroupBox):
         # 安全检查
         safety_ok = safety.safety_check_passed
         self.safety_led.set_status(safety_ok, '✓ 全部通过' if safety_ok else '✗ 检查失败')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 进度条显示为空
+        self.v_max_progress.set_value(0, 2.0)
+        self.omega_max_progress.set_value(0, 2.0)
+        self.a_max_progress.set_value(0, 1.5)
+        self.az_max_progress.set_value(0, 1.0)
+        self.alpha_max_progress.set_value(0, 3.0)
+        
+        # 当前值标签显示不可用
+        self.v_max_current_label.setText('当前: --')
+        self.v_max_current_label.setStyleSheet(unavailable_style)
+        self.omega_max_current_label.setText('当前: --')
+        self.omega_max_current_label.setStyleSheet(unavailable_style)
+        self.a_max_current_label.setText('当前: --')
+        self.a_max_current_label.setStyleSheet(unavailable_style)
+        self.az_max_current_label.setText('当前: --')
+        self.az_max_current_label.setStyleSheet(unavailable_style)
+        self.alpha_max_current_label.setText('当前: --')
+        self.alpha_max_current_label.setStyleSheet(unavailable_style)
+        
+        # LED 显示不可用
+        self.low_speed_led.set_status(None, '无数据')
+        self.safety_led.set_status(None, '无数据')

@@ -102,6 +102,11 @@ class TimeoutPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.diagnostics_available:
+            self._show_unavailable()
+            return
+
         t = data.timeout
         env = data.environment
 
@@ -114,8 +119,8 @@ class TimeoutPanel(QGroupBox):
         self.traj_progress.set_value(t.last_traj_age_ms, 200, 200)
 
         # IMU - 考虑 mock 模式
-        if env.is_mock_mode:
-            self.imu_led.set_status(False, '✗ 不可用')
+        if env.is_mock_mode or not data.availability.imu_data_available:
+            self.imu_led.set_status(None, '无数据')
             self.imu_progress.set_value(0, 100, 100)
         else:
             self.imu_led.set_status(not t.imu_timeout, '✓ 正常' if not t.imu_timeout else '✗ 超时')
@@ -124,3 +129,17 @@ class TimeoutPanel(QGroupBox):
         # 宽限期
         self.startup_grace_led.set_status(not t.in_startup_grace, '✓ 已过' if not t.in_startup_grace else '○ 进行中')
         self.traj_grace_led.set_status(not t.traj_grace_exceeded, '○ 未触发' if not t.traj_grace_exceeded else '⚠ 已超过')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        # LED 显示不可用
+        self.odom_led.set_status(None, '无数据')
+        self.traj_led.set_status(None, '无数据')
+        self.imu_led.set_status(None, '无数据')
+        self.startup_grace_led.set_status(None, '无数据')
+        self.traj_grace_led.set_status(None, '无数据')
+        
+        # 进度条显示为空
+        self.odom_progress.set_value(0, 200, 200)
+        self.traj_progress.set_value(0, 200, 200)
+        self.imu_progress.set_value(0, 100, 100)

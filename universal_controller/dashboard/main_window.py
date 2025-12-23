@@ -201,13 +201,24 @@ class DashboardWindow(QMainWindow):
         env = data.environment
         ctrl = data.controller
         stats = data.statistics
+        avail = data.availability
+        
         self.mock_mode_label.setVisible(env.is_mock_mode)
-        color = STATE_COLORS.get(ctrl.state, COLORS['disabled'])
-        self.status_state_label.setText(f'[{ctrl.state_name}]')
-        self.status_state_label.setStyleSheet(f'color: {color}; font-weight: bold;')
-        ctrl_color = COLORS['warning'] if ctrl.backup_active else COLORS['success']
-        self.status_ctrl_label.setText(f'[{ctrl.current_controller}]')
-        self.status_ctrl_label.setStyleSheet(f'color: {ctrl_color};')
+        
+        # 检查数据是否可用
+        if not avail.diagnostics_available:
+            self.status_state_label.setText('[无数据]')
+            self.status_state_label.setStyleSheet(f'color: {COLORS["unavailable"]}; font-weight: bold;')
+            self.status_ctrl_label.setText('[--]')
+            self.status_ctrl_label.setStyleSheet(f'color: {COLORS["unavailable"]};')
+        else:
+            color = STATE_COLORS.get(ctrl.state, COLORS['disabled'])
+            self.status_state_label.setText(f'[{ctrl.state_name}]')
+            self.status_state_label.setStyleSheet(f'color: {color}; font-weight: bold;')
+            ctrl_color = COLORS['warning'] if ctrl.backup_active else COLORS['success']
+            self.status_ctrl_label.setText(f'[{ctrl.current_controller}]')
+            self.status_ctrl_label.setStyleSheet(f'color: {ctrl_color};')
+        
         self.status_platform_label.setText(f'[{data.platform.platform_display}]')
         self._set_indicator(self.status_ros_label, 'ROS', env.ros_available)
         self._set_indicator(self.status_acados_label, 'ACADOS', env.acados_available)

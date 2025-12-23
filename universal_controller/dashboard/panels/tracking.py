@@ -98,6 +98,11 @@ class TrackingPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.tracking_data_available:
+            self._show_unavailable()
+            return
+
         t = data.tracking
 
         self.lateral_progress.set_value(t.lateral_error, 0.3, 0.3)
@@ -121,3 +126,26 @@ class TrackingPanel(QGroupBox):
             rating, color = '较差 (Poor)', COLORS['error']
         self.rating_label.setText(rating)
         self.rating_label.setStyleSheet(f'color: {color}; font-weight: bold;')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 进度条显示为空
+        self.lateral_progress.set_value(0, 0.3, 0.3)
+        self.longitudinal_progress.set_value(0, 0.5, 0.5)
+        self.heading_progress.set_value(0, 0.5, 0.5)
+        self.prediction_progress.set_value(0, 0.5, 0.5)
+        self.quality_progress.set_value(0, 100)
+        
+        # 趋势显示不可用
+        self.lateral_trend.setText('无数据')
+        self.lateral_trend.setStyleSheet(unavailable_style)
+        self.longitudinal_trend.setText('无数据')
+        self.longitudinal_trend.setStyleSheet(unavailable_style)
+        self.heading_trend.setText('无数据')
+        self.heading_trend.setStyleSheet(unavailable_style)
+        
+        # 评级显示不可用
+        self.rating_label.setText('无数据')
+        self.rating_label.setStyleSheet(f'color: {COLORS["unavailable"]}; font-weight: bold;')

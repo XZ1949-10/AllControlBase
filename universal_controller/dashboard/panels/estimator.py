@@ -168,6 +168,11 @@ class EstimatorPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.estimator_data_available:
+            self._show_unavailable()
+            return
+
         est = data.estimator
         traj = data.trajectory
 
@@ -219,3 +224,56 @@ class EstimatorPanel(QGroupBox):
         self.bias_ax_label.setText(f'{bias[0]:.3f} m/s²')
         self.bias_ay_label.setText(f'{bias[1]:.3f} m/s²')
         self.bias_az_label.setText(f'{bias[2]:.3f} m/s²')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 位置显示不可用
+        self.x_label.setText('无数据')
+        self.x_label.setStyleSheet(unavailable_style)
+        self.y_label.setText('无数据')
+        self.y_label.setStyleSheet(unavailable_style)
+        self.z_label.setText('无数据')
+        self.z_label.setStyleSheet(unavailable_style)
+        
+        # 航向显示不可用
+        self.theta_label.setText('无数据')
+        self.theta_label.setStyleSheet(unavailable_style)
+        self.source_label.setText('无数据')
+        self.source_label.setStyleSheet(unavailable_style)
+        self.fallback_label.setText('无数据')
+        self.fallback_label.setStyleSheet(unavailable_style)
+        
+        # 速度显示不可用
+        self.vx_label.setText('无数据')
+        self.vx_label.setStyleSheet(unavailable_style)
+        self.vy_label.setText('无数据')
+        self.vy_label.setStyleSheet(unavailable_style)
+        self.vz_label.setText('无数据')
+        self.vz_label.setStyleSheet(unavailable_style)
+        self.omega_label.setText('无数据')
+        self.omega_label.setStyleSheet(unavailable_style)
+        
+        # 滤波器健康显示不可用
+        self.cov_label.setText('无数据')
+        self.cov_label.setStyleSheet(unavailable_style)
+        self.innov_label.setText('无数据')
+        self.innov_label.setStyleSheet(unavailable_style)
+        
+        # 打滑概率显示不可用
+        self.slip_label.setText('无数据')
+        self.slip_label.setStyleSheet(unavailable_style)
+        self.slip_progress.set_value(0, 100)
+        
+        # IMU 状态显示不可用
+        self.imu_drift_led.set_status(None, '无数据')
+        self.imu_avail_led.set_status(None, '无数据')
+        
+        # IMU Bias 显示不可用
+        self.bias_ax_label.setText('无数据')
+        self.bias_ax_label.setStyleSheet(unavailable_style)
+        self.bias_ay_label.setText('无数据')
+        self.bias_ay_label.setStyleSheet(unavailable_style)
+        self.bias_az_label.setText('无数据')
+        self.bias_az_label.setStyleSheet(unavailable_style)

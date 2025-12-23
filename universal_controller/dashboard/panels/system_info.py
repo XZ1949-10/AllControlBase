@@ -115,30 +115,37 @@ class SystemInfoPanel(QGroupBox):
 
     def update_display(self, data: DisplayData):
         """使用统一数据模型更新显示"""
+        from ..styles import COLORS
+        
         env = data.environment
         ctrl = data.controller
         platform = data.platform
         estimator = data.estimator
         transform = data.transform
 
-        # 运行环境 - 直接从统一数据获取
+        # 运行环境 - 直接从统一数据获取 (环境状态始终显示)
         self.ros_led.set_status(env.ros_available)
         self.tf2_led.set_status(env.tf2_available)
         self.acados_led.set_status(env.acados_available)
         self.imu_led.set_status(env.imu_available)
 
-        # 控制策略
+        # 平台配置 - 始终显示 (来自配置)
+        self.platform_label.findChild(QLabel, 'value').setText(platform.platform_display)
+        self.freq_label.findChild(QLabel, 'value').setText(f'{platform.ctrl_freq} Hz')
+        self.horizon_label.findChild(QLabel, 'value').setText(str(platform.mpc_horizon))
+        self.dt_label.findChild(QLabel, 'value').setText(f'{platform.mpc_dt}s')
+
+        # 检查诊断数据可用性
+        if not data.availability.diagnostics_available:
+            self._show_unavailable_dynamic()
+            return
+
+        # 控制策略 - 需要诊断数据
         main_ctrl = 'MPC (ACADOS)' if env.acados_available else 'MPC (Fallback)'
         self.main_ctrl_label.findChild(QLabel, 'value').setText(main_ctrl)
         current = f'● {ctrl.current_controller}'
         self.current_ctrl_label.findChild(QLabel, 'value').setText(current)
         self.soft_head_led.set_status(ctrl.soft_head_enabled)
-
-        # 平台配置
-        self.platform_label.findChild(QLabel, 'value').setText(platform.platform_display)
-        self.freq_label.findChild(QLabel, 'value').setText(f'{platform.ctrl_freq} Hz')
-        self.horizon_label.findChild(QLabel, 'value').setText(str(platform.mpc_horizon))
-        self.dt_label.findChild(QLabel, 'value').setText(f'{platform.mpc_dt}s')
 
         # 功能开关 - 从统一数据获取
         self.ekf_led.set_status(estimator.ekf_enabled)
@@ -151,3 +158,24 @@ class SystemInfoPanel(QGroupBox):
         self.output_frame_label.findChild(QLabel, 'value').setText(transform.output_frame)
         self.tf2_fallback_led.set_status(not transform.fallback_active)
         self.fallback_duration_label.findChild(QLabel, 'value').setText(f'{transform.fallback_duration_ms:.0f} ms')
+
+    def _show_unavailable_dynamic(self):
+        """显示动态数据不可用状态 (保留静态配置)"""
+        from ..styles import COLORS
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 控制策略显示不可用
+        self.current_ctrl_label.findChild(QLabel, 'value').setText('无数据')
+        self.current_ctrl_label.findChild(QLabel, 'value').setStyleSheet(unavailable_style)
+        self.soft_head_led.set_status(None, '无数据')
+        
+        # 功能开关显示不可用
+        self.ekf_led.set_status(None, '无数据')
+        self.slip_led.set_status(None, '无数据')
+        self.drift_led.set_status(None, '无数据')
+        self.heading_led.set_status(None, '无数据')
+        
+        # 坐标系显示不可用
+        self.tf2_fallback_led.set_status(None, '无数据')
+        self.fallback_duration_label.findChild(QLabel, 'value').setText('--')
+        self.fallback_duration_label.findChild(QLabel, 'value').setStyleSheet(unavailable_style)

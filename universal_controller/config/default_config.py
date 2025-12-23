@@ -46,6 +46,7 @@ from .modules_config import (
     MODULES_VALIDATION_RULES,
 )
 from .trajectory_config import TRAJECTORY_CONFIG, TRAJECTORY_VALIDATION_RULES
+from .mock_config import MOCK_CONFIG, MOCK_VALIDATION_RULES, is_mock_allowed
 
 # 导入验证模块
 from .validation import (
@@ -74,6 +75,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'ekf': EKF_CONFIG.copy(),
     'attitude': ATTITUDE_CONFIG.copy(),
     'trajectory': TRAJECTORY_CONFIG.copy(),
+    'mock': MOCK_CONFIG.copy(),
 }
 
 
@@ -88,6 +90,7 @@ CONFIG_VALIDATION_RULES.update(EKF_VALIDATION_RULES)
 CONFIG_VALIDATION_RULES.update(ATTITUDE_VALIDATION_RULES)
 CONFIG_VALIDATION_RULES.update(MODULES_VALIDATION_RULES)
 CONFIG_VALIDATION_RULES.update(TRAJECTORY_VALIDATION_RULES)
+CONFIG_VALIDATION_RULES.update(MOCK_VALIDATION_RULES)
 
 
 # =============================================================================
@@ -129,6 +132,9 @@ __all__ = [
     'get_config_value',
     'ConfigValidationError',
     'CONFIG_VALIDATION_RULES',
+    # Mock 配置
+    'MOCK_CONFIG',
+    'is_mock_allowed',
     # 子模块配置 (可选导出)
     'SYSTEM_CONFIG',
     'MPC_CONFIG',

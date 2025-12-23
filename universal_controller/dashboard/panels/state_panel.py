@@ -50,6 +50,13 @@ class StatePanel(QGroupBox):
 
     def update_display(self, data: DisplayData):
         """使用统一数据模型更新显示"""
+        from ..styles import COLORS
+        
+        # 检查数据可用性
+        if not data.availability.diagnostics_available:
+            self._show_unavailable()
+            return
+
         ctrl = data.controller
         state = ctrl.state.value
 
@@ -69,9 +76,27 @@ class StatePanel(QGroupBox):
         minutes = int((duration % 3600) // 60)
         seconds = int(duration % 60)
         self.duration_label.setText(f'{hours:02d}:{minutes:02d}:{seconds:02d}')
+        self.duration_label.setStyleSheet('color: #4CAF50;')
 
         if self._last_transition:
             self.transition_label.setText(self._last_transition)
+            self.transition_label.setStyleSheet('color: #B0B0B0;')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        from ..styles import COLORS
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # 状态指示器显示未知状态
+        self.state_indicator.set_state(-1)  # 无效状态
+        
+        # 持续时间显示不可用
+        self.duration_label.setText('--:--:--')
+        self.duration_label.setStyleSheet(unavailable_style)
+        
+        # 状态变化显示不可用
+        self.transition_label.setText('无数据')
+        self.transition_label.setStyleSheet(unavailable_style)
 
     def _get_state_name(self, state: int) -> str:
         names = {0: 'INIT', 1: 'NORMAL', 2: 'SOFT_DISABLED', 3: 'MPC_DEGRADED',

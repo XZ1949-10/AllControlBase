@@ -2,6 +2,96 @@
 
 ## 重构日期: 2024-12-23 (更新)
 
+## 最新更新: 模拟数据控制机制
+
+### 问题: Dashboard 和其他模块可能自动使用模拟数据
+- **需求**: 除非明确配置允许，否则所有模块都不应使用模拟数据
+- **解决方案**:
+  1. 新增 `config/mock_config.py` 配置文件，控制模拟数据使用
+  2. 新增 `DataAvailability` 数据模型，标记各类数据的可用性
+  3. 修改 Dashboard 面板，当数据不可用时显示"无数据"而非默认值
+  4. 修改数据源，不再自动生成模拟数据
+
+### 新增配置项 (mock_config.py)
+```python
+MOCK_CONFIG = {
+    'allow_mock_data': False,  # 全局开关，默认禁用
+    'dashboard': {
+        'allow_mock_diagnostics': False,
+        'allow_mock_trajectory': False,
+        'allow_mock_position': False,
+    },
+    'ros_compat': {
+        'allow_standalone_mode': True,  # 允许独立运行模式
+        'allow_mock_tf2': False,
+    },
+    'controller': {
+        'allow_mock_odom': False,
+        'allow_mock_imu': False,
+        'allow_mock_trajectory': False,
+    },
+}
+```
+
+### 数据可用性模型 (DataAvailability)
+```python
+@dataclass
+class DataAvailability:
+    diagnostics_available: bool = False
+    trajectory_available: bool = False
+    position_available: bool = False
+    odom_available: bool = False
+    imu_data_available: bool = False
+    mpc_data_available: bool = False
+    consistency_data_available: bool = False
+    tracking_data_available: bool = False
+    estimator_data_available: bool = False
+    transform_data_available: bool = False
+    last_update_time: float = 0.0
+    data_age_ms: float = 0.0
+```
+
+### 修改的文件
+- `config/mock_config.py` - 新增模拟数据配置
+- `config/default_config.py` - 集成 mock 配置
+- `config/__init__.py` - 导出 mock 配置
+- `dashboard/models.py` - 新增 DataAvailability 模型
+- `dashboard/data_source.py` - 添加数据可用性检测
+- `dashboard/ros_data_source.py` - 添加数据可用性检测
+- `dashboard/styles.py` - 添加"不可用"状态样式
+- `dashboard/widgets/status_led.py` - 支持 None 状态
+- `dashboard/main_window.py` - 状态栏显示数据连接状态
+- `dashboard/panels/mpc_health.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/consistency.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/tracking.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/estimator.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/timeout.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/control.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/safety.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/state_panel.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/degradation.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/statistics.py` - 添加数据可用性检查
+- `dashboard/panels/trajectory.py` - 添加 `_show_unavailable()` 方法
+- `dashboard/panels/system_info.py` - 添加 `_show_unavailable_dynamic()` 方法
+- `tests/run_dashboard_mock.py` - 明确标记为测试模式
+
+### 面板数据可用性检查逻辑
+每个面板在 `update_display()` 方法中检查相应的数据可用性标志：
+- `mpc_health.py`: 检查 `data.availability.mpc_data_available`
+- `consistency.py`: 检查 `data.availability.consistency_data_available`
+- `tracking.py`: 检查 `data.availability.tracking_data_available`
+- `estimator.py`: 检查 `data.availability.estimator_data_available`
+- `timeout.py`: 检查 `data.availability.diagnostics_available`
+- `control.py`: 检查 `data.availability.diagnostics_available`
+- `safety.py`: 检查 `data.availability.diagnostics_available`
+- `state_panel.py`: 检查 `data.availability.diagnostics_available`
+- `degradation.py`: 检查 `data.availability.diagnostics_available`
+- `statistics.py`: 部分数据始终显示，状态统计检查 `diagnostics_available`
+- `trajectory.py`: 检查 `data.availability.trajectory_available`
+- `system_info.py`: 环境和配置始终显示，动态数据检查 `diagnostics_available`
+
+---
+
 ## 问题分析与修复
 
 ### 问题 1: Mock 命名混淆 ✅ 已修复

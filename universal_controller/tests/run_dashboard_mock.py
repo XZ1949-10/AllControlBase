@@ -10,6 +10,10 @@ Dashboard 模拟数据测试脚本
     
 或者:
     python universal_controller/tests/run_dashboard_mock.py
+
+注意:
+    此脚本会强制启用模拟数据模式，仅用于界面测试。
+    生产环境中，Dashboard 默认不使用模拟数据。
 """
 
 import sys
@@ -18,9 +22,16 @@ import os
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import time
+import math
 from PyQt5.QtWidgets import QApplication
 from universal_controller.dashboard.main_window import DashboardWindow
-from universal_controller.dashboard.models import DisplayData
+from universal_controller.dashboard.models import (
+    DisplayData, EnvironmentStatus, PlatformConfig, ControllerStatus,
+    MPCHealthStatus, ConsistencyStatus, TimeoutStatus, TrackingStatus,
+    EstimatorStatus, TransformStatus, ControlCommand, TrajectoryData,
+    StatisticsData, SafetyStatus, ControllerStateEnum, DataAvailability
+)
 from universal_controller.config.default_config import DEFAULT_CONFIG
 
 
@@ -29,36 +40,58 @@ class MockDashboardDataSource:
     模拟数据源 - 仅用于测试
     
     生成模拟的诊断数据用于 Dashboard 界面测试。
+    
+    重要说明:
+    =========
+    此类仅用于测试目的，不应在生产代码中使用。
+    生产环境应使用 DashboardDataSource 或 ROSDashboardDataSource。
     """
     
     def __init__(self, config=None):
-        self.config = config or DEFAULT_CONFIG
-        self._start_time = __import__('time').time()
+        self.config = config or DEFAULT_CONFIG.copy()
+        # 强制启用模拟数据模式
+        if 'mock' not in self.config:
+            self.config['mock'] = {}
+        self.config['mock']['allow_mock_data'] = True
+        self.config['mock']['dashboard'] = {
+            'allow_mock_diagnostics': True,
+            'allow_mock_trajectory': True,
+            'allow_mock_position': True,
+        }
+        self._start_time = time.time()
     
     def get_display_data(self) -> DisplayData:
         """获取模拟的显示数据"""
         from universal_controller.tests.fixtures.mock_diagnostics import generate_mock_diagnostics
-        from universal_controller.dashboard.models import (
-            EnvironmentStatus, PlatformConfig, ControllerStatus,
-            MPCHealthStatus, ConsistencyStatus, TimeoutStatus, TrackingStatus,
-            EstimatorStatus, TransformStatus, ControlCommand, TrajectoryData,
-            StatisticsData, SafetyStatus, ControllerStateEnum
-        )
-        import time
-        import math
         
         # 生成模拟诊断数据
         diag = generate_mock_diagnostics(self._start_time)
         
         data = DisplayData()
         
-        # 环境状态 - 标记为模拟模式
+        # 数据可用性 - 模拟模式下所有数据都"可用"（模拟的）
+        data.availability = DataAvailability(
+            diagnostics_available=True,
+            trajectory_available=False,  # 模拟模式不提供轨迹
+            position_available=False,    # 模拟模式不提供位置
+            odom_available=True,
+            imu_data_available=True,
+            mpc_data_available=True,
+            consistency_data_available=True,
+            tracking_data_available=True,
+            estimator_data_available=True,
+            transform_data_available=True,
+            last_update_time=time.time(),
+            data_age_ms=0.0,
+        )
+        
+        # 环境状态 - 明确标记为模拟模式
         data.environment = EnvironmentStatus(
             ros_available=False,
             tf2_available=False,
             acados_available=True,
             imu_available=False,
-            is_mock_mode=True,
+            is_mock_mode=True,  # 明确标记为模拟模式
         )
         
         # 平台配置
@@ -194,7 +227,7 @@ class MockDashboardDataSource:
             frame_id=cmd.get('frame_id', 'base_link'),
         )
         
-        # 轨迹数据 - 空
+        # 轨迹数据 - 模拟模式不提供轨迹
         data.trajectory = TrajectoryData()
         
         # 统计数据
@@ -235,11 +268,16 @@ def main():
     print("⚠️  警告: 当前使用模拟数据，仅用于界面测试！")
     print("    生产环境请使用: roslaunch controller_ros controller.launch dashboard:=true")
     print()
+    print("📋 模拟数据说明:")
+    print("    - 诊断数据: 模拟生成")
+    print("    - 轨迹数据: 不可用 (显示'无数据')")
+    print("    - 位置数据: 不可用 (显示'无数据')")
+    print()
     
     app = QApplication(sys.argv)
     
     # 创建模拟数据源
-    data_source = MockDashboardDataSource(config=DEFAULT_CONFIG)
+    data_source = MockDashboardDataSource(config=DEFAULT_CONFIG.copy())
     
     # 创建主窗口
     window = DashboardWindow(data_source)

@@ -138,22 +138,34 @@ class TrajectoryPanel(QGroupBox):
         if not isinstance(data, DisplayData):
             return
 
+        # 检查数据可用性
+        if not data.availability.trajectory_available:
+            self._show_unavailable()
+            return
+
         traj = data.trajectory
         consistency = data.consistency
 
         # Hard 轨迹
         self.points_label.setText(str(traj.num_points))
+        self.points_label.setStyleSheet('')
         self.dt_label.setText(f'{traj.dt_sec:.2f} s')
+        self.dt_label.setStyleSheet('')
         self.duration_label.setText(f'{traj.total_duration:.1f} s')
+        self.duration_label.setStyleSheet('')
         self.frame_label.setText('world')
+        self.frame_label.setStyleSheet('')
 
         # Soft 状态
         alpha = consistency.alpha_soft
         soft_enabled = traj.soft_enabled or alpha > 0.1
         self.soft_enabled_led.set_status(soft_enabled, '✓ 启用' if soft_enabled else '✗ 禁用')
         self.confidence_label.setText(f'{traj.confidence:.2f}')
+        self.confidence_label.setStyleSheet('')
         self.alpha_label.setText(f'{alpha:.2f}')
+        self.alpha_label.setStyleSheet('')
         self.vel_points_label.setText(str(len(traj.soft_velocities)))
+        self.vel_points_label.setStyleSheet('')
 
         # 轨迹模式
         current_mode = traj.mode.lower() if traj.mode else 'track'
@@ -169,6 +181,49 @@ class TrajectoryPanel(QGroupBox):
 
         # 最近点信息
         self.nearest_dist_label.setText(f'{traj.nearest_distance:.2f} m')
+        self.nearest_dist_label.setStyleSheet('')
         self.nearest_idx_label.setText(f'{traj.nearest_idx} / {traj.num_points}')
+        self.nearest_idx_label.setStyleSheet('')
         self.lookahead_label.setText('1.2 m')
+        self.lookahead_label.setStyleSheet('')
         self.lookahead_idx_label.setText(f'{traj.lookahead_idx} / {traj.num_points}')
+        self.lookahead_idx_label.setStyleSheet('')
+
+    def _show_unavailable(self):
+        """显示数据不可用状态"""
+        unavailable_style = f'color: {COLORS["unavailable"]};'
+        
+        # Hard 轨迹显示不可用
+        self.points_label.setText('--')
+        self.points_label.setStyleSheet(unavailable_style)
+        self.dt_label.setText('--')
+        self.dt_label.setStyleSheet(unavailable_style)
+        self.duration_label.setText('--')
+        self.duration_label.setStyleSheet(unavailable_style)
+        self.frame_label.setText('--')
+        self.frame_label.setStyleSheet(unavailable_style)
+        
+        # Soft 状态显示不可用
+        self.soft_enabled_led.set_status(None, '无数据')
+        self.confidence_label.setText('--')
+        self.confidence_label.setStyleSheet(unavailable_style)
+        self.alpha_label.setText('--')
+        self.alpha_label.setStyleSheet(unavailable_style)
+        self.vel_points_label.setText('--')
+        self.vel_points_label.setStyleSheet(unavailable_style)
+        
+        # 轨迹模式显示不可用
+        for mode_id, (led, label) in self.mode_labels.items():
+            led.setText('○')
+            led.setStyleSheet(unavailable_style)
+            label.setStyleSheet(unavailable_style)
+        
+        # 最近点信息显示不可用
+        self.nearest_dist_label.setText('--')
+        self.nearest_dist_label.setStyleSheet(unavailable_style)
+        self.nearest_idx_label.setText('--')
+        self.nearest_idx_label.setStyleSheet(unavailable_style)
+        self.lookahead_label.setText('--')
+        self.lookahead_label.setStyleSheet(unavailable_style)
+        self.lookahead_idx_label.setText('--')
+        self.lookahead_idx_label.setStyleSheet(unavailable_style)
