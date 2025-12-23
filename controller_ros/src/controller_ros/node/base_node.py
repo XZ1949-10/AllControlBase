@@ -6,6 +6,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
 import logging
+import time
 
 from universal_controller.config.default_config import DEFAULT_CONFIG, PLATFORM_CONFIG
 from universal_controller.core.data_types import Odometry, Imu, Trajectory, ControlOutput
@@ -57,6 +58,11 @@ class ControllerNodeBase(ABC):
         self._consecutive_errors = 0
         self._max_consecutive_errors = 10
         self._traj_msg_available = True  # 子类可设置为 False 表示轨迹消息类型不可用
+        
+        # TF2 注入状态
+        self._tf2_injected = False
+        self._tf2_injection_attempted = False
+        self._tf2_retry_counter = 0  # TF2 重试计数器
     
     def _initialize(self):
         """
@@ -86,12 +92,17 @@ class ControllerNodeBase(ABC):
         # 5. 设置诊断回调
         self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
     
-    def _inject_tf2_to_controller(self):
+    def _inject_tf2_to_controller(self, blocking: bool = True):
         """
         将 TF2 注入到坐标变换器
         
         子类应在创建 TF 桥接后调用此方法。
-        包含 TF2 buffer 预热等待逻辑。
+        支持阻塞和非阻塞两种模式。
+        
+        Args:
+            blocking: 是否阻塞等待 TF2 buffer 预热
+                - True: 阻塞等待（适用于节点初始化时）
+                - False: 非阻塞尝试（适用于运行时重试）
         """
         if self._tf_bridge is None:
             return
@@ -110,46 +121,88 @@ class ControllerNodeBase(ABC):
             self._log_info("ControllerManager has no coord_transformer, TF2 injection skipped")
             return
         
-        # TF2 buffer 预热等待
-        # 等待 TF2 buffer 填充，最多等待 2 秒
-        import time
+        # 获取 TF2 配置
         tf_config = self._params.get('tf', {})
         source_frame = tf_config.get('source_frame', 'base_link')
         target_frame = tf_config.get('target_frame', 'odom')
-        max_wait_sec = 2.0
-        wait_interval = 0.1
+        
+        # 可配置的预热等待参数
+        max_wait_sec = tf_config.get('buffer_warmup_timeout_sec', 2.0)
+        wait_interval = tf_config.get('buffer_warmup_interval_sec', 0.1)
         
         can_transform_func = getattr(self._tf_bridge, 'can_transform', None)
-        if can_transform_func is not None:
-            start_time = time.time()
-            while time.time() - start_time < max_wait_sec:
-                try:
-                    if can_transform_func(target_frame, source_frame, timeout_sec=0.01):
-                        self._log_info(
-                            f"TF2 buffer ready: {source_frame} -> {target_frame} "
-                            f"(waited {time.time() - start_time:.2f}s)"
-                        )
-                        break
-                except Exception:
-                    pass
-                time.sleep(wait_interval)
-            else:
-                self._log_warn(
-                    f"TF2 buffer not ready after {max_wait_sec}s, "
-                    f"will use fallback until TF becomes available"
-                )
+        tf2_ready = False
         
-        # 尝试注入
+        if can_transform_func is not None:
+            if blocking:
+                # 阻塞模式：等待 TF2 buffer 填充
+                start_time = time.time()
+                while time.time() - start_time < max_wait_sec:
+                    try:
+                        if can_transform_func(target_frame, source_frame, timeout_sec=0.01):
+                            self._log_info(
+                                f"TF2 buffer ready: {source_frame} -> {target_frame} "
+                                f"(waited {time.time() - start_time:.2f}s)"
+                            )
+                            tf2_ready = True
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(wait_interval)
+                
+                if not tf2_ready:
+                    self._log_warn(
+                        f"TF2 buffer not ready after {max_wait_sec}s, "
+                        f"will use fallback until TF becomes available"
+                    )
+            else:
+                # 非阻塞模式：只尝试一次
+                try:
+                    tf2_ready = can_transform_func(target_frame, source_frame, timeout_sec=0.01)
+                except Exception:
+                    tf2_ready = False
+        
+        # 标记已尝试注入
+        self._tf2_injection_attempted = True
+        
+        # 尝试注入（即使 TF2 buffer 未就绪也注入回调，让 RobustCoordinateTransformer 处理 fallback）
         if hasattr(coord_transformer, 'set_tf2_lookup_callback'):
-            # 获取 lookup 函数
             lookup_func = getattr(self._tf_bridge, 'lookup_transform', None)
             if lookup_func is not None:
                 coord_transformer.set_tf2_lookup_callback(lookup_func)
-                self._log_info("TF2 successfully injected to coordinate transformer")
+                self._tf2_injected = True
+                if tf2_ready:
+                    self._log_info("TF2 successfully injected to coordinate transformer")
+                else:
+                    self._log_info(
+                        "TF2 callback injected, but buffer not ready yet. "
+                        "Will use fallback until TF data arrives."
+                    )
             else:
                 self._log_warn("TF bridge has no lookup_transform method")
         else:
             self._log_warn("Coordinate transformer does not support TF2 injection")
+    
+    def _try_tf2_reinjection(self):
+        """
+        尝试重新注入 TF2（运行时调用）
+        
+        如果初始化时 TF2 未就绪，可以在运行时重试。
+        这个方法应该在控制循环中周期性调用（低频）。
+        """
+        # 如果已经成功注入，不需要重试
+        if self._tf2_injected:
+            return
+        
+        # 如果 TF bridge 不可用，不重试
+        if self._tf_bridge is None:
+            return
+        
+        if not getattr(self._tf_bridge, 'is_initialized', False):
+            return
+        
+        # 非阻塞尝试注入
+        self._inject_tf2_to_controller(blocking=False)
     
     def _control_loop_core(self) -> Optional[ControlOutput]:
         """
@@ -167,6 +220,15 @@ class ControllerNodeBase(ABC):
             )
             self._publish_stop_cmd()
             return None
+        
+        # 0.1 尝试 TF2 重新注入（如果之前未成功）
+        # 低频检查，避免每次循环都检查
+        if not self._tf2_injected and self._tf2_injection_attempted:
+            # 每 50 次循环尝试一次（约 1 秒一次，假设 50Hz 控制频率）
+            self._tf2_retry_counter += 1
+            if self._tf2_retry_counter >= 50:
+                self._tf2_retry_counter = 0
+                self._try_tf2_reinjection()
         
         # 1. 获取最新数据
         odom = self._data_manager.get_latest_odom()
@@ -258,7 +320,8 @@ class ControllerNodeBase(ABC):
             'cmd': {'vx': 0.0, 'vy': 0.0, 'vz': 0.0, 'omega': 0.0},
             'transform': {
                 'tf2_available': getattr(self._tf_bridge, 'is_initialized', False) 
-                                 if self._tf_bridge else False
+                                 if self._tf_bridge else False,
+                'tf2_injected': self._tf2_injected,
             },
         }
     
@@ -276,6 +339,7 @@ class ControllerNodeBase(ABC):
             getattr(self._tf_bridge, 'is_initialized', False) 
             if self._tf_bridge else False
         )
+        diag['transform']['tf2_injected'] = self._tf2_injected
         
         self._publish_diagnostics(diag)
     
@@ -287,6 +351,8 @@ class ControllerNodeBase(ABC):
             self._data_manager.clear()
         self._waiting_for_data = True
         self._consecutive_errors = 0
+        # 重置 TF2 重试计数器
+        self._tf2_retry_counter = 0
         self._log_info('Controller reset')
     
     def _handle_get_diagnostics(self) -> Optional[Dict[str, Any]]:

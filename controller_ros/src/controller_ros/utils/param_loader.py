@@ -25,6 +25,7 @@ _ROS2_PARAM_DEFINITIONS = [
     ('topics.trajectory', '/nn/local_trajectory'),
     ('topics.cmd_unified', '/cmd_unified'),
     ('topics.diagnostics', '/controller/diagnostics'),
+    ('topics.state', '/controller/state'),
     # 平台配置
     ('platform.type', 'differential'),
     # TF 配置
@@ -128,6 +129,7 @@ class ParamLoader:
             'trajectory': node.get_parameter('topics.trajectory').value,
             'cmd_unified': node.get_parameter('topics.cmd_unified').value,
             'diagnostics': node.get_parameter('topics.diagnostics').value,
+            'state': node.get_parameter('topics.state').value,
         }
         
         params['platform'] = {
@@ -170,6 +172,7 @@ class ParamLoader:
             'trajectory': rospy.get_param('topics/trajectory', '/nn/local_trajectory'),
             'cmd_unified': rospy.get_param('topics/cmd_unified', '/cmd_unified'),
             'diagnostics': rospy.get_param('topics/diagnostics', '/controller/diagnostics'),
+            'state': rospy.get_param('topics/state', '/controller/state'),
         }
         
         params['platform'] = {
@@ -246,6 +249,7 @@ class ParamLoader:
                 'trajectory': node.get_parameter('topics.trajectory').value,
                 'cmd_unified': node.get_parameter('topics.cmd_unified').value,
                 'diagnostics': node.get_parameter('topics.diagnostics').value,
+                'state': node.get_parameter('topics.state').value,
             }
         elif ROS_VERSION == 1:
             import rospy
@@ -255,6 +259,7 @@ class ParamLoader:
                 'trajectory': rospy.get_param('topics/trajectory', '/nn/local_trajectory'),
                 'cmd_unified': rospy.get_param('topics/cmd_unified', '/cmd_unified'),
                 'diagnostics': rospy.get_param('topics/diagnostics', '/controller/diagnostics'),
+                'state': rospy.get_param('topics/state', '/controller/state'),
             }
         else:
             # 非 ROS 环境返回默认值
@@ -264,4 +269,5 @@ class ParamLoader:
                 'trajectory': '/nn/local_trajectory',
                 'cmd_unified': '/cmd_unified',
                 'diagnostics': '/controller/diagnostics',
+                'state': '/controller/state',
             }

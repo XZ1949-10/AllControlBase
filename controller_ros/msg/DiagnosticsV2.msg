@@ -43,6 +43,7 @@ float32 tracking_prediction_error
 
 # 坐标变换状态
 bool transform_tf2_available
+bool transform_tf2_injected
 float32 transform_fallback_duration_ms
 float32 transform_accumulated_drift
 
@@ -65,3 +66,7 @@ string cmd_frame_id
 
 # 过渡进度 [0, 1]
 float32 transition_progress
+
+# 错误信息 (用于调试)
+string error_message
+uint32 consecutive_errors

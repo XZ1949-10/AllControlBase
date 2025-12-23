@@ -147,13 +147,18 @@ class DataManager:
         Returns:
             字典，键为数据名 ('odom', 'imu', 'trajectory')，
             值为距上次更新的秒数。未收到的数据返回 float('inf')。
+            
+        Note:
+            如果时钟回退（如仿真时间重置），年龄会被 clamp 到 0，
+            避免返回负值导致超时检测失效。
         """
         now = self._get_time_func()
         with self._lock:
             ages = {}
             for key in ['odom', 'imu', 'trajectory']:
                 if key in self._timestamps:
-                    ages[key] = now - self._timestamps[key]
+                    # 防止时钟回退导致负值
+                    ages[key] = max(0.0, now - self._timestamps[key])
                 else:
                     ages[key] = float('inf')
             return ages

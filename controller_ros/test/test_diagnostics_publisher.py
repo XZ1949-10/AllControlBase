@@ -238,6 +238,7 @@ class MockDiagnosticsMsg:
         self.tracking_prediction_error = 0.0
         
         self.transform_tf2_available = False
+        self.transform_tf2_injected = False
         self.transform_fallback_duration_ms = 0.0
         self.transform_accumulated_drift = 0.0
         
@@ -257,6 +258,10 @@ class MockDiagnosticsMsg:
         self.cmd_frame_id = ''
         
         self.transition_progress = 0.0
+        
+        # 错误信息字段
+        self.error_message = ''
+        self.consecutive_errors = 0
 
 
 class MockHeader:
@@ -371,6 +376,46 @@ class TestFillDiagnosticsMsg:
         fill_diagnostics_msg(msg, diag, get_time_func=lambda: mock_time)
         
         assert msg.header.stamp is mock_time
+    
+    def test_error_message_fields(self):
+        """测试错误信息字段"""
+        msg = MockDiagnosticsMsg()
+        diag = {
+            'state': 0,
+            'error_message': 'Test error occurred',
+            'consecutive_errors': 5,
+        }
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.error_message == 'Test error occurred'
+        assert msg.consecutive_errors == 5
+    
+    def test_error_message_defaults(self):
+        """测试错误信息字段默认值"""
+        msg = MockDiagnosticsMsg()
+        diag = {'state': 1}  # 无错误信息
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.error_message == ''
+        assert msg.consecutive_errors == 0
+    
+    def test_transform_tf2_injected(self):
+        """测试 tf2_injected 字段"""
+        msg = MockDiagnosticsMsg()
+        diag = {
+            'state': 1,
+            'transform': {
+                'tf2_available': True,
+                'tf2_injected': True,
+            },
+        }
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.transform_tf2_available == True
+        assert msg.transform_tf2_injected == True
 
 
 if __name__ == '__main__':

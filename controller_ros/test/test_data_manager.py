@@ -354,5 +354,26 @@ def test_data_manager_custom_time_func():
     assert abs(ages['odom'] - 0.5) < 0.001
 
 
+def test_data_manager_clock_rollback():
+    """测试时钟回退场景（如仿真时间重置）"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    dm.update_odom(MockRosOdometry())
+    
+    # 时间回退（模拟仿真重置）
+    mock_time[0] = 50.0
+    
+    ages = dm.get_data_ages()
+    
+    # 年龄应该被 clamp 到 0，而不是负值
+    assert ages['odom'] >= 0.0, f"Age should not be negative, got {ages['odom']}"
+    assert ages['odom'] == 0.0, f"Age should be clamped to 0 on clock rollback"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

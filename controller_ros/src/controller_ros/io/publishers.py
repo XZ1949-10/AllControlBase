@@ -15,6 +15,10 @@ from ..adapters import OutputAdapter
 from ..utils.ros_compat import get_time_sec
 from ..utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsPublishHelper
 
+# 默认话题名常量
+DEFAULT_STATE_TOPIC = '/controller/state'
+DEFAULT_DEBUG_PATH_TOPIC = '/controller/debug_path'
+
 
 class PublisherManager:
     """
@@ -81,14 +85,16 @@ class PublisherManager:
             self._diag_pub = None
         
         # 状态发布器 (需求文档要求)
+        state_topic = self._topics.get('state', DEFAULT_STATE_TOPIC)
         self._state_pub = self._node.create_publisher(
-            Int32, '/controller/state', 1
+            Int32, state_topic, 1
         )
-        self._node.get_logger().info("Publishing state to: /controller/state")
+        self._node.get_logger().info(f"Publishing state to: {state_topic}")
         
         # 调试路径发布
+        debug_path_topic = self._topics.get('debug_path', DEFAULT_DEBUG_PATH_TOPIC)
         self._path_pub = self._node.create_publisher(
-            Path, '/controller/debug_path', 1
+            Path, debug_path_topic, 1
         )
     
     def publish_cmd(self, cmd: ControlOutput):

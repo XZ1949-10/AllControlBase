@@ -475,6 +475,7 @@ def test_diag_filler_numpy_imu_bias():
             self.tracking_heading_error = 0.0
             self.tracking_prediction_error = 0.0
             self.transform_tf2_available = False
+            self.transform_tf2_injected = False
             self.transform_fallback_duration_ms = 0.0
             self.transform_accumulated_drift = 0.0
             self.timeout_odom = False
@@ -491,6 +492,8 @@ def test_diag_filler_numpy_imu_bias():
             self.cmd_omega = 0.0
             self.cmd_frame_id = ''
             self.transition_progress = 0.0
+            self.error_message = ''
+            self.consecutive_errors = 0
     
     msg = MockDiagMsg()
     

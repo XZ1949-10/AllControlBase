@@ -190,6 +190,7 @@ def fill_diagnostics_msg(msg: Any, diag: Dict[str, Any],
     # 坐标变换状态
     transform = diag.get('transform', {})
     msg.transform_tf2_available = bool(transform.get('tf2_available', False))
+    msg.transform_tf2_injected = bool(transform.get('tf2_injected', False))
     msg.transform_fallback_duration_ms = safe_float(transform.get('fallback_duration_ms', 0.0))
     msg.transform_accumulated_drift = safe_float(transform.get('accumulated_drift', 0.0))
     
@@ -213,3 +214,7 @@ def fill_diagnostics_msg(msg: Any, diag: Dict[str, Any],
     msg.cmd_frame_id = str(cmd.get('frame_id', ''))
     
     msg.transition_progress = safe_float(diag.get('transition_progress', 0.0))
+    
+    # 错误信息
+    msg.error_message = str(diag.get('error_message', ''))
+    msg.consecutive_errors = int(diag.get('consecutive_errors', 0))

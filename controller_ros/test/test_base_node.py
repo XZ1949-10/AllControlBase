@@ -321,3 +321,243 @@ def test_base_node_platform_config():
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+# ==================== TF2 注入优化测试 ====================
+
+class MockTFBridge:
+    """模拟 TF Bridge"""
+    
+    def __init__(self, initialized: bool = True, can_transform_result: bool = True):
+        self.is_initialized = initialized
+        self._can_transform_result = can_transform_result
+        self._lookup_callback_set = False
+        self._can_transform_call_count = 0
+    
+    def can_transform(self, target_frame: str, source_frame: str, timeout_sec: float = 0.01) -> bool:
+        self._can_transform_call_count += 1
+        return self._can_transform_result
+    
+    def lookup_transform(self, target_frame: str, source_frame: str, 
+                        time=None, timeout_sec: float = 0.01):
+        return {
+            'translation': (0.0, 0.0, 0.0),
+            'rotation': (0.0, 0.0, 0.0, 1.0)
+        }
+
+
+def test_tf2_injection_blocking_success():
+    """测试 TF2 注入 - 阻塞模式成功"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=True)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 注入 TF2
+    mock.node._inject_tf2_to_controller(blocking=True)
+    
+    assert mock.node._tf2_injected == True
+    assert mock.node._tf2_injection_attempted == True
+    # 应该只调用一次 can_transform（因为第一次就成功了）
+    assert tf_bridge._can_transform_call_count == 1
+
+
+def test_tf2_injection_blocking_timeout():
+    """测试 TF2 注入 - 阻塞模式超时"""
+    mock = MockControllerNode()
+    # 使用较短的超时时间进行测试
+    params = DEFAULT_CONFIG.copy()
+    params['tf'] = {
+        'source_frame': 'base_link',
+        'target_frame': 'odom',
+        'buffer_warmup_timeout_sec': 0.2,  # 200ms 超时
+        'buffer_warmup_interval_sec': 0.05,  # 50ms 间隔
+    }
+    mock.initialize(params)
+    
+    # 设置 TF bridge - can_transform 始终返回 False
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=False)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 注入 TF2
+    start_time = time.time()
+    mock.node._inject_tf2_to_controller(blocking=True)
+    elapsed = time.time() - start_time
+    
+    # 应该等待约 0.2 秒
+    assert elapsed >= 0.15  # 允许一些误差
+    assert elapsed < 0.5  # 不应该等太久
+    
+    # 即使超时，也应该注入回调（让 RobustCoordinateTransformer 处理 fallback）
+    assert mock.node._tf2_injected == True
+    assert mock.node._tf2_injection_attempted == True
+    
+    # 应该有警告日志
+    assert any('not ready' in msg.lower() for msg in mock.node._logs['warn'])
+
+
+def test_tf2_injection_non_blocking():
+    """测试 TF2 注入 - 非阻塞模式"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge - can_transform 返回 False
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=False)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 非阻塞注入
+    start_time = time.time()
+    mock.node._inject_tf2_to_controller(blocking=False)
+    elapsed = time.time() - start_time
+    
+    # 应该立即返回
+    assert elapsed < 0.1
+    
+    # 应该只调用一次 can_transform
+    assert tf_bridge._can_transform_call_count == 1
+    
+    # 应该注入回调
+    assert mock.node._tf2_injected == True
+
+
+def test_tf2_injection_not_initialized():
+    """测试 TF2 注入 - TF2 未初始化"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge - 未初始化
+    tf_bridge = MockTFBridge(initialized=False)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 注入 TF2
+    mock.node._inject_tf2_to_controller(blocking=True)
+    
+    # 不应该注入
+    assert mock.node._tf2_injected == False
+    assert mock.node._tf2_injection_attempted == False
+
+
+def test_tf2_reinjection():
+    """测试 TF2 重新注入"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 初始状态：未注入
+    assert mock.node._tf2_injected == False
+    assert mock.node._tf2_injection_attempted == False
+    
+    # 设置 TF bridge
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=True)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 标记已尝试但未成功（模拟初始化时 TF2 不可用的情况）
+    mock.node._tf2_injection_attempted = True
+    mock.node._tf2_injected = False
+    
+    # 尝试重新注入
+    mock.node._try_tf2_reinjection()
+    
+    # 应该成功注入
+    assert mock.node._tf2_injected == True
+
+
+def test_tf2_reinjection_already_injected():
+    """测试 TF2 重新注入 - 已经注入"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=True)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 标记已注入
+    mock.node._tf2_injected = True
+    mock.node._tf2_injection_attempted = True
+    
+    # 尝试重新注入
+    initial_call_count = tf_bridge._can_transform_call_count
+    mock.node._try_tf2_reinjection()
+    
+    # 不应该再次调用 can_transform
+    assert tf_bridge._can_transform_call_count == initial_call_count
+
+
+def test_control_loop_tf2_retry():
+    """测试控制循环中的 TF2 重试"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=True)
+    mock.node._tf_bridge = tf_bridge
+    
+    # 标记已尝试但未成功
+    mock.node._tf2_injection_attempted = True
+    mock.node._tf2_injected = False
+    
+    # 添加数据
+    odom = create_test_odom(vx=1.0)
+    traj = create_test_trajectory()
+    mock.update_odom(odom)
+    mock.update_trajectory(traj)
+    
+    # 执行控制循环 50 次（应该触发一次重试）
+    for i in range(50):
+        mock.node._control_loop_core()
+    
+    # 应该已经重新注入
+    assert mock.node._tf2_injected == True
+
+
+def test_error_diagnostics_includes_tf2_injected():
+    """测试错误诊断包含 tf2_injected 状态"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=True)
+    mock.node._tf_bridge = tf_bridge
+    mock.node._tf2_injected = True
+    
+    timeouts = {'odom_timeout': False, 'traj_timeout': False, 'imu_timeout': False}
+    error = Exception("Test error")
+    
+    diag = mock.node._create_error_diagnostics(error, timeouts)
+    
+    assert 'transform' in diag
+    assert diag['transform']['tf2_available'] == True
+    assert diag['transform']['tf2_injected'] == True
+
+
+def test_on_diagnostics_includes_tf2_injected():
+    """测试诊断回调包含 tf2_injected 状态"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置 TF bridge
+    tf_bridge = MockTFBridge(initialized=True, can_transform_result=True)
+    mock.node._tf_bridge = tf_bridge
+    mock.node._tf2_injected = True
+    
+    diag = {'state': 1}
+    mock.node._on_diagnostics(diag)
+    
+    assert 'transform' in diag
+    assert diag['transform']['tf2_injected'] == True
+
+
+def test_reset_clears_tf2_retry_counter():
+    """测试重置清除 TF2 重试计数器"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 设置重试计数器
+    mock.node._tf2_retry_counter = 25
+    
+    # 重置
+    mock.node._handle_reset()
+    
+    # 计数器应该被重置
+    assert mock.node._tf2_retry_counter == 0

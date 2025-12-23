@@ -44,6 +44,9 @@ from controller_ros.utils.diagnostics_publisher import fill_diagnostics_msg, Dia
 from controller_ros.utils.ros_compat import TF2Compat, get_time_sec
 from controller_ros.utils.param_loader import ParamLoader
 
+# 默认话题名常量
+DEFAULT_STATE_TOPIC = '/controller/state'
+
 
 class ControllerNodeROS1(ControllerNodeBase):
     """
@@ -141,16 +144,17 @@ class ControllerNodeROS1(ControllerNodeBase):
         """创建所有发布器"""
         cmd_topic = self._topics.get('cmd_unified', '/cmd_unified')
         diag_topic = self._topics.get('diagnostics', '/controller/diagnostics')
+        state_topic = self._topics.get('state', DEFAULT_STATE_TOPIC)
         
         self._cmd_pub = rospy.Publisher(cmd_topic, UnifiedCmd, queue_size=1)
         self._diag_pub = rospy.Publisher(diag_topic, DiagnosticsV2, queue_size=10)
         
         # 状态发布器 (需求文档要求)
-        self._state_pub = rospy.Publisher('/controller/state', Int32, queue_size=1)
+        self._state_pub = rospy.Publisher(state_topic, Int32, queue_size=1)
         
         rospy.loginfo(
             f"Publishing to: cmd={cmd_topic}, diagnostics={diag_topic}, "
-            f"state=/controller/state"
+            f"state={state_topic}"
         )
     
     def _create_services(self):
@@ -321,6 +325,12 @@ class ControllerNodeROS1(ControllerNodeBase):
     
     def shutdown(self):
         """关闭节点"""
+        # 取消定时器
+        if hasattr(self, '_timer') and self._timer is not None:
+            self._timer.shutdown()
+            self._timer = None
+        
+        # 调用基类关闭方法
         super().shutdown()
 
 
