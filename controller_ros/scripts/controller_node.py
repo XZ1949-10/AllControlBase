@@ -20,7 +20,22 @@ import os
 # roslaunch 有时不会正确设置这个路径
 def _setup_catkin_python_path():
     """查找并添加 catkin devel python 路径"""
-    # 方法1: 从 ROS_PACKAGE_PATH 推断
+    # 常见的 catkin 工作空间路径
+    home = os.path.expanduser('~')
+    common_ws_paths = [
+        os.path.join(home, 'turtlebot_ws'),
+        os.path.join(home, 'catkin_ws'),
+        os.path.join(home, 'ros_ws'),
+    ]
+    
+    for ws in common_ws_paths:
+        devel_python = os.path.join(ws, 'devel', 'lib', 'python3', 'dist-packages')
+        if os.path.exists(devel_python) and devel_python not in sys.path:
+            sys.path.insert(0, devel_python)
+            print(f"[DEBUG] Added to sys.path: {devel_python}")
+            return True
+    
+    # 方法2: 从 ROS_PACKAGE_PATH 推断
     ros_package_path = os.environ.get('ROS_PACKAGE_PATH', '')
     for path in ros_package_path.split(':'):
         if '/src' in path:
@@ -28,22 +43,10 @@ def _setup_catkin_python_path():
             devel_python = os.path.join(ws_root, 'devel', 'lib', 'python3', 'dist-packages')
             if os.path.exists(devel_python) and devel_python not in sys.path:
                 sys.path.insert(0, devel_python)
+                print(f"[DEBUG] Added to sys.path from ROS_PACKAGE_PATH: {devel_python}")
                 return True
     
-    # 方法2: 从脚本位置推断 (符号链接情况)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # 向上查找 devel 目录
-    current = script_dir
-    for _ in range(10):  # 最多向上查找10层
-        parent = os.path.dirname(current)
-        devel_python = os.path.join(parent, 'devel', 'lib', 'python3', 'dist-packages')
-        if os.path.exists(devel_python) and devel_python not in sys.path:
-            sys.path.insert(0, devel_python)
-            return True
-        if parent == current:
-            break
-        current = parent
-    
+    print(f"[DEBUG] Failed to find catkin devel path. sys.path: {sys.path[:5]}")
     return False
 
 _setup_catkin_python_path()
