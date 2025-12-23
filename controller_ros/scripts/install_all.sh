@@ -346,17 +346,53 @@ if [ ! -d "$CATKIN_WS/src" ]; then
     mkdir -p "$CATKIN_WS/src"
 fi
 
-# 链接 controller_ros
+# ============================================================================
+# 清理旧的 controller_ros (彻底清理)
+# ============================================================================
+print_info "清理旧的 controller_ros 安装..."
+
+# 删除 src 中的链接或目录
 cd "$CATKIN_WS/src"
 if [ -L "controller_ros" ]; then
-    print_warning "controller_ros 链接已存在，重新创建..."
-    rm controller_ros
+    OLD_LINK=$(readlink -f controller_ros 2>/dev/null || echo "unknown")
+    print_warning "删除旧的符号链接: controller_ros -> $OLD_LINK"
+    rm -f controller_ros
 elif [ -d "controller_ros" ]; then
-    print_warning "controller_ros 目录已存在，删除后重新链接..."
+    print_warning "删除旧的 controller_ros 目录..."
     rm -rf controller_ros
 fi
+
+# 彻底清理 build 和 devel 中的 controller_ros 相关文件
+print_info "清理编译缓存..."
+rm -rf "$CATKIN_WS/build/controller_ros" 2>/dev/null || true
+rm -rf "$CATKIN_WS/devel/lib/controller_ros" 2>/dev/null || true
+rm -rf "$CATKIN_WS/devel/share/controller_ros" 2>/dev/null || true
+rm -rf "$CATKIN_WS/devel/lib/python3/dist-packages/controller_ros" 2>/dev/null || true
+rm -f "$CATKIN_WS/devel/.rosinstall" 2>/dev/null || true
+
+# 清理 CMake 缓存中的 controller_ros 引用
+if [ -f "$CATKIN_WS/build/CMakeCache.txt" ]; then
+    print_info "清理 CMake 缓存..."
+    sed -i '/controller_ros/d' "$CATKIN_WS/build/CMakeCache.txt" 2>/dev/null || true
+fi
+
+print_success "旧安装清理完成 ✓"
+
+# ============================================================================
+# 创建新的符号链接
+# ============================================================================
+cd "$CATKIN_WS/src"
 ln -s "$ALLCONTROLBASE_PATH/controller_ros" controller_ros
 print_success "创建符号链接: controller_ros -> $ALLCONTROLBASE_PATH/controller_ros ✓"
+
+# 验证链接正确
+if [ -f "$CATKIN_WS/src/controller_ros/CMakeLists.txt" ]; then
+    print_success "符号链接验证通过 ✓"
+else
+    print_error "符号链接创建失败！CMakeLists.txt 不存在"
+    print_error "请检查路径: $ALLCONTROLBASE_PATH/controller_ros"
+    exit 1
+fi
 
 # 只清理 controller_ros 相关的编译缓存，保留其他包
 cd "$CATKIN_WS"
