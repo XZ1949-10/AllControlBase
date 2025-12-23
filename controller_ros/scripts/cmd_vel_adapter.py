@@ -21,6 +21,14 @@ cmd_vel 适配器 - 将 UnifiedCmd 转换为 TurtleBot 的 cmd_vel
     ~output_topic: 输出话题, 默认 /cmd_vel
 """
 
+import sys
+import os
+
+# 添加 catkin devel 路径 - 用于导入 controller_ros.msg
+_devel_path = '/home/oamr/turtlebot_ws/devel/lib/python3/dist-packages'
+if os.path.exists(_devel_path):
+    sys.path.insert(0, _devel_path)
+
 import rospy
 from geometry_msgs.msg import Twist
 
