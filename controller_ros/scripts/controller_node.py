@@ -2,54 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 控制器 ROS1 节点
-
-主节点实现，组装所有组件，管理控制循环。
-支持 TF2 坐标变换集成、紧急停止、姿态控制 (四旋翼)。
-
-功能:
-- 订阅传感器数据 (odom, imu, trajectory)
-- 发布控制命令 (cmd_unified, attitude_cmd)
-- 发布诊断信息 (diagnostics, state)
-- 紧急停止话题订阅
-- 姿态控制服务 (四旋翼平台)
 """
 import sys
 import os
 
-# 确保 catkin devel 路径在 PYTHONPATH 中
-# roslaunch 有时不会正确设置这个路径
-def _setup_catkin_python_path():
-    """查找并添加 catkin devel python 路径"""
-    # 常见的 catkin 工作空间路径
-    home = os.path.expanduser('~')
-    common_ws_paths = [
-        os.path.join(home, 'turtlebot_ws'),
-        os.path.join(home, 'catkin_ws'),
-        os.path.join(home, 'ros_ws'),
-    ]
-    
-    for ws in common_ws_paths:
-        devel_python = os.path.join(ws, 'devel', 'lib', 'python3', 'dist-packages')
-        if os.path.exists(devel_python) and devel_python not in sys.path:
-            sys.path.insert(0, devel_python)
-            print(f"[DEBUG] Added to sys.path: {devel_python}")
-            return True
-    
-    # 方法2: 从 ROS_PACKAGE_PATH 推断
-    ros_package_path = os.environ.get('ROS_PACKAGE_PATH', '')
-    for path in ros_package_path.split(':'):
-        if '/src' in path:
-            ws_root = path.rsplit('/src', 1)[0]
-            devel_python = os.path.join(ws_root, 'devel', 'lib', 'python3', 'dist-packages')
-            if os.path.exists(devel_python) and devel_python not in sys.path:
-                sys.path.insert(0, devel_python)
-                print(f"[DEBUG] Added to sys.path from ROS_PACKAGE_PATH: {devel_python}")
-                return True
-    
-    print(f"[DEBUG] Failed to find catkin devel path. sys.path: {sys.path[:5]}")
-    return False
-
-_setup_catkin_python_path()
+# 立即添加 catkin devel 路径 - 必须在任何其他导入之前
+_home = os.environ.get('HOME', os.path.expanduser('~'))
+_devel_path = os.path.join(_home, 'turtlebot_ws', 'devel', 'lib', 'python3', 'dist-packages')
+if os.path.exists(_devel_path):
+    sys.path.insert(0, _devel_path)
 
 # 添加 src 目录到路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
