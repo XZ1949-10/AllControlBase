@@ -5,10 +5,13 @@
 # 
 # 功能: 一键安装 universal_controller + controller_ros + ACADOS
 # 
+# 重要: 本脚本会将 controller_ros 添加到你现有的 catkin 工作空间，
+#       不会覆盖你已有的 ROS 包 (如 turtlebot_bringup)
+# 
 # 使用方法:
 #   chmod +x install_all.sh
 #   
-#   # 默认安装 (catkin_ws 在 ~/catkin_ws, acados 在 ~/acados)
+#   # 默认安装到 ~/turtlebot_ws (推荐，与 turtlebot 包共存)
 #   ./install_all.sh
 #   
 #   # 指定安装目录
@@ -38,8 +41,15 @@ NC='\033[0m' # No Color
 # AllControlBase 的路径 (包含 universal_controller 和 controller_ros)
 ALLCONTROLBASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# catkin 工作空间路径 (默认值，可通过参数覆盖)
-CATKIN_WS="$HOME/catkin_ws"
+# catkin 工作空间路径 - 优先使用现有的 turtlebot_ws
+# 这样可以与 turtlebot_bringup 等包共存
+if [ -d "$HOME/turtlebot_ws/src" ]; then
+    CATKIN_WS="$HOME/turtlebot_ws"
+elif [ -d "$HOME/catkin_ws/src" ]; then
+    CATKIN_WS="$HOME/catkin_ws"
+else
+    CATKIN_WS="$HOME/turtlebot_ws"
+fi
 
 # ACADOS 安装路径 (默认值，可通过参数覆盖)
 ACADOS_INSTALL_DIR="$HOME/acados"
@@ -61,13 +71,16 @@ while [[ $# -gt 0 ]]; do
             echo "使用方法: $0 [选项]"
             echo ""
             echo "选项:"
-            echo "  -c, --catkin-ws PATH    指定 catkin 工作空间路径 (默认: ~/catkin_ws)"
+            echo "  -c, --catkin-ws PATH    指定 catkin 工作空间路径 (默认: ~/turtlebot_ws 或 ~/catkin_ws)"
             echo "  -a, --acados PATH       指定 ACADOS 安装路径 (默认: ~/acados)"
             echo "  -h, --help              显示帮助信息"
             echo ""
             echo "示例:"
-            echo "  $0                                    # 使用默认路径"
-            echo "  $0 -c /opt/ros_ws -a /opt/acados     # 指定路径"
+            echo "  $0                                         # 使用默认路径 (自动检测 turtlebot_ws)"
+            echo "  $0 -c ~/turtlebot_ws -a ~/acados          # 指定路径"
+            echo ""
+            echo "注意: 推荐安装到已有的 turtlebot_ws，这样 controller_ros 可以与"
+            echo "      turtlebot_bringup 等包共存，不会覆盖现有 ROS 环境"
             exit 0
             ;;
         *)
@@ -310,11 +323,24 @@ print('universal_controller 导入成功')
 }
 
 # ============================================================================
-# 步骤 5: 创建 catkin 工作空间并编译 controller_ros
+# 步骤 5: 将 controller_ros 添加到现有 catkin 工作空间
 # ============================================================================
 print_header "步骤 5: 编译 controller_ros"
 
-# 创建 catkin 工作空间
+# 检查是否是现有工作空间
+EXISTING_WS=false
+if [ -d "$CATKIN_WS/src" ] && [ -d "$CATKIN_WS/devel" ]; then
+    EXISTING_WS=true
+    print_info "检测到现有工作空间: $CATKIN_WS"
+    
+    # 检查是否有其他包 (如 turtlebot)
+    OTHER_PACKAGES=$(ls -d "$CATKIN_WS/src"/*/ 2>/dev/null | grep -v controller_ros | wc -l)
+    if [ "$OTHER_PACKAGES" -gt 0 ]; then
+        print_success "工作空间中有 $OTHER_PACKAGES 个其他包，将保留它们 ✓"
+    fi
+fi
+
+# 创建 catkin 工作空间 (如果不存在)
 if [ ! -d "$CATKIN_WS/src" ]; then
     print_info "创建 catkin 工作空间: $CATKIN_WS"
     mkdir -p "$CATKIN_WS/src"
@@ -325,41 +351,72 @@ cd "$CATKIN_WS/src"
 if [ -L "controller_ros" ]; then
     print_warning "controller_ros 链接已存在，重新创建..."
     rm controller_ros
+elif [ -d "controller_ros" ]; then
+    print_warning "controller_ros 目录已存在，删除后重新链接..."
+    rm -rf controller_ros
 fi
 ln -s "$ALLCONTROLBASE_PATH/controller_ros" controller_ros
 print_success "创建符号链接: controller_ros -> $ALLCONTROLBASE_PATH/controller_ros ✓"
 
-# 清理旧的编译缓存 (避免 CMake 缓存问题)
+# 只清理 controller_ros 相关的编译缓存，保留其他包
 cd "$CATKIN_WS"
-if [ -d "build" ] || [ -d "devel" ]; then
-    print_info "清理旧的编译缓存..."
-    rm -rf build devel
+if [ "$EXISTING_WS" = true ]; then
+    print_info "增量编译 (保留现有包的编译结果)..."
+    # 只删除 controller_ros 相关的缓存
+    rm -rf build/controller_ros devel/lib/controller_ros devel/share/controller_ros 2>/dev/null || true
+    rm -rf devel/lib/python3/dist-packages/controller_ros 2>/dev/null || true
+else
+    print_info "全新编译..."
+    rm -rf build devel 2>/dev/null || true
+fi
+
+# Source 现有工作空间的依赖 (如果存在)
+source /opt/ros/noetic/setup.bash
+if [ -f "$CATKIN_WS/devel/setup.bash" ]; then
+    source "$CATKIN_WS/devel/setup.bash"
 fi
 
 # 编译
-source /opt/ros/noetic/setup.bash
 print_info "编译 catkin 工作空间..."
 catkin_make
 
 print_success "controller_ros 编译完成 ✓"
 
 # ============================================================================
-# 步骤 6: 配置环境变量
+# 步骤 6: 配置环境变量 (智能处理，不覆盖现有配置)
 # ============================================================================
 print_header "步骤 6: 配置环境变量"
 
-# ROS 工作空间环境
-ROS_ENV_SETUP="
+# 检查 .bashrc 中是否已经 source 了这个工作空间
+if grep -q "$CATKIN_WS/devel/setup.bash" ~/.bashrc; then
+    print_success "工作空间 $CATKIN_WS 已在 ~/.bashrc 中配置 ✓"
+else
+    # 检查是否有其他工作空间配置
+    EXISTING_WS_COUNT=$(grep -c "source.*catkin.*devel/setup.bash\|source.*_ws/devel/setup.bash" ~/.bashrc 2>/dev/null || echo "0")
+    
+    if [ "$EXISTING_WS_COUNT" -gt 0 ]; then
+        print_warning "检测到 ~/.bashrc 中已有 $EXISTING_WS_COUNT 个工作空间配置"
+        print_info "当前配置的工作空间:"
+        grep "source.*devel/setup.bash" ~/.bashrc | head -5
+        echo ""
+        
+        # 如果目标工作空间已经被 source，不需要再添加
+        if grep -q "source.*$CATKIN_WS" ~/.bashrc; then
+            print_success "目标工作空间已配置，无需修改 ✓"
+        else
+            print_warning "请手动确认 ~/.bashrc 中的工作空间配置顺序"
+            print_info "建议: 确保 $CATKIN_WS 在最后被 source"
+        fi
+    else
+        # 没有现有配置，添加新配置
+        ROS_ENV_SETUP="
 # ROS Noetic + controller_ros 环境
 source /opt/ros/noetic/setup.bash
 source $CATKIN_WS/devel/setup.bash
 "
-
-if ! grep -q "$CATKIN_WS/devel/setup.bash" ~/.bashrc; then
-    echo "$ROS_ENV_SETUP" >> ~/.bashrc
-    print_success "ROS 环境变量已添加到 ~/.bashrc ✓"
-else
-    print_warning "ROS 环境变量已存在于 ~/.bashrc"
+        echo "$ROS_ENV_SETUP" >> ~/.bashrc
+        print_success "ROS 环境变量已添加到 ~/.bashrc ✓"
+    fi
 fi
 
 # 立即生效
@@ -373,6 +430,10 @@ print_success "环境变量配置完成 ✓"
 # ============================================================================
 print_header "步骤 7: 验证安装"
 
+# 重新 source 确保环境正确
+source /opt/ros/noetic/setup.bash
+source "$CATKIN_WS/devel/setup.bash"
+
 # 验证 ROS 包
 print_info "验证 controller_ros 包..."
 if rospack find controller_ros &> /dev/null; then
@@ -380,6 +441,14 @@ if rospack find controller_ros &> /dev/null; then
 else
     print_error "controller_ros 包不可用"
     exit 1
+fi
+
+# 验证 turtlebot_bringup 是否仍然可用 (如果之前存在)
+print_info "验证 turtlebot_bringup 包..."
+if rospack find turtlebot_bringup &> /dev/null; then
+    print_success "turtlebot_bringup 包可用 ✓ (现有包未被覆盖)"
+else
+    print_warning "turtlebot_bringup 包不可用 (可能未安装或需要检查工作空间配置)"
 fi
 
 # 验证消息
@@ -444,12 +513,21 @@ echo ""
 echo -e "${GREEN}所有组件已成功安装:${NC}"
 echo "  ✅ ACADOS 高性能 MPC 求解器"
 echo "  ✅ universal_controller 算法库"
-echo "  ✅ controller_ros ROS 胶水层"
+echo "  ✅ controller_ros ROS 胶水层 (已添加到 $CATKIN_WS)"
 echo ""
 echo -e "${YELLOW}重要: 请执行以下命令使环境变量生效:${NC}"
 echo ""
 echo "    source ~/.bashrc"
 echo ""
+
+# 检查是否需要提醒用户清理 .bashrc
+if grep -q "AllControlBase/devel/setup.bash" ~/.bashrc 2>/dev/null; then
+    echo -e "${YELLOW}⚠️  检测到 ~/.bashrc 中有 AllControlBase/devel/setup.bash${NC}"
+    echo -e "${YELLOW}   这可能会覆盖其他工作空间 (如 turtlebot_ws)${NC}"
+    echo -e "${YELLOW}   建议删除该行，只保留 $CATKIN_WS/devel/setup.bash${NC}"
+    echo ""
+fi
+
 echo -e "${BLUE}启动控制器:${NC}"
 echo ""
 echo "    # 终端 1: 启动 TurtleBot 驱动"
