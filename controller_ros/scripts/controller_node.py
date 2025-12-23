@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 立即添加 catkin devel 路径 - 必须在最开头
-import sys as _sys
-_sys.path.insert(0, '/home/oamr/turtlebot_ws/devel/lib/python3/dist-packages')
-
 """
 控制器 ROS1 节点
 """
 import sys
 import os
 
-# 添加 src 目录到路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# 添加 src 目录到路径 (用于导入 controller_ros.node 等模块)
+_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
+sys.path.insert(0, _src_path)
+
+# 添加 catkin devel 路径 - 必须在 src 路径之后插入到最前面
+# 这样 controller_ros.msg 会从 devel 导入，而 controller_ros.node 等从 src 导入
+_devel_path = '/home/oamr/turtlebot_ws/devel/lib/python3/dist-packages'
+if os.path.exists(_devel_path):
+    sys.path.insert(0, _devel_path)
 
 import rospy
 from typing import Dict, Any, Optional
