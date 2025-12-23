@@ -600,14 +600,17 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         if self.fallback_start_time is not None:
             fallback_duration_ms = (get_monotonic_time() - self.fallback_start_time) * 1000
         
+        tf2_injected = self._external_tf2_lookup is not None
+        
         return {
             'tf2_available': self.fallback_start_time is None,
+            'tf2_injected': tf2_injected,
             'fallback_duration_ms': fallback_duration_ms,
             'accumulated_drift': self.accumulated_drift,
             'is_critical': self._last_status.is_critical(),
             'status': self._last_status.name,
             'tf2_initialized': self._tf2_initialized,
-            'external_tf2_callback': self._external_tf2_lookup is not None
+            'external_tf2_callback': tf2_injected  # 保持向后兼容
         }
     
     def reset(self) -> None:

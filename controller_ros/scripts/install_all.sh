@@ -380,6 +380,44 @@ fi
 print_info "编译 catkin 工作空间..."
 catkin_make
 
+# 重新 source 以加载新生成的消息
+source "$CATKIN_WS/devel/setup.bash"
+
+# 验证消息是否生成成功
+print_info "验证消息生成..."
+MSG_PATH="$CATKIN_WS/devel/lib/python3/dist-packages/controller_ros/msg"
+if [ -d "$MSG_PATH" ] && [ -f "$MSG_PATH/__init__.py" ]; then
+    print_success "消息 Python 模块已生成: $MSG_PATH ✓"
+else
+    print_error "消息 Python 模块未生成!"
+    print_error "请检查 CMakeLists.txt 中的 message_generation 配置"
+    print_info "尝试重新编译..."
+    catkin_make --force-cmake
+    source "$CATKIN_WS/devel/setup.bash"
+    
+    if [ -d "$MSG_PATH" ]; then
+        print_success "重新编译后消息模块已生成 ✓"
+    else
+        print_error "消息生成失败，请手动检查编译输出"
+        exit 1
+    fi
+fi
+
+# 验证 Python 可以导入消息
+print_info "验证 Python 可以导入消息..."
+python3 -c "
+import sys
+sys.path.insert(0, '$CATKIN_WS/devel/lib/python3/dist-packages')
+from controller_ros.msg import UnifiedCmd, LocalTrajectoryV4, DiagnosticsV2
+print('消息导入成功: UnifiedCmd, LocalTrajectoryV4, DiagnosticsV2')
+" && print_success "消息 Python 导入验证通过 ✓" || {
+    print_error "消息 Python 导入失败"
+    print_info "PYTHONPATH: $PYTHONPATH"
+    print_info "检查路径: $CATKIN_WS/devel/lib/python3/dist-packages/controller_ros/"
+    ls -la "$CATKIN_WS/devel/lib/python3/dist-packages/controller_ros/" 2>/dev/null || true
+    exit 1
+}
+
 print_success "controller_ros 编译完成 ✓"
 
 # ============================================================================
@@ -434,6 +472,9 @@ print_header "步骤 7: 验证安装"
 source /opt/ros/noetic/setup.bash
 source "$CATKIN_WS/devel/setup.bash"
 
+# 确保 PYTHONPATH 包含 devel 路径
+export PYTHONPATH="$CATKIN_WS/devel/lib/python3/dist-packages:$PYTHONPATH"
+
 # 验证 ROS 包
 print_info "验证 controller_ros 包..."
 if rospack find controller_ros &> /dev/null; then
@@ -451,8 +492,8 @@ else
     print_warning "turtlebot_bringup 包不可用 (可能未安装或需要检查工作空间配置)"
 fi
 
-# 验证消息
-print_info "验证 ROS 消息..."
+# 验证消息 (使用 rosmsg)
+print_info "验证 ROS 消息 (rosmsg)..."
 if rosmsg show controller_ros/LocalTrajectoryV4 &> /dev/null; then
     print_success "LocalTrajectoryV4 消息可用 ✓"
 else
@@ -465,6 +506,36 @@ if rosmsg show controller_ros/UnifiedCmd &> /dev/null; then
 else
     print_error "UnifiedCmd 消息不可用"
     exit 1
+fi
+
+if rosmsg show controller_ros/DiagnosticsV2 &> /dev/null; then
+    print_success "DiagnosticsV2 消息可用 ✓"
+else
+    print_error "DiagnosticsV2 消息不可用"
+    exit 1
+fi
+
+# 验证消息 Python 导入 (关键!)
+print_info "验证消息 Python 导入..."
+python3 -c "
+from controller_ros.msg import UnifiedCmd, LocalTrajectoryV4, DiagnosticsV2, AttitudeCmd
+print('所有消息类型导入成功')
+" && print_success "消息 Python 导入验证通过 ✓" || {
+    print_error "消息 Python 导入失败!"
+    print_error "这是导致 'No module named controller_ros.msg' 错误的原因"
+    print_info "当前 PYTHONPATH:"
+    echo "$PYTHONPATH" | tr ':' '\n' | head -10
+    print_info "检查消息模块路径:"
+    ls -la "$CATKIN_WS/devel/lib/python3/dist-packages/controller_ros/" 2>/dev/null || echo "路径不存在"
+    exit 1
+}
+
+# 验证服务
+print_info "验证 ROS 服务..."
+if rossrv show controller_ros/SetControllerState &> /dev/null; then
+    print_success "SetControllerState 服务可用 ✓"
+else
+    print_warning "SetControllerState 服务不可用 (非致命)"
 fi
 
 # 验证 ACADOS
@@ -514,10 +585,15 @@ echo -e "${GREEN}所有组件已成功安装:${NC}"
 echo "  ✅ ACADOS 高性能 MPC 求解器"
 echo "  ✅ universal_controller 算法库"
 echo "  ✅ controller_ros ROS 胶水层 (已添加到 $CATKIN_WS)"
+echo "  ✅ 自定义消息 (UnifiedCmd, LocalTrajectoryV4, DiagnosticsV2)"
 echo ""
 echo -e "${YELLOW}重要: 请执行以下命令使环境变量生效:${NC}"
 echo ""
 echo "    source ~/.bashrc"
+echo ""
+echo -e "${YELLOW}或者在当前终端执行:${NC}"
+echo ""
+echo "    source $CATKIN_WS/devel/setup.bash"
 echo ""
 
 # 检查是否需要提醒用户清理 .bashrc
