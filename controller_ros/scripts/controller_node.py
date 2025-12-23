@@ -151,7 +151,7 @@ class ControllerNodeROS1(ControllerNodeBase):
     def _create_subscriptions(self):
         """创建所有订阅"""
         odom_topic = self._topics.get('odom', '/odom')
-        imu_topic = self._topics.get('imu', '/imu')
+        imu_topic = self._topics.get('imu', '')
         traj_topic = self._topics.get('trajectory', '/nn/local_trajectory')
         emergency_stop_topic = self._topics.get('emergency_stop', DEFAULT_EMERGENCY_STOP_TOPIC)
         
@@ -159,10 +159,16 @@ class ControllerNodeROS1(ControllerNodeBase):
             odom_topic, RosOdometry, 
             self._odom_callback, queue_size=10
         )
-        self._imu_sub = rospy.Subscriber(
-            imu_topic, RosImu, 
-            self._imu_callback, queue_size=10
-        )
+        
+        # IMU 订阅 - 仅在配置了 IMU topic 时创建
+        if imu_topic:
+            self._imu_sub = rospy.Subscriber(
+                imu_topic, RosImu, 
+                self._imu_callback, queue_size=10
+            )
+        else:
+            self._imu_sub = None
+            rospy.loginfo("IMU topic not configured, skipping IMU subscription")
         
         # 轨迹订阅 - 仅在消息类型可用时创建
         if self._traj_msg_available and LocalTrajectoryV4 is not None:
