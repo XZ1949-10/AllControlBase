@@ -148,10 +148,22 @@ sudo apt install -y \
 print_success "系统依赖安装完成 ✓"
 
 # ============================================================================
-# 步骤 2: 安装 Python 依赖
+# 步骤 2: 升级 pip 并安装 Python 依赖
 # ============================================================================
-print_header "步骤 2: 安装 Python 依赖"
+print_header "步骤 2: 升级 pip 并安装 Python 依赖"
 
+# 升级 pip 到最新版本 (支持 pyproject.toml 可编辑安装需要 pip >= 21.3)
+print_info "升级 pip 到最新版本..."
+pip3 install --user --upgrade pip setuptools wheel
+
+# 确保使用新版 pip
+export PATH="$HOME/.local/bin:$PATH"
+
+# 验证 pip 版本
+PIP_VERSION=$(pip3 --version | awk '{print $2}')
+print_success "pip 版本: $PIP_VERSION ✓"
+
+# 安装 Python 依赖
 pip3 install --user numpy scipy PyYAML matplotlib
 
 print_success "Python 依赖安装完成 ✓"
