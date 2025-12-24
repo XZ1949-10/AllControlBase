@@ -18,9 +18,9 @@ tmux split-window -t $SESSION -c ~
 # 强制 tiled 布局 (四方格)
 tmux select-layout -t $SESSION tiled
 
-# 窗格0: ViNT - 先cd，然后准备好命令等你按回车
+# 窗格0: ViNT - 先cd，准备两条命令
 tmux send-keys -t ${SESSION}:0.0 'cd ~/visualnav-transformer/deployment/src' Enter
-tmux send-keys -t ${SESSION}:0.0 'sudo modprobe gspca_kinect'
+tmux send-keys -t ${SESSION}:0.0 'sudo modprobe gspca_kinect && roslaunch vint_locobot.launch'
 
 # 窗格1: explore - 先cd
 tmux send-keys -t ${SESSION}:0.1 'cd ~/visualnav-transformer/deployment/src' Enter
