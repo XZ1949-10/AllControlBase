@@ -337,6 +337,15 @@ class TF2Compat:
         """
         查询坐标变换
         
+        Args:
+            target_frame: 目标坐标系
+            source_frame: 源坐标系
+            time: 时间戳，可以是:
+                - None: 使用最新可用的变换 (rospy.Time(0))
+                - float: 秒数，会被转换为 ROS Time
+                - rospy.Time / rclpy.time.Time: 直接使用
+            timeout_sec: 超时时间 (秒)
+        
         Returns:
             {'translation': (x, y, z), 'rotation': (x, y, z, w)} 或 None
         """
@@ -348,11 +357,19 @@ class TF2Compat:
                 import rospy
                 import tf2_ros
                 
+                # 处理时间参数
                 if time is None:
-                    time = rospy.Time(0)
+                    ros_time = rospy.Time(0)  # 最新可用的变换
+                elif isinstance(time, (int, float)):
+                    # float 秒数 -> 使用 Time(0) 获取最新变换
+                    # 注意：TF2 lookup 通常使用 Time(0) 获取最新变换更可靠
+                    # 因为精确时间戳可能不在 buffer 中
+                    ros_time = rospy.Time(0)
+                else:
+                    ros_time = time  # 假设已经是 rospy.Time
                 
                 transform = self._buffer.lookup_transform(
-                    target_frame, source_frame, time,
+                    target_frame, source_frame, ros_time,
                     timeout=rospy.Duration(timeout_sec)
                 )
                 
@@ -375,11 +392,17 @@ class TF2Compat:
                 from rclpy.time import Time
                 from rclpy.duration import Duration
                 
+                # 处理时间参数
                 if time is None:
-                    time = Time()
+                    ros_time = Time()  # 最新可用的变换
+                elif isinstance(time, (int, float)):
+                    # float 秒数 -> 使用 Time() 获取最新变换
+                    ros_time = Time()
+                else:
+                    ros_time = time  # 假设已经是 rclpy.time.Time
                 
                 transform = self._buffer.lookup_transform(
-                    target_frame, source_frame, time,
+                    target_frame, source_frame, ros_time,
                     timeout=Duration(seconds=timeout_sec)
                 )
                 
@@ -412,19 +435,25 @@ class TF2Compat:
         try:
             if ROS_VERSION == 1:
                 import rospy
-                if time is None:
-                    time = rospy.Time(0)
+                # 处理时间参数
+                if time is None or isinstance(time, (int, float)):
+                    ros_time = rospy.Time(0)
+                else:
+                    ros_time = time
                 return self._buffer.can_transform(
-                    target_frame, source_frame, time,
+                    target_frame, source_frame, ros_time,
                     timeout=rospy.Duration(timeout_sec)
                 )
             elif ROS_VERSION == 2:
                 from rclpy.time import Time
                 from rclpy.duration import Duration
-                if time is None:
-                    time = Time()
+                # 处理时间参数
+                if time is None or isinstance(time, (int, float)):
+                    ros_time = Time()
+                else:
+                    ros_time = time
                 return self._buffer.can_transform(
-                    target_frame, source_frame, time,
+                    target_frame, source_frame, ros_time,
                     timeout=Duration(seconds=timeout_sec)
                 )
         except Exception:
