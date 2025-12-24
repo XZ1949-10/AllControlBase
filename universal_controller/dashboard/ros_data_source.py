@@ -339,9 +339,11 @@ class ROSDashboardDataSource:
                     'a_max': rospy.get_param('constraints/a_max', 1.5),
                 },
                 'watchdog': {
-                    'odom_timeout_ms': rospy.get_param('watchdog/odom_timeout_ms', 200),
-                    'traj_timeout_ms': rospy.get_param('watchdog/traj_timeout_ms', 500),
-                    'imu_timeout_ms': rospy.get_param('watchdog/imu_timeout_ms', 100),
+                    'odom_timeout_ms': rospy.get_param('watchdog/odom_timeout_ms', 500),
+                    'traj_timeout_ms': rospy.get_param('watchdog/traj_timeout_ms', 2500),
+                    'traj_grace_ms': rospy.get_param('watchdog/traj_grace_ms', 1500),
+                    'imu_timeout_ms': rospy.get_param('watchdog/imu_timeout_ms', -1),
+                    'startup_grace_ms': rospy.get_param('watchdog/startup_grace_ms', 5000),
                 },
             }
             rospy.loginfo(f"[ROSDashboardDataSource] Loaded config: platform={self._config['system']['platform']}")

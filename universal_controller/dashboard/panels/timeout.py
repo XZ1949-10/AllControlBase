@@ -12,9 +12,33 @@ from ..styles import COLORS
 class TimeoutPanel(QGroupBox):
     """超时监控面板"""
     
-    def __init__(self, parent=None):
+    # 默认超时配置（与 universal_controller/config/system_config.py 保持一致）
+    DEFAULT_ODOM_TIMEOUT_MS = 500
+    DEFAULT_TRAJ_TIMEOUT_MS = 2500
+    DEFAULT_TRAJ_GRACE_MS = 1500
+    DEFAULT_IMU_TIMEOUT_MS = -1  # -1 表示禁用
+    DEFAULT_STARTUP_GRACE_MS = 5000
+    
+    def __init__(self, parent=None, config=None):
         super().__init__('超时监控', parent)
+        self._config = config or {}
+        self._load_config()
         self._setup_ui()
+    
+    def _load_config(self):
+        """从配置加载超时阈值"""
+        watchdog = self._config.get('watchdog', {})
+        self._odom_timeout_ms = watchdog.get('odom_timeout_ms', self.DEFAULT_ODOM_TIMEOUT_MS)
+        self._traj_timeout_ms = watchdog.get('traj_timeout_ms', self.DEFAULT_TRAJ_TIMEOUT_MS)
+        self._traj_grace_ms = watchdog.get('traj_grace_ms', self.DEFAULT_TRAJ_GRACE_MS)
+        self._imu_timeout_ms = watchdog.get('imu_timeout_ms', self.DEFAULT_IMU_TIMEOUT_MS)
+        self._startup_grace_ms = watchdog.get('startup_grace_ms', self.DEFAULT_STARTUP_GRACE_MS)
+    
+    def set_config(self, config):
+        """更新配置"""
+        self._config = config or {}
+        self._load_config()
+        self._update_config_labels()
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -26,13 +50,14 @@ class TimeoutPanel(QGroupBox):
         layout.addWidget(title1)
         
         # Odom
-        self.odom_led, self.odom_progress = self._add_timeout_row(layout, 'Odom', 200)
+        self.odom_led, self.odom_progress = self._add_timeout_row(layout, 'Odom', self._odom_timeout_ms)
         
         # Traj
-        self.traj_led, self.traj_progress = self._add_timeout_row(layout, 'Traj', 200)
+        self.traj_led, self.traj_progress = self._add_timeout_row(layout, 'Traj', self._traj_timeout_ms)
         
         # IMU
-        self.imu_led, self.imu_progress = self._add_timeout_row(layout, 'IMU', 100)
+        imu_thresh = self._imu_timeout_ms if self._imu_timeout_ms > 0 else 100
+        self.imu_led, self.imu_progress = self._add_timeout_row(layout, 'IMU', imu_thresh)
         
         layout.addSpacing(10)
         
@@ -60,22 +85,40 @@ class TimeoutPanel(QGroupBox):
         config_grid = QGridLayout()
         config_grid.setSpacing(3)
         
+        # 创建配置标签（保存引用以便后续更新）
+        self._config_labels = {}
         configs = [
-            ('Odom超时阈值:', '200 ms'),
-            ('Traj超时阈值:', '200 ms'),
-            ('Traj宽限期:', '100 ms'),
-            ('IMU超时阈值:', '100 ms'),
-            ('启动宽限期:', '1000 ms'),
+            ('odom', 'Odom超时阈值:', self._format_timeout(self._odom_timeout_ms)),
+            ('traj', 'Traj超时阈值:', self._format_timeout(self._traj_timeout_ms)),
+            ('traj_grace', 'Traj宽限期:', f'{self._traj_grace_ms} ms'),
+            ('imu', 'IMU超时阈值:', self._format_timeout(self._imu_timeout_ms)),
+            ('startup', '启动宽限期:', f'{self._startup_grace_ms} ms'),
         ]
         
-        for i, (label, value) in enumerate(configs):
+        for i, (key, label, value) in enumerate(configs):
             config_grid.addWidget(QLabel(label), i, 0)
             value_label = QLabel(value)
             value_label.setStyleSheet('color: #B0B0B0;')
             config_grid.addWidget(value_label, i, 1)
+            self._config_labels[key] = value_label
         
         layout.addLayout(config_grid)
         layout.addStretch()
+    
+    def _format_timeout(self, timeout_ms):
+        """格式化超时值显示"""
+        if timeout_ms <= 0:
+            return '禁用'
+        return f'{timeout_ms} ms'
+    
+    def _update_config_labels(self):
+        """更新配置标签显示"""
+        if hasattr(self, '_config_labels'):
+            self._config_labels['odom'].setText(self._format_timeout(self._odom_timeout_ms))
+            self._config_labels['traj'].setText(self._format_timeout(self._traj_timeout_ms))
+            self._config_labels['traj_grace'].setText(f'{self._traj_grace_ms} ms')
+            self._config_labels['imu'].setText(self._format_timeout(self._imu_timeout_ms))
+            self._config_labels['startup'].setText(f'{self._startup_grace_ms} ms')
     
     def _add_timeout_row(self, parent_layout, name: str, threshold: int):
         """添加超时行"""
@@ -110,21 +153,27 @@ class TimeoutPanel(QGroupBox):
         t = data.timeout
         env = data.environment
 
+        # 使用配置的超时阈值
+        odom_thresh = max(self._odom_timeout_ms, 1)  # 避免除零
+        traj_thresh = max(self._traj_timeout_ms, 1)
+        imu_thresh = max(self._imu_timeout_ms, 100) if self._imu_timeout_ms > 0 else 100
+
         # Odom
         self.odom_led.set_status(not t.odom_timeout, '✓ 正常' if not t.odom_timeout else '✗ 超时')
-        self.odom_progress.set_value(t.last_odom_age_ms, 200, 200)
+        self.odom_progress.set_value(t.last_odom_age_ms, odom_thresh, odom_thresh)
 
         # Traj
         self.traj_led.set_status(not t.traj_timeout, '✓ 正常' if not t.traj_timeout else '✗ 超时')
-        self.traj_progress.set_value(t.last_traj_age_ms, 200, 200)
+        self.traj_progress.set_value(t.last_traj_age_ms, traj_thresh, traj_thresh)
 
-        # IMU - 考虑 mock 模式
-        if env.is_mock_mode or not data.availability.imu_data_available:
-            self.imu_led.set_status(None, '无数据')
-            self.imu_progress.set_value(0, 100, 100)
+        # IMU - 考虑 mock 模式和禁用状态
+        if env.is_mock_mode or not data.availability.imu_data_available or self._imu_timeout_ms <= 0:
+            imu_status = '禁用' if self._imu_timeout_ms <= 0 else '无数据'
+            self.imu_led.set_status(None, imu_status)
+            self.imu_progress.set_value(0, imu_thresh, imu_thresh)
         else:
             self.imu_led.set_status(not t.imu_timeout, '✓ 正常' if not t.imu_timeout else '✗ 超时')
-            self.imu_progress.set_value(t.last_imu_age_ms, 100, 100)
+            self.imu_progress.set_value(t.last_imu_age_ms, imu_thresh, imu_thresh)
 
         # 宽限期
         self.startup_grace_led.set_status(not t.in_startup_grace, '✓ 已过' if not t.in_startup_grace else '○ 进行中')
@@ -132,6 +181,10 @@ class TimeoutPanel(QGroupBox):
 
     def _show_unavailable(self):
         """显示数据不可用状态"""
+        odom_thresh = max(self._odom_timeout_ms, 1)
+        traj_thresh = max(self._traj_timeout_ms, 1)
+        imu_thresh = max(self._imu_timeout_ms, 100) if self._imu_timeout_ms > 0 else 100
+        
         # LED 显示不可用
         self.odom_led.set_status(None, '无数据')
         self.traj_led.set_status(None, '无数据')
@@ -140,6 +193,6 @@ class TimeoutPanel(QGroupBox):
         self.traj_grace_led.set_status(None, '无数据')
         
         # 进度条显示为空
-        self.odom_progress.set_value(0, 200, 200)
-        self.traj_progress.set_value(0, 200, 200)
-        self.imu_progress.set_value(0, 100, 100)
+        self.odom_progress.set_value(0, odom_thresh, odom_thresh)
+        self.traj_progress.set_value(0, traj_thresh, traj_thresh)
+        self.imu_progress.set_value(0, imu_thresh, imu_thresh)

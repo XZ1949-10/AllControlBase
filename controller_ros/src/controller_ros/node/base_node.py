@@ -107,9 +107,9 @@ class ControllerNodeBase(ABC):
         # 4. 创建时间同步
         watchdog_config = self._params.get('watchdog', {})
         self._time_sync = TimeSync(
-            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 200),
-            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 500),
-            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', 100)
+            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 500),
+            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 2500),
+            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', -1)
         )
         
         # 5. 设置诊断回调

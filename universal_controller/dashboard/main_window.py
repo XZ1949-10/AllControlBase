@@ -93,7 +93,9 @@ class DashboardWindow(QMainWindow):
         row2.setSpacing(10)
         self.degradation_panel = DegradationPanel()
         row2.addWidget(self.degradation_panel)
-        self.timeout_panel = TimeoutPanel()
+        # 获取配置传递给 TimeoutPanel
+        config = getattr(self.data_source, '_config', {})
+        self.timeout_panel = TimeoutPanel(config=config)
         row2.addWidget(self.timeout_panel)
         scroll_layout.addLayout(row2)
         row3 = QHBoxLayout()
