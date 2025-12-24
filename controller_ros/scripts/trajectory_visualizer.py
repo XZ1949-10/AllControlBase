@@ -51,7 +51,7 @@ class TrajectoryVisualizer:
         self.cam_x = rospy.get_param('~cam_x', 0.08)    # 前方距离 (m)
         self.cam_y = rospy.get_param('~cam_y', 0.0)     # 左右偏移 (m)
         self.cam_z = rospy.get_param('~cam_z', 0.50)    # 高度 (m)
-        self.cam_pitch = rospy.get_param('~cam_pitch', 0.52)  # 俯仰角 (rad, 正值向下看)
+        self.cam_pitch = rospy.get_param('~cam_pitch', 0.0)  # 俯仰角 (rad, 正值向下看)
         
         # 构建相机内参矩阵
         self.camera_matrix = np.array([

@@ -32,7 +32,7 @@
   <arg name="cam_x" default="0.08" doc="相机前方位置 (m)"/>
   <arg name="cam_y" default="0.0" doc="相机左右位置 (m)"/>
   <arg name="cam_z" default="0.50" doc="相机高度 (m)"/>
-  <arg name="cam_pitch" default="0.52" doc="相机俯仰角 (rad, 正值向下看, ~30°)"/>
+  <arg name="cam_pitch" default="0.0" doc="相机俯仰角 (rad, 正值向下看)"/>
   
   <!-- ========== 轨迹可视化节点 ========== -->
   <node pkg="controller_ros" type="trajectory_visualizer.py" name="trajectory_visualizer" 
