@@ -300,12 +300,12 @@ class TrajectoryVisualizer:
             self._draw_ground_grid(image)
         
         # 状态信息
-        status = f"标定模式 - 已选择 {len(self.calib_image_points)}/4 个点"
+        status = f"Calibration - {len(self.calib_image_points)}/4 points"
         cv2.putText(image, status, (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
         if len(self.calib_image_points) >= 4 and self.H is not None:
-            cv2.putText(image, "按 's' 保存, 'r' 重置", (10, 60),
+            cv2.putText(image, "Press 's' to save, 'r' to reset", (10, 60),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         
         # 显示
@@ -335,7 +335,7 @@ class TrajectoryVisualizer:
         if self.latest_trajectory is not None and self.H is not None:
             image = self.overlay_trajectory(image, self.latest_trajectory)
         elif self.H is None:
-            cv2.putText(image, "未标定! 请先运行标定模式", (10, 30),
+            cv2.putText(image, "Not calibrated! Run calibration_mode:=true", (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         
         # 状态信息
