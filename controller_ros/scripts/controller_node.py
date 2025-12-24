@@ -3,12 +3,9 @@
 """
 控制器 ROS1 节点
 """
-import sys
-import os
 
-# 设置 Python 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import controller_ros._path_manager
+# 注意：不要在这里修改 sys.path！
+# PYTHONPATH 已经由 source devel/setup.bash 正确设置
 
 import rospy
 from typing import Dict, Any, Optional

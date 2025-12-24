@@ -15,12 +15,8 @@ Dashboard ROS 节点 - 可视化监控界面
     roslaunch controller_ros dashboard.launch
 """
 
-import sys
-import os
-
-# 设置 Python 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import controller_ros._path_manager
+# 注意：不要在这里修改 sys.path！
+# PYTHONPATH 已经由 source devel/setup.bash 正确设置
 
 import rospy
 from PyQt5.QtWidgets import QApplication

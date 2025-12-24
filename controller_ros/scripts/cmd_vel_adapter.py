@@ -21,12 +21,8 @@ cmd_vel 适配器 - 将 UnifiedCmd 转换为 TurtleBot 的 cmd_vel
     ~output_topic: 输出话题, 默认 /cmd_vel
 """
 
-import sys
-import os
-
-# 设置 Python 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import controller_ros._path_manager
+# 注意：不要在这里修改 sys.path！
+# PYTHONPATH 已经由 source devel/setup.bash 正确设置
 
 import rospy
 from geometry_msgs.msg import Twist
