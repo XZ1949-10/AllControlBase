@@ -18,6 +18,7 @@ Dashboard ROS 节点 - 可视化监控界面
 # 注意：不要在这里修改 sys.path！
 # PYTHONPATH 已经由 source devel/setup.bash 正确设置
 
+import sys
 import rospy
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
