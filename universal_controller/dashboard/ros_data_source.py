@@ -314,71 +314,139 @@ class ROSDashboardDataSource:
         }
 
     def _load_ros_params(self):
-        """从 ROS 参数服务器加载配置"""
+        """从 ROS 参数服务器加载配置
+        
+        使用 DEFAULT_CONFIG 作为模板，递归加载 ROS 参数。
+        这与 param_loader.py 的设计保持一致。
+        """
         if ROS_VERSION == 1:
             self._load_ros1_params()
         elif ROS_VERSION == 2:
             self._load_ros2_params()
 
     def _load_ros1_params(self):
-        """从 ROS1 参数服务器加载配置"""
+        """从 ROS1 参数服务器加载配置
+        
+        使用 DEFAULT_CONFIG 作为模板，只加载 Dashboard 需要的配置项。
+        """
         try:
-            self._config = {
-                'system': {
-                    'platform': rospy.get_param('system/platform', 'differential'),
-                    'ctrl_freq': rospy.get_param('system/ctrl_freq', 20),
-                },
-                'mpc': {
-                    'horizon': rospy.get_param('mpc/horizon', 20),
-                    'horizon_degraded': rospy.get_param('mpc/horizon_degraded', 10),
-                    'dt': rospy.get_param('mpc/dt', 0.1),
-                },
-                'constraints': {
-                    'v_max': rospy.get_param('constraints/v_max', 2.0),
-                    'omega_max': rospy.get_param('constraints/omega_max', 2.0),
-                    'a_max': rospy.get_param('constraints/a_max', 1.5),
-                },
-                'watchdog': {
-                    'odom_timeout_ms': rospy.get_param('watchdog/odom_timeout_ms', 500),
-                    'traj_timeout_ms': rospy.get_param('watchdog/traj_timeout_ms', 1000),
-                    'traj_grace_ms': rospy.get_param('watchdog/traj_grace_ms', 500),
-                    'imu_timeout_ms': rospy.get_param('watchdog/imu_timeout_ms', -1),
-                    'startup_grace_ms': rospy.get_param('watchdog/startup_grace_ms', 5000),
-                },
-                'diagnostics': {
-                    'publish_rate': rospy.get_param('diagnostics/publish_rate', 5),
-                },
-                'ekf': {
-                    'use_odom_orientation_fallback': rospy.get_param('ekf/use_odom_orientation_fallback', True),
-                    'imu_motion_compensation': rospy.get_param('ekf/imu_motion_compensation', False),
-                },
-                'transform': {
-                    'recovery_correction_enabled': rospy.get_param('transform/recovery_correction_enabled', True),
-                    'target_frame': rospy.get_param('tf/target_frame', 'odom'),
-                    'source_frame': rospy.get_param('tf/source_frame', 'base_footprint'),
-                },
-            }
+            # 导入默认配置
+            from ..config import DEFAULT_CONFIG
+            import copy
+            
+            # 深拷贝默认配置
+            self._config = copy.deepcopy(DEFAULT_CONFIG)
+            
+            # Dashboard 需要的配置路径列表
+            # 只加载 Dashboard 显示需要的配置，不需要加载所有配置
+            dashboard_params = [
+                # 系统配置
+                'system/platform',
+                'system/ctrl_freq',
+                # MPC 配置
+                'mpc/horizon',
+                'mpc/horizon_degraded',
+                'mpc/dt',
+                # 约束配置
+                'constraints/v_max',
+                'constraints/v_min',
+                'constraints/omega_max',
+                'constraints/a_max',
+                'constraints/az_max',
+                'constraints/alpha_max',
+                # 一致性配置
+                'consistency/kappa_thresh',
+                'consistency/v_dir_thresh',
+                'consistency/temporal_smooth_thresh',
+                'consistency/alpha_min',
+                'consistency/weights/kappa',
+                'consistency/weights/velocity',
+                'consistency/weights/temporal',
+                # 超时配置
+                'watchdog/odom_timeout_ms',
+                'watchdog/traj_timeout_ms',
+                'watchdog/traj_grace_ms',
+                'watchdog/imu_timeout_ms',
+                'watchdog/startup_grace_ms',
+                # 诊断配置
+                'diagnostics/publish_rate',
+                # EKF 配置
+                'ekf/use_odom_orientation_fallback',
+                'ekf/imu_motion_compensation',
+                # 坐标变换配置
+                'transform/recovery_correction_enabled',
+                # 跟踪配置
+                'tracking/lateral_thresh',
+                'tracking/longitudinal_thresh',
+                'tracking/heading_thresh',
+                'tracking/prediction_thresh',
+                'tracking/weights/lateral',
+                'tracking/weights/longitudinal',
+                'tracking/weights/heading',
+                'tracking/rating/excellent',
+                'tracking/rating/good',
+                'tracking/rating/fair',
+                # 安全配置
+                'safety/v_stop_thresh',
+                'safety/stopping_timeout',
+                'safety/emergency_decel',
+                'safety/low_speed/threshold',
+                'safety/low_speed/omega_limit',
+                'safety/margins/velocity',
+                'safety/margins/acceleration',
+            ]
+            
+            # 递归设置配置值
+            def set_nested(d, path, value):
+                """递归设置嵌套字典的值"""
+                keys = path.split('/')
+                for key in keys[:-1]:
+                    if key not in d:
+                        d[key] = {}
+                    d = d[key]
+                d[keys[-1]] = value
+            
+            def get_nested(d, path, default=None):
+                """递归获取嵌套字典的值"""
+                keys = path.split('/')
+                for key in keys:
+                    if not isinstance(d, dict) or key not in d:
+                        return default
+                    d = d[key]
+                return d
+            
+            # 加载 ROS 参数
+            for param_path in dashboard_params:
+                default_value = get_nested(self._config, param_path)
+                ros_value = rospy.get_param(param_path, default_value)
+                set_nested(self._config, param_path, ros_value)
+            
+            # 特殊处理: TF 配置映射到 transform
+            self._config['transform']['target_frame'] = rospy.get_param('tf/target_frame', 'odom')
+            self._config['transform']['source_frame'] = rospy.get_param('tf/source_frame', 'base_link')
+            
             rospy.loginfo(f"[ROSDashboardDataSource] Loaded config: platform={self._config['system']['platform']}, ctrl_freq={self._config['system']['ctrl_freq']}")
         except Exception as e:
             rospy.logwarn(f"[ROSDashboardDataSource] Failed to load ROS params: {e}")
 
     def _load_ros2_params(self):
-        """从 ROS2 参数加载配置"""
+        """从 ROS2 参数加载配置
+        
+        使用 DEFAULT_CONFIG 作为模板。
+        """
         if self._node is None:
             return
         try:
-            # ROS2 参数加载逻辑
-            self._config = {
-                'system': {
-                    'platform': 'differential',
-                    'ctrl_freq': 50,
-                },
-                'mpc': {
-                    'horizon': 20,
-                    'horizon_degraded': 10,
-                    'dt': 0.1,
-                },
-            }
+            # 导入默认配置
+            from ..config import DEFAULT_CONFIG
+            import copy
+            
+            # 深拷贝默认配置作为基础
+            self._config = copy.deepcopy(DEFAULT_CONFIG)
+            
+            # ROS2 参数加载逻辑 (简化版，需要时可扩展)
+            # TODO: 实现完整的 ROS2 参数加载
+            self._node.get_logger().info("[ROSDashboardDataSource] Using default config for ROS2")
         except Exception as e:
             self._node.get_logger().warn(f"[ROSDashboardDataSource] Failed to load params: {e}")
 

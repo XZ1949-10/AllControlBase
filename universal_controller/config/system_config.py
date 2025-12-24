@@ -6,6 +6,7 @@
 - 暂停检测阈值
 - 诊断话题配置
 - 超时配置
+- 跟踪质量评估配置 (Dashboard)
 """
 
 # 系统配置
@@ -39,6 +40,32 @@ DIAGNOSTICS_CONFIG = {
     'publish_rate': 10,                  # 诊断发布降频率 (每 N 次控制循环发布一次)
 }
 
+# =============================================================================
+# 跟踪质量评估配置 (Dashboard 显示用)
+# 这些参数主要用于 Dashboard 显示，不影响控制器行为
+# =============================================================================
+TRACKING_CONFIG = {
+    # 误差阈值 (超过此值评分为 0)
+    'lateral_thresh': 0.3,        # 横向误差阈值 (m)
+    'longitudinal_thresh': 0.5,   # 纵向误差阈值 (m)
+    'heading_thresh': 0.5,        # 航向误差阈值 (rad, ~28.6°)
+    'prediction_thresh': 0.5,     # 预测误差阈值 (m)
+    
+    # 质量评分权重 (总和应为 1.0)
+    'weights': {
+        'lateral': 0.4,           # 横向误差权重
+        'longitudinal': 0.4,      # 纵向误差权重
+        'heading': 0.2,           # 航向误差权重
+    },
+    
+    # 评级阈值 (百分比)
+    'rating': {
+        'excellent': 90,          # >= 90% 为优秀
+        'good': 70,               # >= 70% 为良好
+        'fair': 50,               # >= 50% 为一般，< 50% 为较差
+    },
+}
+
 # 系统配置验证规则
 # 注意: 超时配置允许 <=0 表示禁用，所以最小值设为 None (无下限)
 SYSTEM_VALIDATION_RULES = {
@@ -50,4 +77,8 @@ SYSTEM_VALIDATION_RULES = {
     'watchdog.traj_timeout_ms': (None, 10000, '轨迹超时 (ms)，<=0 禁用'),
     'watchdog.imu_timeout_ms': (None, 10000, 'IMU 超时 (ms)，<=0 禁用'),
     'diagnostics.publish_rate': (1, 100, '诊断发布降频率'),
+    # 跟踪质量评估配置验证
+    'tracking.lateral_thresh': (0.01, 10.0, '横向误差阈值 (m)'),
+    'tracking.longitudinal_thresh': (0.01, 10.0, '纵向误差阈值 (m)'),
+    'tracking.heading_thresh': (0.01, 3.14, '航向误差阈值 (rad)'),
 }

@@ -1,5 +1,8 @@
 """
 跟踪误差面板
+
+配置来源: universal_controller/config/system_config.py -> TRACKING_CONFIG
+YAML 覆盖: controller_ros/config/turtlebot1.yaml -> tracking 节
 """
 
 from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QHBoxLayout, QLabel
@@ -7,29 +10,64 @@ from PyQt5.QtCore import Qt
 from ..widgets.progress_bar import ColorProgressBar
 from ..styles import COLORS
 
+# 从统一配置模块导入默认值
+from ...config import TRACKING_CONFIG
+
 
 class TrackingPanel(QGroupBox):
     """跟踪误差面板"""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, config=None):
         super().__init__('跟踪误差', parent)
+        self._config = {}
+        self._load_config(config)
         self._setup_ui()
+    
+    def _load_config(self, config=None):
+        """从配置加载参数，使用 TRACKING_CONFIG 作为默认值"""
+        tracking_config = (config or {}).get('tracking', {})
+        
+        # 阈值
+        self._config['lateral_thresh'] = tracking_config.get('lateral_thresh', TRACKING_CONFIG['lateral_thresh'])
+        self._config['longitudinal_thresh'] = tracking_config.get('longitudinal_thresh', TRACKING_CONFIG['longitudinal_thresh'])
+        self._config['heading_thresh'] = tracking_config.get('heading_thresh', TRACKING_CONFIG['heading_thresh'])
+        self._config['prediction_thresh'] = tracking_config.get('prediction_thresh', TRACKING_CONFIG['prediction_thresh'])
+        
+        # 权重
+        weights = tracking_config.get('weights', {})
+        self._config['weights'] = {
+            'lateral': weights.get('lateral', TRACKING_CONFIG['weights']['lateral']),
+            'longitudinal': weights.get('longitudinal', TRACKING_CONFIG['weights']['longitudinal']),
+            'heading': weights.get('heading', TRACKING_CONFIG['weights']['heading']),
+        }
+        
+        # 评级阈值
+        rating = tracking_config.get('rating', {})
+        self._config['rating'] = {
+            'excellent': rating.get('excellent', TRACKING_CONFIG['rating']['excellent']),
+            'good': rating.get('good', TRACKING_CONFIG['rating']['good']),
+            'fair': rating.get('fair', TRACKING_CONFIG['rating']['fair']),
+        }
+    
+    def set_config(self, config: dict):
+        """设置跟踪配置"""
+        self._load_config(config)
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
         
         # 横向误差
-        self.lateral_progress = self._add_error_row(layout, '横向误差 (Lateral)', 0.3, 'm')
+        self.lateral_progress = self._add_error_row(layout, '横向误差 (Lateral)', 'm')
         
         # 纵向误差
-        self.longitudinal_progress = self._add_error_row(layout, '纵向误差 (Longitudinal)', 0.5, 'm')
+        self.longitudinal_progress = self._add_error_row(layout, '纵向误差 (Longitudinal)', 'm')
         
         # 航向误差
-        self.heading_progress = self._add_error_row(layout, '航向误差 (Heading)', 0.5, 'rad')
+        self.heading_progress = self._add_error_row(layout, '航向误差 (Heading)', 'rad')
         
         # 预测误差
-        self.prediction_progress = self._add_error_row(layout, '预测误差 (Prediction)', 0.5, 'm')
+        self.prediction_progress = self._add_error_row(layout, '预测误差 (Prediction)', 'm')
         
         layout.addSpacing(10)
         
@@ -62,7 +100,7 @@ class TrackingPanel(QGroupBox):
         
         layout.addStretch()
     
-    def _add_error_row(self, parent_layout, label: str, threshold: float, unit: str):
+    def _add_error_row(self, parent_layout, label: str, unit: str):
         """添加误差行"""
         row_layout = QVBoxLayout()
         row_layout.setSpacing(2)
@@ -104,26 +142,53 @@ class TrackingPanel(QGroupBox):
             return
 
         t = data.tracking
-
-        self.lateral_progress.set_value(t.lateral_error, 0.3, 0.3)
-        self.longitudinal_progress.set_value(t.longitudinal_error, 0.5, 0.5)
-        self.heading_progress.set_value(t.heading_error, 0.5, 0.5)
-        self.prediction_progress.set_value(t.prediction_error, 0.5, 0.5)
-
-        lateral_score = max(0, 1 - t.lateral_error / 0.3)
-        longitudinal_score = max(0, 1 - t.longitudinal_error / 0.5)
-        heading_score = max(0, 1 - t.heading_error / 0.5)
-        quality = (lateral_score * 0.4 + longitudinal_score * 0.4 + heading_score * 0.2) * 100
+        
+        # 获取配置阈值
+        lat_thresh = self._config['lateral_thresh']
+        lon_thresh = self._config['longitudinal_thresh']
+        head_thresh = self._config['heading_thresh']
+        pred_thresh = self._config['prediction_thresh']
+        
+        # 取绝对值 - 修复负值导致评分异常的 BUG
+        # 误差的正负只表示方向（左/右、前/后），评分应该只关心误差大小
+        lat_error = abs(t.lateral_error)
+        lon_error = abs(t.longitudinal_error)
+        head_error = abs(t.heading_error)
+        pred_error = abs(t.prediction_error)
+        
+        # 更新进度条显示
+        self.lateral_progress.set_value(lat_error, lat_thresh, lat_thresh)
+        self.longitudinal_progress.set_value(lon_error, lon_thresh, lon_thresh)
+        self.heading_progress.set_value(head_error, head_thresh, head_thresh)
+        self.prediction_progress.set_value(pred_error, pred_thresh, pred_thresh)
+        
+        # 计算各维度评分 (0-1)
+        # 误差为 0 时评分为 1，误差达到阈值时评分为 0
+        lateral_score = max(0.0, 1.0 - lat_error / lat_thresh)
+        longitudinal_score = max(0.0, 1.0 - lon_error / lon_thresh)
+        heading_score = max(0.0, 1.0 - head_error / head_thresh)
+        
+        # 加权计算总评分
+        weights = self._config['weights']
+        quality = (
+            lateral_score * weights['lateral'] +
+            longitudinal_score * weights['longitudinal'] +
+            heading_score * weights['heading']
+        ) * 100
+        
         self.quality_progress.set_value(quality, 100)
-
-        if quality >= 90:
+        
+        # 根据评级阈值确定评级
+        rating_config = self._config['rating']
+        if quality >= rating_config['excellent']:
             rating, color = '优秀 (Excellent)', COLORS['success']
-        elif quality >= 70:
+        elif quality >= rating_config['good']:
             rating, color = '良好 (Good)', COLORS['success']
-        elif quality >= 50:
+        elif quality >= rating_config['fair']:
             rating, color = '一般 (Fair)', COLORS['warning']
         else:
             rating, color = '较差 (Poor)', COLORS['error']
+        
         self.rating_label.setText(rating)
         self.rating_label.setStyleSheet(f'color: {color}; font-weight: bold;')
 
@@ -131,11 +196,17 @@ class TrackingPanel(QGroupBox):
         """显示数据不可用状态"""
         unavailable_style = f'color: {COLORS["unavailable"]};'
         
+        # 获取配置阈值
+        lat_thresh = self._config['lateral_thresh']
+        lon_thresh = self._config['longitudinal_thresh']
+        head_thresh = self._config['heading_thresh']
+        pred_thresh = self._config['prediction_thresh']
+        
         # 进度条显示为空
-        self.lateral_progress.set_value(0, 0.3, 0.3)
-        self.longitudinal_progress.set_value(0, 0.5, 0.5)
-        self.heading_progress.set_value(0, 0.5, 0.5)
-        self.prediction_progress.set_value(0, 0.5, 0.5)
+        self.lateral_progress.set_value(0, lat_thresh, lat_thresh)
+        self.longitudinal_progress.set_value(0, lon_thresh, lon_thresh)
+        self.heading_progress.set_value(0, head_thresh, head_thresh)
+        self.prediction_progress.set_value(0, pred_thresh, pred_thresh)
         self.quality_progress.set_value(0, 100)
         
         # 趋势显示不可用

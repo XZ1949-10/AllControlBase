@@ -28,6 +28,7 @@ from .system_config import (
     SYSTEM_CONFIG, 
     WATCHDOG_CONFIG, 
     DIAGNOSTICS_CONFIG,
+    TRACKING_CONFIG,
     SYSTEM_VALIDATION_RULES,
 )
 from .mpc_config import MPC_CONFIG, MPC_VALIDATION_RULES
@@ -75,6 +76,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'ekf': EKF_CONFIG.copy(),
     'attitude': ATTITUDE_CONFIG.copy(),
     'trajectory': TRAJECTORY_CONFIG.copy(),
+    'tracking': TRACKING_CONFIG.copy(),
     'mock': MOCK_CONFIG.copy(),
 }
 
@@ -149,4 +151,5 @@ __all__ = [
     'WATCHDOG_CONFIG',
     'DIAGNOSTICS_CONFIG',
     'TRAJECTORY_CONFIG',
+    'TRACKING_CONFIG',
 ]

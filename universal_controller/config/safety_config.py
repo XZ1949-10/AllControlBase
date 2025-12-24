@@ -30,8 +30,20 @@ SAFETY_CONFIG = {
     'vz_stop_thresh': 0.1,      # 垂直停车速度阈值 (m/s)
     'stopping_timeout': 5.0,    # 停车超时时间 (秒)
     'emergency_decel': 3.0,     # 紧急减速度 (m/s²)
-    'velocity_margin': 1.1,     # 速度限制裕度
-    'accel_margin': 1.5,        # 加速度限制裕度
+    'velocity_margin': 1.1,     # 速度限制裕度 (已废弃，使用 margins.velocity)
+    'accel_margin': 1.5,        # 加速度限制裕度 (已废弃，使用 margins.acceleration)
+    
+    # 低速保护配置 (Dashboard 显示用)
+    'low_speed': {
+        'threshold': 0.1,       # 低速阈值 (m/s)
+        'omega_limit': 1.0,     # 低速角速度限制 (rad/s)
+    },
+    
+    # 安全裕度配置 (Dashboard 显示用)
+    'margins': {
+        'velocity': 1.1,        # 速度裕度 (110%)
+        'acceleration': 1.5,    # 加速度裕度 (150%)
+    },
     
     # 加速度滤波参数
     'accel_filter_window': 3,        # 滑动窗口大小

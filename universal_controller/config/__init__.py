@@ -57,6 +57,7 @@ from .default_config import (
     WATCHDOG_CONFIG,
     DIAGNOSTICS_CONFIG,
     TRAJECTORY_CONFIG,
+    TRACKING_CONFIG,
 )
 
 __all__ = [
@@ -84,4 +85,5 @@ __all__ = [
     'WATCHDOG_CONFIG',
     'DIAGNOSTICS_CONFIG',
     'TRAJECTORY_CONFIG',
+    'TRACKING_CONFIG',
 ]

@@ -1,5 +1,8 @@
 """
 超时监控面板
+
+配置来源: universal_controller/config/system_config.py -> WATCHDOG_CONFIG
+YAML 覆盖: controller_ros/config/turtlebot1.yaml -> watchdog 节
 """
 
 from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout
@@ -8,16 +11,12 @@ from ..widgets.progress_bar import ColorProgressBar
 from ..widgets.status_led import StatusLED
 from ..styles import COLORS
 
+# 从统一配置模块导入默认值
+from ...config import WATCHDOG_CONFIG
+
 
 class TimeoutPanel(QGroupBox):
     """超时监控面板"""
-    
-    # 默认超时配置（与 universal_controller/config/system_config.py 保持一致）
-    DEFAULT_ODOM_TIMEOUT_MS = 500
-    DEFAULT_TRAJ_TIMEOUT_MS = 2500
-    DEFAULT_TRAJ_GRACE_MS = 1500
-    DEFAULT_IMU_TIMEOUT_MS = -1  # -1 表示禁用
-    DEFAULT_STARTUP_GRACE_MS = 5000
     
     def __init__(self, parent=None, config=None):
         super().__init__('超时监控', parent)
@@ -26,13 +25,13 @@ class TimeoutPanel(QGroupBox):
         self._setup_ui()
     
     def _load_config(self):
-        """从配置加载超时阈值"""
+        """从配置加载超时阈值，使用 WATCHDOG_CONFIG 作为默认值"""
         watchdog = self._config.get('watchdog', {})
-        self._odom_timeout_ms = watchdog.get('odom_timeout_ms', self.DEFAULT_ODOM_TIMEOUT_MS)
-        self._traj_timeout_ms = watchdog.get('traj_timeout_ms', self.DEFAULT_TRAJ_TIMEOUT_MS)
-        self._traj_grace_ms = watchdog.get('traj_grace_ms', self.DEFAULT_TRAJ_GRACE_MS)
-        self._imu_timeout_ms = watchdog.get('imu_timeout_ms', self.DEFAULT_IMU_TIMEOUT_MS)
-        self._startup_grace_ms = watchdog.get('startup_grace_ms', self.DEFAULT_STARTUP_GRACE_MS)
+        self._odom_timeout_ms = watchdog.get('odom_timeout_ms', WATCHDOG_CONFIG['odom_timeout_ms'])
+        self._traj_timeout_ms = watchdog.get('traj_timeout_ms', WATCHDOG_CONFIG['traj_timeout_ms'])
+        self._traj_grace_ms = watchdog.get('traj_grace_ms', WATCHDOG_CONFIG['traj_grace_ms'])
+        self._imu_timeout_ms = watchdog.get('imu_timeout_ms', WATCHDOG_CONFIG['imu_timeout_ms'])
+        self._startup_grace_ms = watchdog.get('startup_grace_ms', WATCHDOG_CONFIG['startup_grace_ms'])
     
     def set_config(self, config):
         """更新配置"""

@@ -9,6 +9,28 @@
 # - 保守的速度限制
 # - 适应较低的传感器频率
 # - 禁用 IMU (TurtleBot1 可能没有)
+#
+# =============================================================================
+# 配置架构说明
+# =============================================================================
+# 
+# 配置优先级 (从低到高):
+#   1. universal_controller/config/*.py  - 默认配置 (代码中定义)
+#   2. 本 YAML 文件                       - 平台特定覆盖
+#   3. ROS 参数服务器                     - 运行时覆盖 (可选)
+#
+# 配置文件对应关系:
+#   - system_config.py   -> system, watchdog, diagnostics, tracking
+#   - safety_config.py   -> constraints, safety
+#   - modules_config.py  -> consistency, transform, transition, backup
+#   - mpc_config.py      -> mpc
+#   - ekf_config.py      -> ekf
+#
+# 注意事项:
+#   - 本文件只需要覆盖与默认值不同的配置项
+#   - 未在此文件中定义的配置项将使用 universal_controller/config/ 中的默认值
+#   - 添加新配置项时，请先在对应的 *_config.py 中定义默认值
+#
 
 # =============================================================================
 # 系统配置
@@ -132,12 +154,44 @@ consistency:
     temporal: 0.4                 # 时序平滑权重 (原 temporal_smoothness_weight)
 
 # =============================================================================
+# 跟踪质量评估配置 (Dashboard 显示用)
+# =============================================================================
+tracking:
+  # 误差阈值 (超过此值评分为 0)
+  lateral_thresh: 0.3             # 横向误差阈值 (m)
+  longitudinal_thresh: 0.5        # 纵向误差阈值 (m)
+  heading_thresh: 0.5             # 航向误差阈值 (rad, ~28.6°)
+  prediction_thresh: 0.5          # 预测误差阈值 (m)
+  
+  # 质量评分权重 (总和应为 1.0)
+  weights:
+    lateral: 0.4                  # 横向误差权重
+    longitudinal: 0.4             # 纵向误差权重
+    heading: 0.2                  # 航向误差权重
+  
+  # 评级阈值 (百分比)
+  rating:
+    excellent: 90                 # >= 90% 为优秀
+    good: 70                      # >= 70% 为良好
+    fair: 50                      # >= 50% 为一般，< 50% 为较差
+
+# =============================================================================
 # 安全配置
 # =============================================================================
 safety:
   v_stop_thresh: 0.05             # 停车速度阈值 (m/s)
   stopping_timeout: 5.0           # 停车超时时间 (秒)
   emergency_decel: 1.0            # 紧急减速度 (m/s²)
+  
+  # 低速保护
+  low_speed:
+    threshold: 0.1                # 低速阈值 (m/s)
+    omega_limit: 1.0              # 低速角速度限制 (rad/s)
+  
+  # 安全裕度
+  margins:
+    velocity: 1.1                 # 速度裕度 (110%)
+    acceleration: 1.5             # 加速度裕度 (150%)
   
   # 状态机配置 (适应无速度信息的轨迹)
   state_machine:
