@@ -121,6 +121,21 @@ class ControllerBridge:
             self._initialized = False
             logger.info("Controller shutdown")
     
+    def notify_odom_received(self) -> None:
+        """通知收到里程计数据（用于超时监控）"""
+        if self._manager is not None:
+            self._manager.timeout_monitor.update_odom()
+    
+    def notify_trajectory_received(self) -> None:
+        """通知收到轨迹数据（用于超时监控）"""
+        if self._manager is not None:
+            self._manager.timeout_monitor.update_trajectory()
+    
+    def notify_imu_received(self) -> None:
+        """通知收到 IMU 数据（用于超时监控）"""
+        if self._manager is not None:
+            self._manager.timeout_monitor.update_imu()
+    
     @property
     def is_initialized(self) -> bool:
         """控制器是否已初始化"""

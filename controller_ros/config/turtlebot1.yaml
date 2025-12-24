@@ -42,11 +42,15 @@ topics:
 # TF 配置
 # =============================================================================
 tf:
-  source_frame: "base_link"       # TurtleBot1 机体坐标系
+  source_frame: "base_footprint"  # TurtleBot1 机体坐标系 (TurtleBot 使用 base_footprint)
   target_frame: "odom"            # 里程计坐标系
   timeout_ms: 50                  # TF 查询超时 (适当放宽)
   buffer_warmup_timeout_sec: 5.0  # TF buffer 预热超时
   buffer_warmup_interval_sec: 0.2 # TF buffer 预热检查间隔
+  expected_source_frames:         # 预期的源坐标系列表
+    - "base_footprint"
+    - "base_link"
+    - ""
 
 # =============================================================================
 # 超时配置 (适应 TurtleBot1 较低传感器频率 + 1Hz 轨迹输出)

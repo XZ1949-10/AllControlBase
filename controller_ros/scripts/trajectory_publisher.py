@@ -146,7 +146,7 @@ class TrajectoryPublisher:
         # Header
         msg.header = Header()
         msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = "base_link"  # 差速车使用 base_link 坐标系
+        msg.header.frame_id = "base_footprint"  # TurtleBot 使用 base_footprint 坐标系
         
         # 轨迹模式
         msg.mode = mode
@@ -214,7 +214,7 @@ class StopTrajectoryPublisher:
         msg = LocalTrajectoryV4()
         msg.header = Header()
         msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = "base_link"
+        msg.header.frame_id = "base_footprint"  # TurtleBot 使用 base_footprint 坐标系
         msg.mode = MODE_STOP
         msg.points = [Point(x=0.0, y=0.0, z=0.0)]
         msg.velocities_flat = []

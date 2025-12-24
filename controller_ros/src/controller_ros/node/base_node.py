@@ -115,6 +115,21 @@ class ControllerNodeBase(ABC):
         # 5. 设置诊断回调
         self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
     
+    def _notify_odom_received(self) -> None:
+        """通知收到里程计数据（更新超时监控）"""
+        if self._controller_bridge is not None:
+            self._controller_bridge.notify_odom_received()
+    
+    def _notify_trajectory_received(self) -> None:
+        """通知收到轨迹数据（更新超时监控）"""
+        if self._controller_bridge is not None:
+            self._controller_bridge.notify_trajectory_received()
+    
+    def _notify_imu_received(self) -> None:
+        """通知收到 IMU 数据（更新超时监控）"""
+        if self._controller_bridge is not None:
+            self._controller_bridge.notify_imu_received()
+    
     def _on_clock_jump(self, event) -> None:
         """
         时钟跳变回调

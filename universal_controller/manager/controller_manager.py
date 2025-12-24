@@ -371,11 +371,13 @@ class ControllerManager:
         Note:
             超时检测基于数据接收时间（单调时钟），而非消息时间戳。
             这确保了超时检测不受系统时间跳变影响。
+            
+            重要：update_odom/trajectory/imu 应该在数据实际接收时调用，
+            而不是在控制循环中调用。这里只调用 check() 检查超时状态。
         """
-        self.timeout_monitor.update_odom()
-        self.timeout_monitor.update_trajectory()
-        if has_imu:
-            self.timeout_monitor.update_imu()
+        # 注意：不再在这里调用 update_xxx()，这些应该在数据接收时调用
+        # 保留这些调用是为了向后兼容，但实际上应该由外部调用者负责
+        # 在 ROS 节点中，应该在回调函数中调用 notify_xxx_received()
         return self.timeout_monitor.check()
     
     def _update_state_estimation(self, odom: Odometry, imu: Optional[Imu],

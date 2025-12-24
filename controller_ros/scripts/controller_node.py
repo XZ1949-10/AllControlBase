@@ -299,14 +299,17 @@ class ControllerNodeROS1(ControllerNodeBase):
     def _odom_callback(self, msg: RosOdometry):
         """里程计回调"""
         self._data_manager.update_odom(msg)
+        self._notify_odom_received()  # 通知超时监控
     
     def _imu_callback(self, msg: RosImu):
         """IMU 回调"""
         self._data_manager.update_imu(msg)
+        self._notify_imu_received()  # 通知超时监控
     
     def _traj_callback(self, msg: LocalTrajectoryV4):
         """轨迹回调"""
         self._data_manager.update_trajectory(msg)
+        self._notify_trajectory_received()  # 通知超时监控
     
     def _emergency_stop_callback(self, msg: Empty):
         """紧急停止回调"""
