@@ -32,17 +32,12 @@ class TimeoutMonitor:
         self._last_imu_time: Optional[float] = None
         self._traj_timeout_start: Optional[float] = None
     
-    def update_odom(self, stamp: float) -> None:
+    def update_odom(self) -> None:
         """
-        更新 odom 时间戳
-        
-        Args:
-            stamp: 消息时间戳（秒）
-                   - 用于计算消息延迟（如果启用）
-                   - 内部超时检测使用接收时间（单调时钟），不受系统时间跳变影响
+        更新 odom 接收时间
         
         Note:
-            超时检测基于接收时间而非消息时间戳，原因：
+            超时检测基于接收时间（单调时钟），而非消息时间戳，原因：
             1. 消息时间戳可能受系统时间同步影响
             2. 接收时间更能反映实际的数据新鲜度
             3. 使用单调时钟避免时间跳变导致的误判
@@ -52,12 +47,12 @@ class TimeoutMonitor:
         if self._startup_time is None:
             self._startup_time = receive_time
     
-    def update_trajectory(self, stamp: float) -> None:
+    def update_trajectory(self) -> None:
         """
-        更新轨迹时间戳
+        更新轨迹接收时间
         
-        Args:
-            stamp: 消息时间戳（秒），参见 update_odom 的说明
+        Note:
+            参见 update_odom 的说明
         """
         receive_time = get_monotonic_time()
         self._last_traj_time = receive_time
@@ -65,12 +60,12 @@ class TimeoutMonitor:
         if self._startup_time is None:
             self._startup_time = receive_time
     
-    def update_imu(self, stamp: float) -> None:
+    def update_imu(self) -> None:
         """
-        更新 IMU 时间戳
+        更新 IMU 接收时间
         
-        Args:
-            stamp: 消息时间戳（秒），参见 update_odom 的说明
+        Note:
+            参见 update_odom 的说明
         """
         receive_time = get_monotonic_time()
         self._last_imu_time = receive_time

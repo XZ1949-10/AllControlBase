@@ -191,6 +191,14 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
                           f'一致性检查低速阈值 ({consistency_low_speed}) 与轨迹低速阈值 ({traj_low_speed}) 不一致。'
                           f'建议移除 consistency.low_speed_thresh 配置，统一使用 trajectory.low_speed_thresh'))
     
+    # Transform 配置一致性检查
+    fallback_duration = get_config_value(config, 'transform.fallback_duration_limit_ms')
+    fallback_critical = get_config_value(config, 'transform.fallback_critical_limit_ms')
+    if _is_numeric(fallback_duration) and _is_numeric(fallback_critical):
+        if fallback_duration > fallback_critical:
+            errors.append(('transform.fallback_duration_limit_ms', 
+                          f'TF2 降级警告阈值 ({fallback_duration}ms) 不应大于临界阈值 ({fallback_critical}ms)'))
+    
     return errors
 
 

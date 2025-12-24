@@ -156,14 +156,6 @@ class ControllerManager:
         """
         self._diagnostics_publisher.add_callback(callback)
     
-    def publish_command(self, cmd: ControlOutput) -> None:
-        """
-        发布控制命令到 ROS 话题
-        
-        在 ROS 环境下发布到 /cmd_unified
-        """
-        self._diagnostics_publisher.publish_command(cmd)
-    
     def get_last_published_diagnostics(self) -> Optional[Dict[str, Any]]:
         """获取最后发布的诊断数据"""
         return self._diagnostics_publisher.get_last_published()
@@ -292,7 +284,7 @@ class ControllerManager:
         actual_dt, skip_prediction = self._compute_time_step(current_time)
         
         # 2. 超时监控
-        timeout_status = self._update_timeout_monitor(odom, trajectory, imu)
+        timeout_status = self._update_timeout_monitor(imu is not None)
         
         # 3. 状态估计
         state, state_output = self._update_state_estimation(
@@ -369,13 +361,21 @@ class ControllerManager:
         self._last_update_time = current_time
         return actual_dt, skip_prediction
     
-    def _update_timeout_monitor(self, odom: Odometry, trajectory: Trajectory,
-                                imu: Optional[Imu]) -> TimeoutStatus:
-        """更新超时监控"""
-        self.timeout_monitor.update_odom(odom.header.stamp)
-        self.timeout_monitor.update_trajectory(trajectory.header.stamp)
-        if imu is not None:
-            self.timeout_monitor.update_imu(imu.header.stamp)
+    def _update_timeout_monitor(self, has_imu: bool) -> TimeoutStatus:
+        """
+        更新超时监控
+        
+        Args:
+            has_imu: 是否有 IMU 数据
+        
+        Note:
+            超时检测基于数据接收时间（单调时钟），而非消息时间戳。
+            这确保了超时检测不受系统时间跳变影响。
+        """
+        self.timeout_monitor.update_odom()
+        self.timeout_monitor.update_trajectory()
+        if has_imu:
+            self.timeout_monitor.update_imu()
         return self.timeout_monitor.check()
     
     def _update_state_estimation(self, odom: Odometry, imu: Optional[Imu],

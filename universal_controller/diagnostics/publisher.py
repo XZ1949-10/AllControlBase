@@ -1,11 +1,15 @@
 """
 诊断发布器
 
-负责诊断数据的收集、格式化和发布。
+负责诊断数据的收集、格式化和通过回调发布。
 从 ControllerManager 中抽离，实现单一职责原则。
+
+职责说明：
+- DiagnosticsPublisher: 构建诊断数据并通过回调机制传递
+- ROS 消息发布由 controller_ros/io/publishers.py 中的 PublisherManager 负责
+- 这种设计使 universal_controller 保持 ROS 无关性
 """
 from typing import Dict, Any, Optional, Callable, List
-import json
 import numpy as np
 import logging
 import threading
@@ -15,37 +19,8 @@ from ..core.data_types import (
     TimeoutStatus, ConsistencyResult, MPCHealthStatus
 )
 from ..core.enums import ControllerState
-from ..core.ros_compat import ROS_AVAILABLE
 
 logger = logging.getLogger(__name__)
-
-
-def _numpy_json_encoder(obj: Any) -> Any:
-    """
-    自定义 JSON 编码器处理 numpy 类型
-    
-    用于将包含 numpy 类型的字典序列化为 JSON。
-    
-    Args:
-        obj: 需要编码的对象
-    
-    Returns:
-        JSON 可序列化的对象
-    
-    Raises:
-        TypeError: 如果对象无法序列化
-    """
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, (np.integer,)):
-        return int(obj)
-    elif isinstance(obj, (np.floating,)):
-        return float(obj)
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    elif isinstance(obj, (np.complex64, np.complex128)):
-        return {'real': float(obj.real), 'imag': float(obj.imag)}
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class DiagnosticsPublisher:
@@ -54,13 +29,18 @@ class DiagnosticsPublisher:
     
     负责：
     - 收集各模块的诊断数据
-    - 构建 DiagnosticsV2 消息
-    - 通过 ROS 话题或回调函数发布
+    - 构建 DiagnosticsV2 数据结构
+    - 通过回调函数传递诊断数据
     - 维护发布历史
+    
+    设计说明：
+    - 本类不直接进行 ROS 发布，保持 universal_controller 的 ROS 无关性
+    - ROS 消息发布由 controller_ros/io/publishers.py 中的 PublisherManager 负责
+    - 通过回调机制将诊断数据传递给 ROS 层
     
     使用示例:
         publisher = DiagnosticsPublisher()
-        publisher.set_callback(my_callback)
+        publisher.add_callback(my_callback)
         publisher.publish(...)
     """
     
@@ -70,8 +50,8 @@ class DiagnosticsPublisher:
         初始化诊断发布器
         
         Args:
-            diagnostics_topic: 诊断话题名称
-            cmd_topic: 控制命令话题名称
+            diagnostics_topic: 诊断话题名称（用于日志和状态查询）
+            cmd_topic: 控制命令话题名称（用于日志和状态查询）
         """
         self._diagnostics_topic = diagnostics_topic
         self._cmd_topic = cmd_topic
@@ -84,19 +64,8 @@ class DiagnosticsPublisher:
         self._callback_fail_counts: Dict[int, int] = {}  # callback id -> fail count
         self._callback_max_failures = 5  # 连续失败超过此次数后移除回调
         
-        # ROS Publishers
-        self._diagnostics_pub: Optional[Any] = None
-        self._cmd_pub: Optional[Any] = None
-        
         # 发布历史
         self._last_published: Optional[Dict[str, Any]] = None
-        
-        # 发布失败警告标志（避免重复警告）
-        self._cmd_publish_warned: bool = False
-        self._diag_publish_warned: bool = False
-        
-        # 初始化 ROS Publishers
-        self._init_ros_publishers()
     
     @property
     def cmd_topic(self) -> str:
@@ -107,22 +76,6 @@ class DiagnosticsPublisher:
     def diagnostics_topic(self) -> str:
         """获取诊断话题名称"""
         return self._diagnostics_topic
-    
-    def _init_ros_publishers(self) -> None:
-        """初始化 ROS Publishers
-        
-        注意: 在 ROS 环境下，诊断发布由 controller_ros 的 controller_node.py 处理，
-        使用 DiagnosticsV2 消息类型。这里不再创建发布器，避免话题类型冲突。
-        
-        如果需要在非 ROS 环境下使用 ROS 发布功能，可以通过 enable_ros_publish=True 参数启用。
-        """
-        # 在 ROS 环境下，不自动创建发布器
-        # 诊断发布由 controller_ros/controller_node.py 处理 (使用 DiagnosticsV2)
-        # 这里只使用回调机制传递数据
-        self._diagnostics_pub = None
-        self._cmd_pub = None
-        
-        logger.debug("DiagnosticsPublisher: ROS publishers disabled (handled by controller_node)")
     
     def add_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """
@@ -138,19 +91,6 @@ class DiagnosticsPublisher:
             if callback not in self._callbacks:
                 self._callbacks.append(callback)
                 self._callback_fail_counts[id(callback)] = 0
-    
-    def remove_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
-        """移除诊断回调函数（线程安全）"""
-        with self._callbacks_lock:
-            if callback in self._callbacks:
-                self._callbacks.remove(callback)
-                self._callback_fail_counts.pop(id(callback), None)
-    
-    def clear_callbacks(self) -> None:
-        """清除所有回调函数（线程安全）"""
-        with self._callbacks_lock:
-            self._callbacks.clear()
-            self._callback_fail_counts.clear()
     
     def remove_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """移除诊断回调函数（线程安全）"""
@@ -239,37 +179,6 @@ class DiagnosticsPublisher:
                     if callback in self._callbacks:
                         self._callbacks.remove(callback)
                         self._callback_fail_counts.pop(id(callback), None)
-        
-        # ROS 发布
-        self._publish_to_ros(diag_dict)
-    
-    def publish_command(self, cmd: ControlOutput) -> None:
-        """
-        发布控制命令到 ROS 话题
-        
-        Args:
-            cmd: 控制命令
-        """
-        if self._cmd_pub is None:
-            return
-        
-        try:
-            from geometry_msgs.msg import Twist
-            
-            twist = Twist()
-            twist.linear.x = cmd.vx
-            twist.linear.y = cmd.vy
-            twist.linear.z = cmd.vz
-            twist.angular.z = cmd.omega
-            
-            self._cmd_pub.publish(twist)
-        except Exception as e:
-            # 首次失败记录 warning，后续使用 debug 避免日志泛滥
-            if not self._cmd_publish_warned:
-                logger.warning(f"Command publish failed (subsequent failures will be debug): {e}")
-                self._cmd_publish_warned = True
-            else:
-                logger.debug(f"Command publish failed: {e}")
     
     def get_last_published(self) -> Optional[Dict[str, Any]]:
         """获取最后发布的诊断数据"""
@@ -349,22 +258,3 @@ class DiagnosticsPublisher:
             # 过渡进度
             transition_progress=transition_progress
         )
-    
-    def _publish_to_ros(self, diag_dict: Dict[str, Any]) -> None:
-        """发布到 ROS 话题"""
-        if self._diagnostics_pub is None:
-            return
-        
-        try:
-            from std_msgs.msg import String
-            
-            msg = String()
-            msg.data = json.dumps(diag_dict, default=_numpy_json_encoder)
-            self._diagnostics_pub.publish(msg)
-        except Exception as e:
-            # 首次失败记录 warning，后续使用 debug 避免日志泛滥
-            if not self._diag_publish_warned:
-                logger.warning(f"Diagnostics publish failed (subsequent failures will be debug): {e}")
-                self._diag_publish_warned = True
-            else:
-                logger.debug(f"Diagnostics publish failed: {e}")

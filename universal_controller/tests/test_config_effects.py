@@ -140,7 +140,7 @@ def test_odom_timeout_config():
         monitor = TimeoutMonitor(config)
         
         # 更新一次
-        monitor.update_odom(time.time())
+        monitor.update_odom()
         
         # 等待超时
         time.sleep(timeout_ms / 1000 + 0.05)
@@ -177,7 +177,7 @@ def test_trajectory_grace_config():
         config['watchdog']['startup_grace_ms'] = 10
         
         monitor = TimeoutMonitor(config)
-        monitor.update_trajectory(time.time())
+        monitor.update_trajectory()
         
         # 等待超时但在宽限期内
         time.sleep(0.06)

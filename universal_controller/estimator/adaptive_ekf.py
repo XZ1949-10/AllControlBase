@@ -2,11 +2,14 @@
 from typing import Dict, Any, Optional, List
 from collections import deque
 import numpy as np
+import logging
 
 from ..core.interfaces import IStateEstimator
 from ..core.data_types import EstimatorOutput, Odometry, Imu
 from ..config.default_config import PLATFORM_CONFIG
 from ..core.ros_compat import euler_from_quaternion, get_monotonic_time, normalize_angle
+
+logger = logging.getLogger(__name__)
 
 
 # 四元数有效性检查常量

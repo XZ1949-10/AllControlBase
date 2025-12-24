@@ -10,6 +10,7 @@
 """
 from typing import Dict, Any, Optional, Callable
 import math
+import threading
 
 
 def safe_float(val: Any, default: float = 0.0) -> float:
@@ -84,6 +85,10 @@ class DiagnosticsThrottler:
         立即发布一次诊断信息。这通过将 _counter 初始化为 publish_rate - 1
         实现，使得首次 _counter += 1 后满足发布条件。
     
+    线程安全性:
+        本类是线程安全的。虽然在当前架构下（控制回调使用 MutuallyExclusiveCallbackGroup）
+        不会出现并发调用，但为了代码健壮性和未来可能的架构变化，使用锁保护状态。
+    
     供 ROS1 和 ROS2 节点共享使用。
     """
     
@@ -98,6 +103,7 @@ class DiagnosticsThrottler:
             _counter 初始化为 publish_rate - 1，这样首次调用 should_publish()
             时 _counter 会递增到 publish_rate，满足发布条件，实现"首次立即发布"。
         """
+        self._lock = threading.Lock()
         self._publish_rate = max(1, publish_rate)
         # 初始化为 publish_rate - 1，确保首次调用时立即发布
         # 首次调用: _counter += 1 -> _counter == publish_rate -> 满足发布条件
@@ -118,31 +124,34 @@ class DiagnosticsThrottler:
         # 获取当前状态
         current_state = diag.get('state', 0)
         
-        # 检测状态变化
-        state_changed = (
-            self._last_state is not None and 
-            current_state != self._last_state
-        )
-        self._last_state = current_state
-        
-        # 更新计数器
-        self._counter += 1
-        
-        # 判断是否发布
-        if force or state_changed or self._counter >= self._publish_rate:
-            self._counter = 0
-            return True
-        
-        return False
+        with self._lock:
+            # 检测状态变化
+            state_changed = (
+                self._last_state is not None and 
+                current_state != self._last_state
+            )
+            self._last_state = current_state
+            
+            # 更新计数器
+            self._counter += 1
+            
+            # 判断是否发布
+            if force or state_changed or self._counter >= self._publish_rate:
+                self._counter = 0
+                return True
+            
+            return False
     
     def get_current_state(self) -> Optional[int]:
         """获取当前状态（用于状态话题发布）"""
-        return self._last_state
+        with self._lock:
+            return self._last_state
     
     def reset(self) -> None:
         """重置状态"""
-        self._counter = self._publish_rate - 1
-        self._last_state = None
+        with self._lock:
+            self._counter = self._publish_rate - 1
+            self._last_state = None
 
 
 def fill_diagnostics_msg(msg: Any, diag: Dict[str, Any], 

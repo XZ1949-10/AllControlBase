@@ -2,7 +2,127 @@
 
 ## 重构日期: 2024-12-24 (更新)
 
-## 最新更新: 配置传递链路修复
+## 最新更新: 多角度 Bug 分析与修复 (第二轮)
+
+### 1. MPC 权重命名修正
+
+**问题**: `control_v` 和 `control_omega` 命名具有误导性，实际控制的是加速度而非速度。
+
+**解决方案**: 
+- 重命名为 `control_accel` 和 `control_alpha`
+- 保留旧名称作为向后兼容别名
+- 添加验证规则
+
+**修改文件**:
+- `universal_controller/config/mpc_config.py` - 添加新命名和验证规则
+- `universal_controller/tracker/mpc_controller.py` - 使用新命名，保持向后兼容
+
+### 2. AdaptiveEKF 缺少 logging 导入
+
+**问题**: `adaptive_ekf.py` 使用了 `logger` 但没有导入 `logging` 模块。
+
+**解决方案**: 添加 `import logging` 和 `logger = logging.getLogger(__name__)`
+
+**修改文件**:
+- `universal_controller/estimator/adaptive_ekf.py`
+
+### 3. MPC 控制器资源管理增强
+
+**问题**: ACADOS 求解器资源管理不够完善，可能导致资源泄漏。
+
+**解决方案**:
+- 添加 `__del__` 方法确保对象销毁时释放资源
+- 改进 `_initialize_solver` 的错误处理，失败时清理部分创建的资源
+- `shutdown()` 方法同时释放 `_ocp` 对象
+
+**修改文件**:
+- `universal_controller/tracker/mpc_controller.py`
+
+### 4. Transform 配置验证规则
+
+**问题**: 缺少坐标变换配置的验证规则。
+
+**解决方案**: 添加 Transform 配置的范围验证和逻辑一致性检查。
+
+**修改文件**:
+- `universal_controller/config/modules_config.py` - 添加 Transform 验证规则
+- `universal_controller/config/validation.py` - 添加 Transform 逻辑一致性检查
+
+### 5. 状态机 MPC 历史清空逻辑
+
+**问题**: 之前的修改导致 MPC 历史在状态转换时不清空，与测试期望不符。
+
+**分析**: 状态转换意味着进入新的监控周期，旧的历史数据不应影响新状态的判断。
+
+**解决方案**: 恢复在所有状态转换时清空 MPC 历史的行为。
+
+**修改文件**:
+- `universal_controller/safety/state_machine.py`
+
+---
+
+## 之前的更新: 多角度 Bug 修复
+
+### 1. ROS2 节点缺少紧急停止订阅 (安全 Bug)
+
+**问题**: ROS2 版本的 `controller_node.py` 缺少紧急停止话题订阅，而 ROS1 版本有此功能。
+
+**影响**: ROS2 环境下无法通过发布 `/controller/emergency_stop` 话题触发紧急停止。
+
+**解决方案**: 在 ROS2 节点的 `_create_subscriptions()` 方法中添加紧急停止话题订阅和回调。
+
+**修改文件**:
+- `controller_ros/src/controller_ros/node/controller_node.py` - 添加紧急停止订阅和回调
+
+### 2. TimeoutMonitor 接口优化
+
+**问题**: `TimeoutMonitor.update_*()` 方法的 `stamp` 参数实际上被忽略（使用单调时钟），造成 API 混淆。
+
+**设计分析**: 使用单调时钟而非消息时间戳是正确的设计决策：
+1. 消息时间戳可能受系统时间同步影响
+2. 接收时间更能反映实际的数据新鲜度
+3. 使用单调时钟避免时间跳变导致的误判
+
+**解决方案**: 移除未使用的 `stamp` 参数，使接口更清晰。
+
+**修改文件**:
+- `universal_controller/safety/timeout_monitor.py` - 移除 `stamp` 参数
+- `universal_controller/manager/controller_manager.py` - 更新调用方式
+- `universal_controller/tests/test_components.py` - 更新测试
+- `universal_controller/tests/test_config_effects.py` - 更新测试
+
+### 3. DiagnosticsThrottler 线程安全增强
+
+**问题**: `DiagnosticsThrottler` 的计数器操作非原子，在多线程环境下可能出现竞态条件。
+
+**分析**: 当前架构下（控制回调使用 `MutuallyExclusiveCallbackGroup`）不会出现并发调用，但为了代码健壮性添加线程保护。
+
+**解决方案**: 添加 `threading.Lock` 保护状态访问。
+
+**修改文件**:
+- `controller_ros/src/controller_ros/utils/diagnostics_publisher.py` - 添加线程锁
+
+### 4. ROS2 IMU 话题处理与 ROS1 对齐
+
+**问题**: ROS2 节点始终订阅 IMU 话题，而 ROS1 节点在话题为空时跳过订阅。
+
+**解决方案**: 统一 ROS2 节点的 IMU 订阅逻辑，空字符串时跳过订阅。
+
+**修改文件**:
+- `controller_ros/src/controller_ros/node/controller_node.py` - 添加 IMU 话题空检查
+
+### 5. 配置文件文档完善
+
+**问题**: `controller_params.yaml` 缺少负数超时阈值和空话题的说明。
+
+**解决方案**: 添加详细的配置说明注释。
+
+**修改文件**:
+- `controller_ros/config/controller_params.yaml` - 添加配置说明
+
+---
+
+## 之前的更新: 配置传递链路修复
 
 ### 1. 修复超时监控器负数阈值处理
 

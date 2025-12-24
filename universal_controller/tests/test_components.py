@@ -246,21 +246,19 @@ def test_timeout_monitor():
     config = DEFAULT_CONFIG.copy()
     monitor = TimeoutMonitor(config)
     
-    current_time = time.time()
-    
     # 初始状态应在启动宽限期
-    status = monitor.check(current_time)
+    status = monitor.check()
     assert status.in_startup_grace == True
     
     # 更新 odom
-    monitor.update_odom(current_time)
+    monitor.update_odom()
     
     # 等待启动宽限期过后
     time.sleep(0.01)  # 模拟时间流逝
     
     # 重置测试
     monitor.reset()
-    status = monitor.check(time.time())
+    status = monitor.check()
     assert status.in_startup_grace == True
     
     print("✓ test_timeout_monitor passed")
@@ -281,7 +279,7 @@ def test_timeout_monitor_disabled_timeout():
     monitor = TimeoutMonitor(config)
     
     # 更新 odom 以启动监控器
-    monitor.update_odom(time.time())
+    monitor.update_odom()
     
     # 等待启动宽限期过后
     time.sleep(0.02)
@@ -297,7 +295,7 @@ def test_timeout_monitor_disabled_timeout():
     config2['watchdog']['startup_grace_ms'] = 10
     
     monitor2 = TimeoutMonitor(config2)
-    monitor2.update_trajectory(time.time())  # 只更新轨迹，不更新 odom
+    monitor2.update_trajectory()  # 只更新轨迹，不更新 odom
     
     time.sleep(0.02)
     

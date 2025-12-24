@@ -24,7 +24,17 @@ except ImportError:
 
 
 class MPCController(ITrajectoryTracker):
-    """MPC 轨迹跟踪控制器"""
+    """MPC 轨迹跟踪控制器
+    
+    资源管理说明:
+    - ACADOS 求解器在 __init__ 中初始化
+    - 调用 shutdown() 或对象销毁时释放资源
+    - set_horizon() 会重新初始化求解器，有节流机制防止频繁调用
+    
+    线程安全性:
+    - compute() 方法不是线程安全的，应在单线程中调用
+    - 如需多线程访问，调用者应在外部加锁
+    """
     
     def __init__(self, config: Dict[str, Any], platform_config: Dict[str, Any]):
         mpc_config = config.get('mpc', config)
@@ -46,12 +56,17 @@ class MPCController(ITrajectoryTracker):
         self.is_omni = self.platform_type == PlatformType.OMNI
         
         # MPC 权重
+        # 优先使用新命名，向后兼容旧命名
         mpc_weights = mpc_config.get('weights', {})
         self.Q_pos = mpc_weights.get('position', 10.0)
         self.Q_vel = mpc_weights.get('velocity', 1.0)
         self.Q_heading = mpc_weights.get('heading', 5.0)
-        self.R_v = mpc_weights.get('control_v', 0.1)
-        self.R_omega = mpc_weights.get('control_omega', 0.1)
+        # 控制输入权重：优先使用新命名 control_accel/control_alpha
+        # 向后兼容旧命名 control_v/control_omega
+        self.R_accel = mpc_weights.get('control_accel', 
+                                        mpc_weights.get('control_v', 0.1))
+        self.R_alpha = mpc_weights.get('control_alpha', 
+                                        mpc_weights.get('control_omega', 0.1))
         
         # Fallback 求解器参数
         fallback_config = mpc_config.get('fallback', {})
@@ -92,11 +107,20 @@ class MPCController(ITrajectoryTracker):
         )
     
     def _initialize_solver(self) -> None:
-        """初始化 ACADOS 求解器"""
+        """
+        初始化 ACADOS 求解器
+        
+        如果初始化失败，会清理所有已创建的资源，
+        并将 _is_initialized 设为 False，后续调用会使用 fallback 求解器。
+        """
         if not ACADOS_AVAILABLE:
             logger.info("ACADOS not available, using fallback mode")
             self._is_initialized = False
             return
+        
+        # 临时变量，用于在失败时清理
+        ocp = None
+        solver = None
         
         try:
             ocp = AcadosOcp()
@@ -179,7 +203,8 @@ class MPCController(ITrajectoryTracker):
             Q = np.diag([self.Q_pos, self.Q_pos, self.Q_pos,
                         self.Q_vel, self.Q_vel, self.Q_vel,
                         self.Q_heading, 0.1])
-            R = np.diag([self.R_v, self.R_v, self.R_v, self.R_omega])
+            # R 矩阵：控制输入权重 [ax, ay, az, alpha]
+            R = np.diag([self.R_accel, self.R_accel, self.R_accel, self.R_alpha])
             
             ocp.cost.cost_type = 'LINEAR_LS'
             ocp.cost.cost_type_e = 'LINEAR_LS'
@@ -241,7 +266,11 @@ class MPCController(ITrajectoryTracker):
             
         except Exception as e:
             logger.error(f"ACADOS initialization failed: {e}")
+            # 清理可能已创建的资源
+            self._solver = None
+            self._ocp = None
             self._is_initialized = False
+            gc.collect()  # 尝试回收任何部分创建的资源
 
     
     def _solve_with_acados(self, state: np.ndarray, trajectory: Trajectory,
@@ -559,9 +588,22 @@ class MPCController(ITrajectoryTracker):
         if self._solver is not None:
             self._solver = None
             gc.collect()  # 强制垃圾回收，确保 ACADOS 资源及时释放
+        self._ocp = None  # 同时释放 OCP 对象
         self._is_initialized = False
         # 重置内部状态
         self._last_cmd = None
         self._last_solve_time_ms = 0.0
         self._last_kkt_residual = 0.0
         self._last_condition_number = 1.0
+    
+    def __del__(self) -> None:
+        """析构函数，确保资源释放"""
+        # 注意：__del__ 中不应该抛出异常
+        # 也不应该依赖其他可能已被销毁的对象
+        try:
+            if hasattr(self, '_solver') and self._solver is not None:
+                self._solver = None
+            if hasattr(self, '_ocp') and self._ocp is not None:
+                self._ocp = None
+        except Exception:
+            pass  # 忽略析构时的异常

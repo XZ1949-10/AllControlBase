@@ -98,6 +98,7 @@ class ControllerNode(ControllerNodeBase, Node):
         """创建所有订阅"""
         from nav_msgs.msg import Odometry as RosOdometry
         from sensor_msgs.msg import Imu as RosImu
+        from std_msgs.msg import Empty
         
         # 里程计订阅
         odom_topic = self._topics.get('odom', '/odom')
@@ -110,16 +111,20 @@ class ControllerNode(ControllerNodeBase, Node):
         )
         self.get_logger().info(f"Subscribed to odom: {odom_topic}")
         
-        # IMU 订阅
-        imu_topic = self._topics.get('imu', '/imu')
-        self._imu_sub = self.create_subscription(
-            RosImu,
-            imu_topic,
-            self._imu_callback,
-            10,
-            callback_group=self._sensor_cb_group
-        )
-        self.get_logger().info(f"Subscribed to imu: {imu_topic}")
+        # IMU 订阅 - 仅在配置了 IMU topic 时创建
+        imu_topic = self._topics.get('imu', '')
+        if imu_topic:
+            self._imu_sub = self.create_subscription(
+                RosImu,
+                imu_topic,
+                self._imu_callback,
+                10,
+                callback_group=self._sensor_cb_group
+            )
+            self.get_logger().info(f"Subscribed to imu: {imu_topic}")
+        else:
+            self._imu_sub = None
+            self.get_logger().info("IMU topic not configured, skipping IMU subscription")
         
         # 轨迹订阅
         traj_topic = self._topics.get('trajectory', '/nn/local_trajectory')
@@ -136,12 +141,35 @@ class ControllerNode(ControllerNodeBase, Node):
             self.get_logger().info(f"Subscribed to trajectory: {traj_topic}")
         except ImportError:
             self.get_logger().error(
-                f"LocalTrajectoryV4 message not available! "
-                f"Controller will not work without trajectory data. "
-                f"Please build the controller_ros package with message generation."
+                "=" * 60 + "\n"
+                "CRITICAL: LocalTrajectoryV4 message type not available!\n"
+                "Controller cannot work without trajectory data.\n"
+                "\n"
+                "To fix this issue:\n"
+                "1. Ensure controller_ros package is built with colcon:\n"
+                "   cd ~/your_ws && colcon build --packages-select controller_ros\n"
+                "2. Source the workspace:\n"
+                "   source ~/your_ws/install/setup.bash\n"
+                "3. Restart the controller node\n"
+                "\n"
+                "If the problem persists, check:\n"
+                "- CMakeLists.txt has rosidl_generate_interfaces() for msg files\n"
+                "- package.xml has rosidl_default_generators dependency\n"
+                "=" * 60
             )
             self._traj_sub = None
             self._traj_msg_available = False
+        
+        # 紧急停止话题订阅
+        emergency_stop_topic = self._topics.get('emergency_stop', '/controller/emergency_stop')
+        self._emergency_stop_sub = self.create_subscription(
+            Empty,
+            emergency_stop_topic,
+            self._emergency_stop_callback,
+            1,  # 低队列深度，确保及时响应
+            callback_group=self._sensor_cb_group
+        )
+        self.get_logger().info(f"Subscribed to emergency_stop: {emergency_stop_topic}")
     
     # ==================== 订阅回调 ====================
     
@@ -156,6 +184,10 @@ class ControllerNode(ControllerNodeBase, Node):
     def _traj_callback(self, msg):
         """轨迹回调"""
         self._data_manager.update_trajectory(msg)
+    
+    def _emergency_stop_callback(self, msg):
+        """紧急停止回调"""
+        self._handle_emergency_stop()
     
     # ==================== 控制循环 ====================
     

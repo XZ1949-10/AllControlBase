@@ -103,15 +103,25 @@ class StateMachine:
         return self._stop_requested
     
     def _reset_all_counters(self) -> None:
-        """重置所有计数器"""
+        """重置所有恢复计数器和 MPC 历史"""
         self.alpha_recovery_count = 0
         self.mpc_recovery_count = 0
+        # 清空 MPC 历史：状态转换意味着进入新的监控周期
+        # 旧的历史数据不应影响新状态的判断
+        self._mpc_success_history.clear()
+    
+    def _reset_mpc_history(self) -> None:
+        """重置 MPC 成功历史（显式调用）"""
         self._mpc_success_history.clear()
     
     def _transition_to(self, new_state: ControllerState) -> ControllerState:
         """执行状态转换"""
+        old_state = self.state
         self.state = new_state
         self._reset_all_counters()
+        # 注意：_reset_all_counters 已经清空了 MPC 历史
+        # 不需要额外的条件判断
+        
         return new_state
     
     def _check_mpc_should_switch_to_backup(self, mpc_success: bool) -> bool:
@@ -354,5 +364,6 @@ class StateMachine:
         """重置状态机"""
         self.state = ControllerState.INIT
         self._reset_all_counters()
+        self._reset_mpc_history()  # 完全重置时清空历史
         self._stopping_start_time = None
         self._stop_requested = False

@@ -78,8 +78,9 @@ mpc:
     position: 10.0                # 位置跟踪权重
     velocity: 1.0                 # 速度跟踪权重
     heading: 5.0                  # 航向跟踪权重
-    control_v: 0.2                # 速度控制平滑权重 (稍高，减少抖动)
-    control_omega: 0.2            # 角速度控制平滑权重
+    # 控制输入权重 - 惩罚加速度/角加速度，实现平滑控制
+    control_accel: 0.2            # 加速度控制权重 (稍高，减少抖动)
+    control_alpha: 0.2            # 角加速度控制权重
   
   # ACADOS 高性能求解器配置 (必需)
   solver:

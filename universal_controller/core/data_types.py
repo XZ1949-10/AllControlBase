@@ -283,7 +283,17 @@ class ControlOutput:
 
 @dataclass
 class ConsistencyResult:
-    """一致性检查结果"""
+    """一致性检查结果
+    
+    Attributes:
+        alpha: 一致性加权平均值，用于调整 soft 轨迹的权重
+        kappa_consistency: 曲率一致性 [0, 1]
+        v_dir_consistency: 速度方向一致性 [0, 1]
+        temporal_smooth: 时序平滑度 [0, 1]
+        should_disable_soft: 是否应该禁用 soft 模式
+        data_valid: 数据是否有效（无 NaN、无异常值）
+                   注意：数据不足不算无效，只是某些指标不参与计算
+    """
     alpha: float
     kappa_consistency: float
     v_dir_consistency: float

@@ -52,39 +52,37 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         soft_velocities = trajectory.velocities
         
         # 计算各维度一致性
-        kappa_hard, kappa_hard_valid = self._compute_curvature_from_points(trajectory.points)
-        kappa_soft, kappa_soft_valid = self._compute_curvature_from_velocities(
+        # 返回值: (value, is_sufficient) - is_sufficient 表示数据是否充足
+        kappa_hard, kappa_hard_sufficient = self._compute_curvature_from_points(trajectory.points)
+        kappa_soft, kappa_soft_sufficient = self._compute_curvature_from_velocities(
             soft_velocities, trajectory.dt_sec)
         
-        if kappa_hard_valid and kappa_soft_valid:
+        if kappa_hard_sufficient and kappa_soft_sufficient:
             kappa_consistency = 1.0 - min(abs(kappa_hard - kappa_soft) / self.kappa_thresh, 1.0)
-            kappa_valid = True
+            kappa_sufficient = True
         else:
-            # 数据无效时使用中性值，但标记为无效
+            # 数据不足时使用中性值
             kappa_consistency = 1.0
-            kappa_valid = False
+            kappa_sufficient = False
         
-        v_dir_consistency, v_dir_valid = self._compute_velocity_direction_consistency(
+        v_dir_consistency, v_dir_sufficient = self._compute_velocity_direction_consistency(
             hard_velocities, soft_velocities)
-        temporal_smooth, temporal_valid = self._compute_temporal_smoothness(soft_velocities)
-        
-        # 数据有效性：只有当所有指标都有效时才认为数据有效
-        data_valid = kappa_valid and v_dir_valid and temporal_valid
+        temporal_smooth, temporal_sufficient = self._compute_temporal_smoothness(soft_velocities)
         
         # 加权几何平均
-        # 当某个指标数据无效时，使用调整后的权重
-        # 无效指标使用 1.0（中性值），不影响其他指标的贡献
-        effective_kappa = kappa_consistency if kappa_valid else 1.0
-        effective_v_dir = v_dir_consistency if v_dir_valid else 1.0
-        effective_temporal = temporal_smooth if temporal_valid else 1.0
+        # 当某个指标数据不足时，使用调整后的权重
+        # 不足的指标使用 1.0（中性值），不影响其他指标的贡献
+        effective_kappa = kappa_consistency if kappa_sufficient else 1.0
+        effective_v_dir = v_dir_consistency if v_dir_sufficient else 1.0
+        effective_temporal = temporal_smooth if temporal_sufficient else 1.0
         
         # 计算有效权重总和
-        effective_w_kappa = self.w_kappa if kappa_valid else 0.0
-        effective_w_velocity = self.w_velocity if v_dir_valid else 0.0
-        effective_w_temporal = self.w_temporal if temporal_valid else 0.0
+        effective_w_kappa = self.w_kappa if kappa_sufficient else 0.0
+        effective_w_velocity = self.w_velocity if v_dir_sufficient else 0.0
+        effective_w_temporal = self.w_temporal if temporal_sufficient else 0.0
         total_effective_weight = effective_w_kappa + effective_w_velocity + effective_w_temporal
         
-        # 如果没有有效数据，返回保守的 alpha 值
+        # 如果没有任何有效数据，返回保守的 alpha 值
         if total_effective_weight < 1e-6:
             # 防御性检查：确保 confidence 是有效数值
             confidence = trajectory.confidence
@@ -97,7 +95,9 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
                 v_dir_consistency=v_dir_consistency,
                 temporal_smooth=temporal_smooth,
                 should_disable_soft=True,  # 数据不足时禁用 soft
-                data_valid=False
+                # data_valid=True: 数据不足不等于数据无效
+                # 只有当数据包含 NaN 或异常值时才设为 False
+                data_valid=True
             )
         
         # 使用有效权重计算 alpha
@@ -111,6 +111,10 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
             (max(effective_v_dir, 1e-6) ** effective_w_velocity) *
             (max(effective_temporal, 1e-6) ** effective_w_temporal)
         ) ** (1.0 / total_effective_weight) * confidence
+        
+        # data_valid: 只有当数据包含 NaN 或异常值时才设为 False
+        # 数据不足（如启动期间）不影响 data_valid
+        data_valid = True
         
         return ConsistencyResult(
             alpha=alpha, kappa_consistency=kappa_consistency,

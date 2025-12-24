@@ -121,6 +121,13 @@ MODULES_VALIDATION_RULES = {
     'consistency.weights.kappa': (0.0, None, '曲率一致性权重'),
     'consistency.weights.velocity': (0.0, None, '速度方向一致性权重'),
     'consistency.weights.temporal': (0.0, None, '时序平滑度权重'),
+    # 坐标变换配置
+    'transform.fallback_duration_limit_ms': (0, 10000, 'TF2 降级持续限制 (ms)'),
+    'transform.fallback_critical_limit_ms': (0, 30000, 'TF2 临界降级限制 (ms)'),
+    'transform.tf2_timeout_ms': (1, 1000, 'TF2 查询超时 (ms)'),
+    'transform.drift_rate': (0.0, 1.0, '漂移率 (米/秒)'),
+    'transform.max_drift_dt': (0.01, 5.0, '漂移估计最大时间间隔 (秒)'),
+    'transform.drift_correction_thresh': (0.0, 1.0, '漂移校正阈值 (米/弧度)'),
     # 过渡配置
     'transition.tau': (0.001, 10.0, '过渡时间常数 (秒)'),
     'transition.max_duration': (0.01, 10.0, '最大过渡时长 (秒)'),
