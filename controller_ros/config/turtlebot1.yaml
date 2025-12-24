@@ -137,6 +137,12 @@ safety:
   v_stop_thresh: 0.05             # 停车速度阈值 (m/s)
   stopping_timeout: 5.0           # 停车超时时间 (秒)
   emergency_decel: 1.0            # 紧急减速度 (m/s²)
+  
+  # 状态机配置 (适应无速度信息的轨迹)
+  state_machine:
+    alpha_disable_thresh: 0.0     # α 禁用阈值 (0 = 禁用此检查，轨迹无速度信息时使用)
+    alpha_recovery_value: 0.0     # α 恢复值 (0 = 不需要 alpha 恢复)
+    alpha_recovery_thresh: 1      # α 恢复计数阈值
 
 # =============================================================================
 # 备份控制器配置 (Pure Pursuit)

@@ -45,7 +45,7 @@ SAFETY_CONFIG = {
     'state_machine': {
         'alpha_recovery_thresh': 5,        # α 恢复计数阈值
         'alpha_recovery_value': 0.3,       # α 恢复值
-        'alpha_disable_thresh': 0.1,       # α 禁用阈值
+        'alpha_disable_thresh': 0.0,       # α 禁用阈值 (0 = 禁用此检查，适用于无速度信息的轨迹)
         'mpc_recovery_thresh': 5,          # MPC 恢复计数阈值
         'mpc_fail_window_size': 10,        # MPC 失败检测滑动窗口大小
         'mpc_fail_thresh': 3,              # 窗口内失败次数阈值
