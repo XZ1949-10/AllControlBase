@@ -509,32 +509,29 @@ class ControllerManager:
                                   consistency: ConsistencyResult,
                                   mpc_cmd: Optional[ControlOutput]) -> ControlOutput:
         """选择控制器输出"""
-        # STOPPING 和 STOPPED 状态：直接输出零速度，不跟踪轨迹
+        # STOPPING 状态：输出零速度，让机器人停下来
         if self._last_state == ControllerState.STOPPING:
-            # 使用 backup_tracker 进行平滑减速
-            if self.backup_tracker:
-                cmd = self.backup_tracker.compute(state, trajectory, consistency)
-                self._last_backup_cmd = cmd.copy()
-            else:
-                cmd = ControlOutput(vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
-            # 强制减速：限制速度不超过当前速度的一半
-            current_v = np.sqrt(state[3]**2 + state[4]**2)
-            if cmd.vx > current_v * 0.5:
-                cmd.vx = current_v * 0.5
-            return cmd
-        elif self._last_state == ControllerState.STOPPED:
-            # 完全停止：输出零速度
+            # 直接输出零速度，不再跟踪轨迹
             return ControlOutput(vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
+        
+        # STOPPED 状态：完全停止
+        elif self._last_state == ControllerState.STOPPED:
+            return ControlOutput(vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
+        
+        # BACKUP_ACTIVE 状态：使用备用控制器
         elif self._last_state == ControllerState.BACKUP_ACTIVE:
             if self.backup_tracker:
                 cmd = self.backup_tracker.compute(state, trajectory, consistency)
                 self._last_backup_cmd = cmd.copy()
             else:
                 cmd = ControlOutput(vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
+            return cmd
+        
+        # 其他状态：使用 MPC 输出
         else:
             cmd = mpc_cmd if mpc_cmd else ControlOutput(
                 vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
-        return cmd
+            return cmd
     
     def _apply_safety_check(self, state: np.ndarray, cmd: ControlOutput,
                            diagnostics: DiagnosticsInput) -> ControlOutput:
