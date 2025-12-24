@@ -21,7 +21,11 @@
 配置映射规则:
 - YAML 中的 `group/key` 映射到 `config['group']['key']`
 - 支持任意深度的嵌套，如 `mpc/weights/position` -> `config['mpc']['weights']['position']`
-- 特殊映射: `tf/*` -> `transform/*` (ROS 习惯用 tf，算法库用 transform)
+- TF 配置映射: `tf/*` -> `transform/*` (ROS 习惯用 tf，算法库用 transform)
+  - tf.source_frame -> transform.source_frame
+  - tf.target_frame -> transform.target_frame
+  - tf.timeout_ms -> transform.timeout_ms
+  - tf.expected_source_frames -> transform.expected_source_frames
 """
 from typing import Dict, Any, Optional, List
 from abc import ABC, abstractmethod
@@ -347,7 +351,8 @@ class ParamLoader:
         映射规则:
         - tf.source_frame -> transform.source_frame
         - tf.target_frame -> transform.target_frame
-        - tf.timeout_ms -> transform.tf2_timeout_ms
+        - tf.timeout_ms -> transform.timeout_ms
+        - tf.expected_source_frames -> transform.expected_source_frames
         """
         if 'transform' not in config:
             config['transform'] = {}
@@ -359,10 +364,12 @@ class ParamLoader:
             transform['source_frame'] = tf_config['source_frame']
         if 'target_frame' in tf_config:
             transform['target_frame'] = tf_config['target_frame']
+        if 'expected_source_frames' in tf_config:
+            transform['expected_source_frames'] = tf_config['expected_source_frames']
         
-        # 名称映射
+        # 统一使用 timeout_ms 作为键名
         if 'timeout_ms' in tf_config:
-            transform['tf2_timeout_ms'] = tf_config['timeout_ms']
+            transform['timeout_ms'] = tf_config['timeout_ms']
     
     @staticmethod
     def get_topics(node=None) -> Dict[str, str]:

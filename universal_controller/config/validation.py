@@ -148,12 +148,19 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
                           f'最小推力 ({thrust_min}) 不应大于最大推力 ({thrust_max})'))
     
     # 超时一致性
+    # 注意: traj_grace_ms 是超时后的额外宽限期，不是超时的一部分
+    # 安全停止延迟 = traj_timeout_ms + traj_grace_ms
+    # 因此 traj_grace_ms 可以大于 traj_timeout_ms（虽然不常见）
+    # 这里不做强制验证，只在 traj_grace_ms 明显过大时发出警告
     traj_timeout = get_config_value(config, 'watchdog.traj_timeout_ms')
     traj_grace = get_config_value(config, 'watchdog.traj_grace_ms')
     if _is_numeric(traj_timeout) and _is_numeric(traj_grace):
-        if traj_grace > traj_timeout:
+        # 只有当 traj_timeout > 0 (启用超时检测) 时才检查
+        if traj_timeout > 0 and traj_grace > traj_timeout * 3:
+            # 宽限期超过超时的 3 倍，可能是配置错误
             errors.append(('watchdog.traj_grace_ms', 
-                          f'轨迹宽限期 ({traj_grace}ms) 不应大于轨迹超时 ({traj_timeout}ms)'))
+                          f'轨迹宽限期 ({traj_grace}ms) 远大于轨迹超时 ({traj_timeout}ms)，'
+                          f'请确认这是预期配置。安全停止延迟 = {traj_timeout + traj_grace}ms'))
     
     # 轨迹配置一致性
     min_dt = get_config_value(config, 'trajectory.min_dt_sec')
@@ -181,11 +188,14 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
                           f'默认轨迹点数 ({default_points}) 应在 [{min_points}, {max_points}] 范围内'))
     
     # low_speed_thresh 一致性检查
-    # 注意: consistency 模块现在统一从 trajectory.low_speed_thresh 读取
-    # 如果用户在 consistency 配置中显式设置了不同的值，发出警告
+    # 设计说明: low_speed_thresh 的唯一定义点是 trajectory.low_speed_thresh
+    # consistency 模块会自动从 trajectory 配置读取此值
+    # 如果用户在 consistency 配置中显式设置了值，这是向后兼容的支持
+    # 但如果两个值不一致，发出警告提示用户统一配置
     traj_low_speed = get_config_value(config, 'trajectory.low_speed_thresh')
     consistency_low_speed = get_config_value(config, 'consistency.low_speed_thresh')
-    if _is_numeric(traj_low_speed) and _is_numeric(consistency_low_speed):
+    # 只有当 consistency 中显式设置了值时才检查一致性
+    if consistency_low_speed is not None and _is_numeric(traj_low_speed) and _is_numeric(consistency_low_speed):
         if abs(traj_low_speed - consistency_low_speed) > 1e-6:
             errors.append(('consistency.low_speed_thresh', 
                           f'一致性检查低速阈值 ({consistency_low_speed}) 与轨迹低速阈值 ({traj_low_speed}) 不一致。'

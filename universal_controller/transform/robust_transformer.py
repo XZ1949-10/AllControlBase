@@ -65,7 +65,9 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         # 配置参数
         self.fallback_duration_limit = transform_config.get('fallback_duration_limit_ms', 500) / 1000.0
         self.fallback_critical_limit = transform_config.get('fallback_critical_limit_ms', 1000) / 1000.0
-        self.tf2_timeout = transform_config.get('tf2_timeout_ms', 10) / 1000.0
+        # 支持两种键名: timeout_ms (新) 和 tf2_timeout_ms (旧，向后兼容)
+        self.tf2_timeout = transform_config.get('timeout_ms', 
+                           transform_config.get('tf2_timeout_ms', 10)) / 1000.0
         self.drift_estimation_enabled = transform_config.get('drift_estimation_enabled', True)
         self.recovery_correction_enabled = transform_config.get('recovery_correction_enabled', True)
         self.drift_rate = transform_config.get('drift_rate', 0.01)

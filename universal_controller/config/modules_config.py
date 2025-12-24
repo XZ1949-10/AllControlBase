@@ -45,6 +45,7 @@ CONSISTENCY_CONFIG = {
 #
 # 坐标系说明 (不需要建图/定位):
 # - base_link: 机体坐标系，原点在机器人中心，X轴朝前
+# - base_footprint: TurtleBot 等平台使用的机体坐标系 (与 base_link 类似)
 # - odom: 里程计坐标系，从启动位置开始累积 (这就是你的"世界坐标系")
 #
 # 数据流:
@@ -55,7 +56,7 @@ TRANSFORM_CONFIG = {
     'source_frame': 'base_link',      # 源坐标系 (网络输出轨迹的坐标系，局部坐标)
     'fallback_duration_limit_ms': 500,   # 降级持续限制 (ms)
     'fallback_critical_limit_ms': 1000,  # 临界降级限制 (ms)
-    'tf2_timeout_ms': 10,             # TF2 超时 (ms)
+    'timeout_ms': 10,                 # TF2 查询超时 (ms)，与 YAML tf.timeout_ms 保持一致
     'drift_estimation_enabled': False,    # 漂移估计开关
     'recovery_correction_enabled': True, # 恢复校正开关
     'drift_rate': 0.01,               # 漂移率 (米/秒)
@@ -64,10 +65,11 @@ TRANSFORM_CONFIG = {
     # 坐标系验证
     # 期望的源坐标系列表:
     # - base_link: 标准机体坐标系 (网络输出的局部轨迹)
+    # - base_footprint: TurtleBot 等平台使用的机体坐标系
     # - base_link_0: 推理时刻冻结的机体坐标系 (同 base_link)
     # - '': 空字符串，使用默认 source_frame
     # - odom: 已经在里程计坐标系的轨迹 (不需要变换，直接使用)
-    'expected_source_frames': ['base_link', 'base_link_0', '', 'odom'],
+    'expected_source_frames': ['base_link', 'base_footprint', 'base_link_0', '', 'odom'],
     'warn_unexpected_frame': True,    # 对非期望坐标系发出警告
 }
 
@@ -118,13 +120,16 @@ MODULES_VALIDATION_RULES = {
     'consistency.alpha_min': (0.0, 1.0, '最小 alpha 值'),
     'consistency.kappa_thresh': (0.0, 10.0, '曲率一致性阈值'),
     'consistency.v_dir_thresh': (0.0, 1.0, '速度方向一致性阈值'),
+    'consistency.temporal_smooth_thresh': (0.0, 10.0, '时序平滑度阈值'),
+    'consistency.max_curvature': (0.1, 100.0, '曲率计算最大值限制 (1/m)'),
+    'consistency.temporal_window_size': (2, 100, '时序平滑度滑动窗口大小'),
     'consistency.weights.kappa': (0.0, None, '曲率一致性权重'),
     'consistency.weights.velocity': (0.0, None, '速度方向一致性权重'),
     'consistency.weights.temporal': (0.0, None, '时序平滑度权重'),
     # 坐标变换配置
     'transform.fallback_duration_limit_ms': (0, 10000, 'TF2 降级持续限制 (ms)'),
     'transform.fallback_critical_limit_ms': (0, 30000, 'TF2 临界降级限制 (ms)'),
-    'transform.tf2_timeout_ms': (1, 1000, 'TF2 查询超时 (ms)'),
+    'transform.timeout_ms': (1, 1000, 'TF2 查询超时 (ms)'),
     'transform.drift_rate': (0.0, 1.0, '漂移率 (米/秒)'),
     'transform.max_drift_dt': (0.01, 5.0, '漂移估计最大时间间隔 (秒)'),
     'transform.drift_correction_thresh': (0.0, 1.0, '漂移校正阈值 (米/弧度)'),
@@ -132,9 +137,19 @@ MODULES_VALIDATION_RULES = {
     'transition.tau': (0.001, 10.0, '过渡时间常数 (秒)'),
     'transition.max_duration': (0.01, 10.0, '最大过渡时长 (秒)'),
     'transition.completion_threshold': (0.5, 1.0, '过渡完成阈值'),
+    'transition.duration': (0.01, 10.0, '线性过渡时长 (秒)'),
     # 备份控制器配置
     'backup.lookahead_dist': (0.1, 10.0, '前瞻距离 (m)'),
     'backup.min_lookahead': (0.01, 5.0, '最小前瞻距离 (m)'),
     'backup.max_lookahead': (0.5, 20.0, '最大前瞻距离 (m)'),
+    'backup.lookahead_ratio': (0.0, 5.0, '前瞻比例'),
+    'backup.kp_z': (0.0, 10.0, 'Z 方向增益'),
     'backup.kp_heading': (0.1, 10.0, '航向控制增益'),
+    'backup.heading_error_thresh': (0.1, 3.14, '航向误差阈值 (rad)'),
+    'backup.pure_pursuit_angle_thresh': (0.1, 3.14, 'Pure Pursuit 模式角度阈值 (rad)'),
+    'backup.heading_control_angle_thresh': (0.1, 3.14, '航向控制模式角度阈值 (rad)'),
+    'backup.max_curvature': (0.1, 20.0, '最大曲率限制 (1/m)'),
+    'backup.min_turn_speed': (0.0, 1.0, '阿克曼车辆最小转向速度 (m/s)'),
+    'backup.default_speed_ratio': (0.0, 1.0, '无 soft 速度时的默认速度比例'),
+    'backup.min_distance_thresh': (0.001, 1.0, '最小距离阈值 (m)'),
 }

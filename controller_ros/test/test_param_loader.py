@@ -144,7 +144,7 @@ class TestParamLoaderTFMapping:
             'transform': {
                 'source_frame': 'default_source',
                 'target_frame': 'default_target',
-                'tf2_timeout_ms': 10,
+                'timeout_ms': 10,
             }
         }
         
@@ -159,7 +159,7 @@ class TestParamLoaderTFMapping:
         # 验证映射
         assert config['transform']['source_frame'] == 'base_link'
         assert config['transform']['target_frame'] == 'odom'
-        assert config['transform']['tf2_timeout_ms'] == 50
+        assert config['transform']['timeout_ms'] == 50
 
 
 class TestParamLoaderTopics:
@@ -226,7 +226,7 @@ class TestParamLoaderIntegration:
         assert 'transform' in config
         assert config['transform']['source_frame'] == config['tf']['source_frame']
         assert config['transform']['target_frame'] == config['tf']['target_frame']
-        assert config['transform']['tf2_timeout_ms'] == config['tf']['timeout_ms']
+        assert config['transform']['timeout_ms'] == config['tf']['timeout_ms']
     
     def test_load_includes_diagnostics_publish_rate(self):
         """测试 load() 包含诊断发布率配置

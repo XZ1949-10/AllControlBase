@@ -65,6 +65,10 @@ MPC_VALIDATION_RULES = {
     'mpc.horizon': (1, 100, 'MPC 预测时域'),
     'mpc.horizon_degraded': (1, 100, 'MPC 降级预测时域'),
     'mpc.dt': (0.001, 1.0, 'MPC 时间步长 (秒)'),
+    # Fallback 求解器参数
+    'mpc.fallback.lookahead_steps': (1, 50, 'Fallback 前瞻步数'),
+    'mpc.fallback.heading_kp': (0.1, 10.0, 'Fallback 航向控制增益'),
+    'mpc.fallback.max_curvature': (0.1, 20.0, 'Fallback 最大曲率限制 (1/m)'),
     'mpc.fallback.min_distance_thresh': (0.001, 1.0, 'Fallback 最小距离阈值 (m)'),
     'mpc.fallback.min_turn_speed': (0.0, 1.0, 'Fallback 最小转向速度 (m/s)'),
     'mpc.fallback.default_speed_ratio': (0.0, 1.0, 'Fallback 默认速度比例'),
@@ -82,5 +86,7 @@ MPC_VALIDATION_RULES = {
     # MPC 健康监控参数
     'mpc.health_monitor.time_warning_thresh_ms': (0.1, 1000, '求解时间警告阈值 (ms)'),
     'mpc.health_monitor.time_critical_thresh_ms': (0.1, 1000, '求解时间临界阈值 (ms)'),
+    'mpc.health_monitor.time_recovery_thresh_ms': (0.1, 1000, '求解时间恢复阈值 (ms)'),
     'mpc.health_monitor.consecutive_warning_limit': (1, 100, '连续警告次数限制'),
+    'mpc.health_monitor.consecutive_recovery_limit': (1, 100, '连续恢复次数限制'),
 }
