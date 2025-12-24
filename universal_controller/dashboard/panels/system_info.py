@@ -148,10 +148,11 @@ class SystemInfoPanel(QGroupBox):
         self.soft_head_led.set_status(ctrl.soft_head_enabled)
 
         # 功能开关 - 从统一数据获取
-        self.ekf_led.set_status(estimator.ekf_enabled)
-        self.slip_led.set_status(estimator.slip_detection_enabled)
-        self.drift_led.set_status(estimator.drift_correction_enabled)
-        self.heading_led.set_status(estimator.heading_fallback_enabled)
+        # 注意：需要传入文本参数，否则 LED 不会更新显示文本
+        self.ekf_led.set_status(estimator.ekf_enabled, '✓ 启用' if estimator.ekf_enabled else '✗ 禁用')
+        self.slip_led.set_status(estimator.slip_detection_enabled, '✓ 启用' if estimator.slip_detection_enabled else '✗ 禁用')
+        self.drift_led.set_status(estimator.drift_correction_enabled, '✓ 启用' if estimator.drift_correction_enabled else '✗ 禁用')
+        self.heading_led.set_status(estimator.heading_fallback_enabled, '✓ 启用' if estimator.heading_fallback_enabled else '✗ 禁用')
 
         # 坐标系
         self.target_frame_label.findChild(QLabel, 'value').setText(transform.target_frame)
