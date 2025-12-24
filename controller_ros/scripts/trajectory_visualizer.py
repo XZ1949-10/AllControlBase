@@ -164,14 +164,59 @@ class TrajectoryVisualizer:
     
     def overlay_trajectory(self, image, trajectory):
         """在图像上叠加轨迹点"""
-        # 使用 OpenCV projectPoints (更精准，支持畸变校正)
-        points_2d = self.project_points_opencv(trajectory.points, image.shape)
+        h, w = image.shape[:2]
         
-        # 绘制轨迹
-        if points_2d:
-            self.draw_trajectory_on_image(image, points_2d)
+        # 1. 先投影原点 (0,0,0) - 固定红色点
+        origin_2d = self.project_single_point(0.0, 0.0, 0.0, image.shape)
+        
+        # 2. 投影网络输出的 8 个轨迹点
+        traj_points_2d = self.project_points_opencv(trajectory.points, image.shape)
+        
+        # 3. 组合: 原点 + 轨迹点 = 9 个点
+        if origin_2d is not None:
+            all_points_2d = [origin_2d] + traj_points_2d
+        else:
+            # 如果原点投影失败，使用图像底部中间作为原点
+            origin_2d = (w // 2, h - 30)
+            all_points_2d = [origin_2d] + traj_points_2d
+        
+        # 绘制轨迹 (9 个点)
+        if all_points_2d:
+            self.draw_trajectory_on_image(image, all_points_2d)
         
         return image
+    
+    def project_single_point(self, x, y, z, image_shape):
+        """投影单个 3D 点到图像平面"""
+        h, w = image_shape[:2]
+        
+        # 构建 3D 点
+        point_3d = np.array([[x, y, z]], dtype=np.float64)
+        
+        # 投影
+        point_2d, _ = cv2.projectPoints(
+            point_3d,
+            self.rvec,
+            self.tvec,
+            self.camera_matrix,
+            self.dist_coeffs
+        )
+        
+        u, v = point_2d[0][0]
+        
+        # 检查点是否在相机前方
+        P_cam = self.R_cam_base @ (point_3d[0] - self.t_cam_in_base)
+        if P_cam[2] <= 0.01:
+            return None
+        
+        u_int = int(round(u))
+        v_int = int(round(v))
+        
+        # 检查是否在图像范围内
+        if 0 <= u_int < w and 0 <= v_int < h:
+            return (u_int, v_int)
+        
+        return None
     
     def project_points_opencv(self, points, image_shape):
         """
@@ -274,9 +319,10 @@ class TrajectoryVisualizer:
         cv2.addWeighted(overlay, 0.5, image, 0.5, 0, image)
         
         # 状态文字
+        traj_count = len(self.latest_trajectory.points) if self.latest_trajectory else 0
         status_lines = [
             f"Frame: {self.frame_count}",
-            f"Traj points: {len(self.latest_trajectory.points) if self.latest_trajectory else 0}",
+            f"Traj points: {traj_count + 1} (origin + {traj_count})",  # 原点 + 网络输出
             f"Mode: {'TRACK' if self.latest_trajectory and self.latest_trajectory.mode == 1 else 'STOP' if self.latest_trajectory else 'N/A'}"
         ]
         
