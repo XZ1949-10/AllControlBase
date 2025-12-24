@@ -22,12 +22,9 @@
     - 差速车只使用 x, y 坐标
 """
 
-import sys
-import os
-
-# 设置 Python 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import controller_ros._path_manager
+# 注意：不要在这里修改 sys.path！
+# PYTHONPATH 已经由 source devel/setup.bash 正确设置
+# 手动修改 sys.path 会导致 controller_ros.msg 找不到
 
 import rospy
 import numpy as np
