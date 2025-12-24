@@ -25,9 +25,32 @@
 import sys
 import os
 
-# 设置 Python 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import controller_ros._path_manager
+# 设置 Python 路径 - 确保 devel 路径在最前面
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 1. 添加 devel 路径 (最高优先级，用于 controller_ros.msg)
+# 从 ROS_PACKAGE_PATH 推断 devel 路径
+_ros_pkg_path = os.environ.get('ROS_PACKAGE_PATH', '')
+for _p in _ros_pkg_path.split(':'):
+    if '/src/' in _p:
+        _ws_root = _p.split('/src/')[0]
+        _devel_path = os.path.join(_ws_root, 'devel', 'lib', 'python3', 'dist-packages')
+        if os.path.exists(_devel_path) and _devel_path not in sys.path:
+            sys.path.insert(0, _devel_path)
+            break
+
+# 2. 添加 src 路径 (用于 controller_ros.node 等)
+_src_path = os.path.join(_script_dir, '..', 'src')
+if os.path.exists(_src_path) and _src_path not in sys.path:
+    sys.path.append(_src_path)  # 添加到末尾，确保 devel 优先
+
+# 3. 添加 universal_controller 路径 (如果未安装)
+try:
+    import universal_controller
+except ImportError:
+    _uc_path = os.path.abspath(os.path.join(_script_dir, '..', '..'))
+    if os.path.exists(os.path.join(_uc_path, 'universal_controller')) and _uc_path not in sys.path:
+        sys.path.append(_uc_path)
 
 import rospy
 import numpy as np
