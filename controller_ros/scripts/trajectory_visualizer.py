@@ -116,91 +116,44 @@ class TrajectoryVisualizer:
         self.frame_count += 1
     
     def overlay_trajectory(self, image, trajectory):
-        """在图像上叠加轨迹点"""
-        points_2d = []
-        points_3d_cam = []
-        
-        # 获取 TF 变换: base_footprint -> camera
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                self.camera_frame,
-                self.base_frame,
-                rospy.Time(0),
-                rospy.Duration(0.1)
-            )
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, 
-                tf2_ros.ExtrapolationException) as e:
-            rospy.logwarn_throttle(2.0, f"TF 查询失败: {e}")
-            # 使用手动变换作为备选
-            points_2d = self.project_points_manual(trajectory.points, image.shape)
-            if points_2d:
-                self.draw_trajectory_on_image(image, points_2d)
-            return image
-        
-        # 变换每个轨迹点到相机坐标系
-        for pt in trajectory.points:
-            # 创建点 (base_footprint 坐标系)
-            point_stamped = PointStamped()
-            point_stamped.header.frame_id = self.base_frame
-            point_stamped.header.stamp = rospy.Time(0)
-            point_stamped.point.x = pt.x
-            point_stamped.point.y = pt.y
-            point_stamped.point.z = pt.z
-            
-            try:
-                # 变换到相机坐标系
-                point_cam = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
-                
-                # 相机坐标系: x右, y下, z前
-                # 需要转换: base_footprint (x前, y左, z上) -> camera optical (x右, y下, z前)
-                x_cam = -point_cam.point.y  # 左变右
-                y_cam = -point_cam.point.z  # 上变下
-                z_cam = point_cam.point.x   # 前保持
-                
-                # 只投影相机前方的点
-                if z_cam > 0.1:
-                    # 针孔相机模型投影
-                    u = int(self.fx * x_cam / z_cam + self.cx)
-                    v = int(self.fy * y_cam / z_cam + self.cy)
-                    
-                    # 检查是否在图像范围内
-                    if 0 <= u < image.shape[1] and 0 <= v < image.shape[0]:
-                        points_2d.append((u, v))
-                        points_3d_cam.append(z_cam)
-                        
-            except Exception as e:
-                rospy.logwarn_throttle(5.0, f"点变换失败: {e}")
-                continue
+        """在图像上叠加轨迹点 - 简化版，直接使用2D投影"""
+        # 直接使用简化的2D投影，起始点固定在底部中间
+        points_2d = self.project_points_manual(trajectory.points, image.shape)
         
         # 绘制轨迹
         if points_2d:
-            self.draw_trajectory_on_image(image, points_2d, points_3d_cam)
+            self.draw_trajectory_on_image(image, points_2d)
         
         return image
     
     def project_points_manual(self, points, image_shape):
-        """手动投影 (TF 不可用时的备选方案)"""
-        # 相机相对于 base_footprint 的位置
-        cam_x = 0.08  # 前方 8cm
-        cam_y = 0.0   # 居中
-        cam_z = 0.50  # 高度 50cm
-        
+        """手动投影 - 简化版，起始点固定在底部中间"""
+        h, w = image_shape[:2]
         points_2d = []
         
+        # 图像坐标系参数
+        # 起始点 (0,0) 固定在底部中间
+        origin_u = w // 2  # 水平中心
+        origin_v = h - 30  # 底部留一点边距
+        
+        # 缩放因子 (米 -> 像素)
+        # 调整这个值来改变轨迹在图像中的大小
+        scale_x = 300  # 前方距离缩放 (越大轨迹越往上)
+        scale_y = 300  # 左右距离缩放 (越大轨迹越宽)
+        
         for pt in points:
-            # 转换到相机坐标系 (简化，假设相机水平前视)
-            # 相机光学坐标系: x右, y下, z前
-            x_cam = -(pt.y - cam_y)           # y_base -> -x_cam
-            y_cam = -(pt.z - cam_z)           # z_base -> -y_cam (相对高度)
-            z_cam = pt.x - cam_x              # x_base -> z_cam
+            # 轨迹坐标系: x前方, y左方
+            # 图像坐标系: u右方, v下方
+            # 转换: x前 -> v上 (减小), y左 -> u左 (减小)
             
-            # 只投影前方的点
-            if z_cam > 0.1:
-                u = int(self.fx * x_cam / z_cam + self.cx)
-                v = int(self.fy * y_cam / z_cam + self.cy)
-                
-                if 0 <= u < image_shape[1] and 0 <= v < image_shape[0]:
-                    points_2d.append((u, v))
+            u = int(origin_u - pt.y * scale_y)  # y左为正 -> u减小
+            v = int(origin_v - pt.x * scale_x)  # x前为正 -> v减小 (往上)
+            
+            # 限制在图像范围内
+            u = max(0, min(w - 1, u))
+            v = max(0, min(h - 1, v))
+            
+            points_2d.append((u, v))
         
         return points_2d
     
