@@ -117,6 +117,17 @@ class ConsistencyPanel(QGroupBox):
 
         c = data.consistency
 
+        # 检查是否因为 soft_enabled=False 导致一致性检查被跳过
+        # 当 alpha=0 且所有指标都是 1.0 时，说明轨迹没有速度信息
+        soft_skipped = (c.alpha_soft == 0 and 
+                        c.curvature == 1.0 and 
+                        c.velocity_dir == 1.0 and 
+                        c.temporal == 1.0)
+        
+        if soft_skipped:
+            self._show_soft_disabled()
+            return
+
         self.alpha_progress.set_value(c.alpha_soft, 1.0, 0.1)
         self.kappa_progress.set_value(c.curvature, 1.0)
         self.velocity_progress.set_value(c.velocity_dir, 1.0)
@@ -132,6 +143,24 @@ class ConsistencyPanel(QGroupBox):
         else:
             self.compare_label.setText(f'✗ 否 ({c.alpha_soft:.2f} ≤ 0.1)')
             self.compare_label.setStyleSheet(f'color: {COLORS["error"]};')
+
+    def _show_soft_disabled(self):
+        """显示 Soft 轨迹未启用状态 (轨迹无速度信息)"""
+        disabled_style = f'color: {COLORS["disabled"]};'
+        
+        # 进度条显示为灰色空条
+        self.alpha_progress.set_value(0, 1.0, 0.1)
+        self.kappa_progress.set_value(0, 1.0)
+        self.velocity_progress.set_value(0, 1.0)
+        self.temporal_progress.set_value(0, 1.0)
+        
+        # LED 显示禁用状态
+        self.soft_led.set_status(False, '未启用 (轨迹无速度)')
+        self.valid_led.set_status(True, '✓ 是 (Hard轨迹)')
+        
+        # 提示信息
+        self.compare_label.setText('N/A (仅Hard轨迹)')
+        self.compare_label.setStyleSheet(disabled_style)
 
     def _show_unavailable(self):
         """显示数据不可用状态"""
