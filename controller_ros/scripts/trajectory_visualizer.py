@@ -51,7 +51,7 @@ class TrajectoryVisualizer:
         self.cam_x = rospy.get_param('~cam_x', 0.08)    # 前方距离 (m)
         self.cam_y = rospy.get_param('~cam_y', 0.0)     # 左右偏移 (m)
         self.cam_z = rospy.get_param('~cam_z', 0.50)    # 高度 (m)
-        self.cam_pitch = rospy.get_param('~cam_pitch', 0.0)  # 俯仰角 (rad)
+        self.cam_pitch = rospy.get_param('~cam_pitch', 0.52)  # 俯仰角 (rad, 正值向下看)
         
         # 构建相机内参矩阵
         self.camera_matrix = np.array([
@@ -163,82 +163,44 @@ class TrajectoryVisualizer:
         self.frame_count += 1
     
     def overlay_trajectory(self, image, trajectory):
-        """在图像上叠加轨迹点"""
-        h, w = image.shape[:2]
+        """在图像上叠加轨迹点 (真实 3D 投影)"""
+        # 构建完整轨迹: 原点 (0,0,0) + 网络输出的 8 个点
+        # 所有点都在地面 z=0 (地面机器人)
+        points_3d = [(0.0, 0.0, 0.0)]  # 原点
+        for pt in trajectory.points:
+            points_3d.append((pt.x, pt.y, 0.0))  # z=0 地面
         
-        # 1. 先投影原点 (0,0,0) - 固定红色点
-        origin_2d = self.project_single_point(0.0, 0.0, 0.0, image.shape)
+        # 统一投影所有点
+        all_points_2d = self.project_points_opencv(points_3d, image.shape)
         
-        # 2. 投影网络输出的 8 个轨迹点
-        traj_points_2d = self.project_points_opencv(trajectory.points, image.shape)
-        
-        # 3. 组合: 原点 + 轨迹点 = 9 个点
-        if origin_2d is not None:
-            all_points_2d = [origin_2d] + traj_points_2d
-        else:
-            # 如果原点投影失败，使用图像底部中间作为原点
-            origin_2d = (w // 2, h - 30)
-            all_points_2d = [origin_2d] + traj_points_2d
-        
-        # 绘制轨迹 (9 个点)
+        # 绘制轨迹
         if all_points_2d:
             self.draw_trajectory_on_image(image, all_points_2d)
         
         return image
     
-    def project_single_point(self, x, y, z, image_shape):
-        """投影单个 3D 点到图像平面"""
-        h, w = image_shape[:2]
-        
-        # 构建 3D 点
-        point_3d = np.array([[x, y, z]], dtype=np.float64)
-        
-        # 投影
-        point_2d, _ = cv2.projectPoints(
-            point_3d,
-            self.rvec,
-            self.tvec,
-            self.camera_matrix,
-            self.dist_coeffs
-        )
-        
-        u, v = point_2d[0][0]
-        
-        # 检查点是否在相机前方
-        P_cam = self.R_cam_base @ (point_3d[0] - self.t_cam_in_base)
-        if P_cam[2] <= 0.01:
-            return None
-        
-        u_int = int(round(u))
-        v_int = int(round(v))
-        
-        # 检查是否在图像范围内
-        if 0 <= u_int < w and 0 <= v_int < h:
-            return (u_int, v_int)
-        
-        return None
-    
-    def project_points_opencv(self, points, image_shape):
+    def project_points_opencv(self, points_3d, image_shape):
         """
         使用 OpenCV projectPoints 进行精准投影
         
-        优点:
-        - 支持畸变校正
-        - 经过广泛验证的标准实现
-        - 数值稳定性好
+        参数:
+            points_3d: list of (x, y, z) tuples，在 base_footprint 坐标系中
+            image_shape: 图像尺寸
+        
+        返回:
+            list of (u, v) 像素坐标
         """
         h, w = image_shape[:2]
         
-        if not points:
+        if not points_3d:
             return []
         
         # 构建 3D 点数组 (N x 3)
-        points_3d = np.array([[pt.x, pt.y, pt.z] for pt in points], dtype=np.float64)
+        points_array = np.array(points_3d, dtype=np.float64)
         
-        # 使用 OpenCV projectPoints
-        # 这个函数会自动处理畸变
+        # 使用 OpenCV projectPoints (自动处理畸变)
         points_2d, _ = cv2.projectPoints(
-            points_3d,
+            points_array,
             self.rvec,
             self.tvec,
             self.camera_matrix,
@@ -250,15 +212,15 @@ class TrajectoryVisualizer:
         for i, pt_2d in enumerate(points_2d):
             u, v = pt_2d[0]
             
-            # 检查点是否在相机前方 (通过变换后的 z 坐标)
-            P_cam = self.R_cam_base @ (points_3d[i] - self.t_cam_in_base)
+            # 检查点是否在相机前方
+            P_cam = self.R_cam_base @ (points_array[i] - self.t_cam_in_base)
             if P_cam[2] <= 0.01:  # 点在相机后方
                 continue
             
             u_int = int(round(u))
             v_int = int(round(v))
             
-            # 检查是否在图像范围内
+            # 允许稍微超出边界，但裁剪到图像范围
             if -100 <= u_int < w + 100 and -100 <= v_int < h + 100:
                 u_int = max(0, min(w - 1, u_int))
                 v_int = max(0, min(h - 1, v_int))
