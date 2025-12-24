@@ -18,9 +18,9 @@ tmux split-window -t $SESSION -c ~
 # 强制 tiled 布局 (四方格)
 tmux select-layout -t $SESSION tiled
 
-# 窗格0: ViNT - 先cd，准备两条命令
+# 窗格0: ViNT - 先cd，分两步执行
 tmux send-keys -t ${SESSION}:0.0 'cd ~/visualnav-transformer/deployment/src' Enter
-tmux send-keys -t ${SESSION}:0.0 'sudo modprobe gspca_kinect && roslaunch vint_locobot.launch'
+tmux send-keys -t ${SESSION}:0.0 'sudo modprobe gspca_kinect'
 
 # 窗格1: explore - 先cd
 tmux send-keys -t ${SESSION}:0.1 'cd ~/visualnav-transformer/deployment/src' Enter
@@ -36,7 +36,7 @@ tmux select-pane -t ${SESSION}:0.0
 
 echo "=========================================="
 echo "  执行顺序 (每个窗格按回车执行):"
-echo "  1. 左上: sudo modprobe -> 输密码 -> 再输入 roslaunch vint_locobot.launch"
+echo "  1. 左上: modprobe -> 输密码 -> 手动输入: roslaunch vint_locobot.launch"
 echo "  2. 右上: python explore_new.py"
 echo "  3. 左下: roslaunch controller_ros"
 echo "  4. 右下: rosrun trajectory_publisher"
