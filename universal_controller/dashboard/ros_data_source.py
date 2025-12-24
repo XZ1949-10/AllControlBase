@@ -326,7 +326,7 @@ class ROSDashboardDataSource:
             self._config = {
                 'system': {
                     'platform': rospy.get_param('system/platform', 'differential'),
-                    'ctrl_freq': rospy.get_param('system/ctrl_freq', 50),
+                    'ctrl_freq': rospy.get_param('system/ctrl_freq', 20),
                 },
                 'mpc': {
                     'horizon': rospy.get_param('mpc/horizon', 20),
@@ -340,13 +340,25 @@ class ROSDashboardDataSource:
                 },
                 'watchdog': {
                     'odom_timeout_ms': rospy.get_param('watchdog/odom_timeout_ms', 500),
-                    'traj_timeout_ms': rospy.get_param('watchdog/traj_timeout_ms', 2500),
-                    'traj_grace_ms': rospy.get_param('watchdog/traj_grace_ms', 1500),
+                    'traj_timeout_ms': rospy.get_param('watchdog/traj_timeout_ms', 1000),
+                    'traj_grace_ms': rospy.get_param('watchdog/traj_grace_ms', 500),
                     'imu_timeout_ms': rospy.get_param('watchdog/imu_timeout_ms', -1),
                     'startup_grace_ms': rospy.get_param('watchdog/startup_grace_ms', 5000),
                 },
+                'diagnostics': {
+                    'publish_rate': rospy.get_param('diagnostics/publish_rate', 5),
+                },
+                'ekf': {
+                    'use_odom_orientation_fallback': rospy.get_param('ekf/use_odom_orientation_fallback', True),
+                    'imu_motion_compensation': rospy.get_param('ekf/imu_motion_compensation', False),
+                },
+                'transform': {
+                    'recovery_correction_enabled': rospy.get_param('transform/recovery_correction_enabled', True),
+                    'target_frame': rospy.get_param('tf/target_frame', 'odom'),
+                    'source_frame': rospy.get_param('tf/source_frame', 'base_footprint'),
+                },
             }
-            rospy.loginfo(f"[ROSDashboardDataSource] Loaded config: platform={self._config['system']['platform']}")
+            rospy.loginfo(f"[ROSDashboardDataSource] Loaded config: platform={self._config['system']['platform']}, ctrl_freq={self._config['system']['ctrl_freq']}")
         except Exception as e:
             rospy.logwarn(f"[ROSDashboardDataSource] Failed to load ROS params: {e}")
 
@@ -441,8 +453,16 @@ class ROSDashboardDataSource:
         current_time = time.time()
         data_age_ms = (current_time - diag_time) * 1000 if diag_time > 0 else float('inf')
         
-        # 数据超过 1 秒认为不可用
-        data_stale = data_age_ms > 1000
+        # 从配置读取诊断发布频率，计算数据过期阈值
+        # 数据过期阈值 = 诊断发布周期 * 3 (允许丢失 2 个周期)
+        diag_publish_rate = self._config.get('diagnostics', {}).get('publish_rate', 5)
+        ctrl_freq = self._config.get('system', {}).get('ctrl_freq', 20)
+        # 诊断发布周期 = 控制周期 * publish_rate
+        diag_period_ms = (1000.0 / ctrl_freq) * diag_publish_rate
+        data_stale_threshold_ms = diag_period_ms * 3  # 允许丢失 2 个周期
+        data_stale_threshold_ms = max(data_stale_threshold_ms, 1000)  # 最小 1 秒
+        
+        data_stale = data_age_ms > data_stale_threshold_ms
         
         # 检查各类数据是否存在且有效
         mpc_health = diagnostics.get('mpc_health', {})
@@ -456,7 +476,7 @@ class ROSDashboardDataSource:
             diagnostics_available=has_diag and not data_stale,
             trajectory_available=False,  # ROS 模式暂不支持轨迹可视化
             position_available=False,    # ROS 模式暂不支持位置可视化
-            odom_available=has_diag and not data_stale and not timeout.get('odom_timeout', True),
+            odom_available=has_diag and not data_stale and not timeout.get('odom_timeout', False),
             imu_data_available=has_diag and not data_stale and estimator.get('imu_available', False),
             mpc_data_available=has_diag and not data_stale and isinstance(mpc_health, dict) and bool(mpc_health),
             consistency_data_available=has_diag and not data_stale and isinstance(consistency, dict) and bool(consistency),
@@ -501,11 +521,16 @@ class ROSDashboardDataSource:
 
     def _build_environment_status(self) -> EnvironmentStatus:
         """构建环境状态"""
+        # 从最新诊断数据获取 IMU 可用性
+        with self._lock:
+            estimator = self._last_diagnostics.get('estimator_health', {})
+            imu_available = estimator.get('imu_available', False) if isinstance(estimator, dict) else False
+        
         return EnvironmentStatus(
             ros_available=self._ros_available,
             tf2_available=self._tf2_available,
             acados_available=ACADOS_AVAILABLE,
-            imu_available=True,  # 在 ROS 模式下假设 IMU 可用
+            imu_available=imu_available,  # 从诊断数据获取实际 IMU 状态
             is_mock_mode=False,  # ROS 模式永远不是模拟模式
         )
 
@@ -610,6 +635,22 @@ class ROSDashboardDataSource:
         if not isinstance(bias, (list, tuple)) or len(bias) < 3:
             bias = [0, 0, 0]
 
+        # 从配置读取功能开关状态
+        ekf_config = self._config.get('ekf', {})
+        transform_config = self._config.get('transform', {})
+        
+        # EKF 功能：检查是否配置了自适应参数
+        ekf_enabled = ekf_config.get('use_odom_orientation_fallback', True)
+        
+        # 打滑检测：检查是否配置了 IMU 运动补偿
+        slip_detection_enabled = ekf_config.get('imu_motion_compensation', False)
+        
+        # 漂移校正：从 transform 配置读取
+        drift_correction_enabled = transform_config.get('recovery_correction_enabled', True)
+        
+        # 航向回退：从 EKF 配置读取
+        heading_fallback_enabled = ekf_config.get('use_odom_orientation_fallback', True)
+
         return EstimatorStatus(
             covariance_norm=est.get('covariance_norm', 0),
             innovation_norm=est.get('innovation_norm', 0),
@@ -617,10 +658,10 @@ class ROSDashboardDataSource:
             imu_drift_detected=est.get('imu_drift_detected', False),
             imu_bias=(bias[0], bias[1], bias[2]),
             imu_available=est.get('imu_available', False),
-            ekf_enabled=True,
-            slip_detection_enabled=True,
-            drift_correction_enabled=True,
-            heading_fallback_enabled=True,
+            ekf_enabled=ekf_enabled,
+            slip_detection_enabled=slip_detection_enabled,
+            drift_correction_enabled=drift_correction_enabled,
+            heading_fallback_enabled=heading_fallback_enabled,
         )
 
     def _build_transform_status(self, diag: Dict) -> TransformStatus:
@@ -630,14 +671,19 @@ class ROSDashboardDataSource:
             transform = {}
 
         fallback_ms = transform.get('fallback_duration_ms', 0)
+        
+        # 从配置读取坐标系名称
+        transform_config = self._config.get('transform', {})
+        target_frame = transform_config.get('target_frame', 'odom')
+        source_frame = transform_config.get('source_frame', 'base_link')
 
         return TransformStatus(
             tf2_available=self._tf2_available,
             fallback_active=fallback_ms > 0 or not self._tf2_injected,
             fallback_duration_ms=fallback_ms,
             accumulated_drift=transform.get('accumulated_drift', 0),
-            target_frame='odom',
-            output_frame='base_link',
+            target_frame=target_frame,
+            output_frame=source_frame,
         )
 
     def _build_safety_status(self, diag: Dict) -> SafetyStatus:
