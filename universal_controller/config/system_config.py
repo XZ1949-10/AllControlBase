@@ -23,10 +23,11 @@ SYSTEM_CONFIG = {
 # - 0 或负数表示禁用该数据源的超时检测
 # - 如果配置了正数超时但数据源不存在，系统会立即报告超时
 # - 对于可选的数据源（如 IMU），如果硬件不存在，应配置为 -1 禁用
+# - 安全停止延迟 = traj_timeout_ms + traj_grace_ms
 WATCHDOG_CONFIG = {
     'odom_timeout_ms': 500,       # 里程计超时 (ms)，<=0 禁用
-    'traj_timeout_ms': 2500,      # 轨迹超时 (ms)，<=0 禁用，适应低频轨迹
-    'traj_grace_ms': 1500,        # 轨迹宽限期 (ms)
+    'traj_timeout_ms': 1000,      # 轨迹超时 (ms)，<=0 禁用
+    'traj_grace_ms': 500,         # 轨迹宽限期 (ms)
     'imu_timeout_ms': -1,         # IMU 超时 (ms)，<=0 禁用 (无 IMU 时设为 -1)
     'startup_grace_ms': 5000,     # 启动宽限期 (ms)，期间不检测超时
 }
