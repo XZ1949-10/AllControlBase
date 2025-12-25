@@ -35,6 +35,9 @@ class BasicSafetyMonitor(ISafetyMonitor):
         self.accel_filter_warmup_alpha = safety_config.get('accel_filter_warmup_alpha', 0.5)  # 预热系数
         self.accel_filter_warmup_period = safety_config.get('accel_filter_warmup_period', self.accel_filter_window)  # 预热期
         self.accel_warmup_margin_multiplier = safety_config.get('accel_warmup_margin_multiplier', 2.0)  # 预热期间裕度倍数
+        # 预热期间裕度倍数的上限，防止配置错误导致安全检查过于宽松
+        # 即使用户配置了更大的值，也不会超过此上限
+        self.accel_warmup_margin_max = safety_config.get('accel_warmup_margin_max', 3.0)
         self.max_dt_for_accel = safety_config.get('max_dt_for_accel', 1.0)  # 加速度计算最大时间间隔
         self.min_dt_for_accel = safety_config.get('min_dt_for_accel', 0.001)  # 加速度计算最小时间间隔
         
@@ -208,8 +211,10 @@ class BasicSafetyMonitor(ISafetyMonitor):
                 if self.is_filter_warmed_up():
                     accel_margin_effective = self.accel_margin
                 else:
-                    # 预热期间使用配置的裕度倍数
-                    accel_margin_effective = self.accel_margin * self.accel_warmup_margin_multiplier
+                    # 预热期间使用配置的裕度倍数，但不超过上限
+                    # 这确保即使配置错误，安全检查也不会过于宽松
+                    effective_multiplier = min(self.accel_warmup_margin_multiplier, self.accel_warmup_margin_max)
+                    accel_margin_effective = self.accel_margin * effective_multiplier
                 
                 accel_horizontal = np.sqrt(ax**2 + ay**2)
                 

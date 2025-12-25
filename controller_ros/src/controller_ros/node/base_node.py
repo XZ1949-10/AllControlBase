@@ -15,6 +15,8 @@ from typing import Dict, Any, Optional, Callable
 import logging
 import time
 
+import numpy as np
+
 from universal_controller.config.default_config import DEFAULT_CONFIG, PLATFORM_CONFIG
 from universal_controller.core.data_types import (
     Odometry, Imu, Trajectory, ControlOutput, AttitudeCommand
@@ -162,10 +164,14 @@ class ControllerNodeBase(ABC):
         
         # 创建 TF2 注入管理器
         tf_config = self._params.get('tf', {})
+        # 将控制频率传入 TF 配置，用于向后兼容 retry_interval_cycles
+        tf_config_with_freq = tf_config.copy()
+        tf_config_with_freq['ctrl_freq'] = self._params.get('system', {}).get('ctrl_freq', 50)
+        
         self._tf2_injection_manager = TF2InjectionManager(
             tf_bridge=self._tf_bridge,
             controller_manager=self._controller_bridge.manager,
-            config=tf_config,
+            config=tf_config_with_freq,
             log_info=self._log_info,
             log_warn=self._log_warn,
         )
@@ -249,14 +255,12 @@ class ControllerNodeBase(ABC):
             elif hasattr(state_result, 'x'):
                 state_array = state_result.x
             elif isinstance(state_result, (list, tuple)):
-                import numpy as np
                 state_array = np.array(state_result)
             
             if state_array is None:
                 return
             
             # 验证状态数组有效性
-            import numpy as np
             if not isinstance(state_array, np.ndarray):
                 try:
                     state_array = np.array(state_array)
@@ -399,11 +403,22 @@ class ControllerNodeBase(ABC):
         ages = self._data_manager.get_data_ages()
         timeouts = self._time_sync.check_freshness(ages)
         
+        # 3.1 处理里程计超时
         if timeouts.get('odom_timeout', False):
             self._log_warn_throttle(
                 1.0, 
                 f"Odom timeout: age={ages.get('odom', 0)*1000:.1f}ms"
             )
+        
+        # 3.2 处理轨迹超时 - 这是安全关键的，需要特别处理
+        if timeouts.get('traj_timeout', False):
+            self._log_warn_throttle(
+                1.0, 
+                f"Trajectory timeout: age={ages.get('traj', 0)*1000:.1f}ms, "
+                f"controller will use stale trajectory (safety handled by ControllerManager)"
+            )
+            # 注意：不在这里发布停止命令，因为 ControllerManager 内部的
+            # TimeoutMonitor 会处理超时逻辑，包括宽限期和安全停止
         
         # 4. 执行控制更新
         try:
@@ -416,12 +431,19 @@ class ControllerNodeBase(ABC):
             
             return cmd
         except Exception as e:
-            self._consecutive_errors += 1
             self._handle_control_error(e, timeouts)
             return None
     
     def _handle_control_error(self, error: Exception, timeouts: Dict[str, bool]):
         """处理控制更新错误"""
+        self._consecutive_errors += 1
+        
+        # 限制连续错误计数的上限，避免无限增长
+        # 上限设为 max_consecutive_errors 的 100 倍，足够记录长时间错误
+        max_error_count = self._max_consecutive_errors * 100
+        if self._consecutive_errors > max_error_count:
+            self._consecutive_errors = max_error_count
+        
         if self._consecutive_errors <= self._max_consecutive_errors:
             self._log_error(f'Controller update failed ({self._consecutive_errors}): {error}')
         elif self._consecutive_errors % 50 == 0:
@@ -450,7 +472,7 @@ class ControllerNodeBase(ABC):
                 'traj_timeout': timeouts.get('traj_timeout', False),
                 'imu_timeout': timeouts.get('imu_timeout', False),
                 'last_odom_age_ms': ages.get('odom', float('inf')) * 1000,
-                'last_traj_age_ms': ages.get('trajectory', float('inf')) * 1000,
+                'last_traj_age_ms': ages.get('traj', float('inf')) * 1000,
                 'last_imu_age_ms': ages.get('imu', float('inf')) * 1000,
             },
             'cmd': {'vx': 0.0, 'vy': 0.0, 'vz': 0.0, 'omega': 0.0},

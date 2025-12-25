@@ -1,18 +1,31 @@
 <?xml version="1.0"?>
 <!--
-  轨迹可视化 Launch 文件
+  单应性标定工具 Launch 文件
   
-  功能: 在相机图像上实时显示网络输出的轨迹点 (使用单应性变换)
+  功能: 标定相机图像与地面坐标的单应性变换关系
+        标定完成后，可在 visualizer 中使用相机轨迹叠加功能
   
   使用方法:
-    # 正常运行 (需要先标定)
-    roslaunch controller_ros trajectory_visualizer.launch
-    
-    # 标定模式
+    # 标定模式 (交互式标定)
     roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
     
-    # 不显示窗口
+    # 验证模式 (查看标定效果)
+    roslaunch controller_ros trajectory_visualizer.launch
+    
+    # 不显示窗口 (仅发布叠加图像)
     roslaunch controller_ros trajectory_visualizer.launch show_window:=false
+  
+  标定步骤:
+    1. 在机器人前方地面放置 4 个标记点
+    2. 测量标记点相对于 base_footprint 的坐标 (x, y)
+    3. 启动标定模式
+    4. 按顺序点击图像中的 4 个标记点
+    5. 在终端输入对应的地面坐标
+    6. 按 's' 保存标定结果
+    7. 标定文件保存在 config/homography_calib.yaml
+  
+  标定完成后:
+    roslaunch controller_ros turtlebot1.launch visualizer:=true camera_image:=/usb_cam/image_raw
 -->
 <launch>
   <!-- ========== 参数 ========== -->

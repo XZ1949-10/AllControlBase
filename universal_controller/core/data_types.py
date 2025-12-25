@@ -157,6 +157,16 @@ class Trajectory:
         if not np.isfinite(self.dt_sec) or self.dt_sec <= 0:
             logger.warning(f"Trajectory dt_sec={self.dt_sec} invalid, using default {TrajectoryDefaults.dt_sec}")
             self.dt_sec = TrajectoryDefaults.dt_sec
+        
+        # 验证 velocities 维度与 points 匹配
+        # 这是一个警告而非错误，因为某些情况下维度不匹配是可接受的
+        if self.velocities is not None and len(self.points) > 0:
+            if len(self.velocities) != len(self.points):
+                logger.warning(
+                    f"Trajectory velocities length ({len(self.velocities)}) "
+                    f"doesn't match points length ({len(self.points)}). "
+                    f"This may cause issues in velocity-based control."
+                )
     
     def __len__(self) -> int:
         return len(self.points)

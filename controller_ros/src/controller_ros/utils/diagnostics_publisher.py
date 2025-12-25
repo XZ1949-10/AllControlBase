@@ -79,11 +79,7 @@ class DiagnosticsThrottler:
     - 按固定间隔发布（每 N 次控制循环发布一次）
     - 状态变化时立即发布
     - 强制发布
-    
-    首次调用行为:
-        首次调用 should_publish() 时会立即返回 True，确保控制器启动后
-        立即发布一次诊断信息。这通过将 _counter 初始化为 publish_rate - 1
-        实现，使得首次 _counter += 1 后满足发布条件。
+    - 首次调用立即发布
     
     线程安全性:
         本类是线程安全的。虽然在当前架构下（控制回调使用 MutuallyExclusiveCallbackGroup）
@@ -98,17 +94,13 @@ class DiagnosticsThrottler:
         
         Args:
             publish_rate: 发布间隔（每 N 次控制循环发布一次诊断）
-        
-        Note:
-            _counter 初始化为 publish_rate - 1，这样首次调用 should_publish()
-            时 _counter 会递增到 publish_rate，满足发布条件，实现"首次立即发布"。
         """
         self._lock = threading.Lock()
         self._publish_rate = max(1, publish_rate)
-        # 初始化为 publish_rate - 1，确保首次调用时立即发布
-        # 首次调用: _counter += 1 -> _counter == publish_rate -> 满足发布条件
-        self._counter = self._publish_rate - 1
+        self._counter = 0
         self._last_state: Optional[int] = None
+        # 首次调用标志，确保启动后立即发布一次诊断
+        self._first_call = True
     
     def should_publish(self, diag: Dict[str, Any], force: bool = False) -> bool:
         """
@@ -125,6 +117,13 @@ class DiagnosticsThrottler:
         current_state = diag.get('state', 0)
         
         with self._lock:
+            # 首次调用立即发布
+            if self._first_call:
+                self._first_call = False
+                self._last_state = current_state
+                self._counter = 0
+                return True
+            
             # 检测状态变化
             state_changed = (
                 self._last_state is not None and 
@@ -150,8 +149,9 @@ class DiagnosticsThrottler:
     def reset(self) -> None:
         """重置状态"""
         with self._lock:
-            self._counter = self._publish_rate - 1
+            self._counter = 0
             self._last_state = None
+            self._first_call = True
 
 
 def fill_diagnostics_msg(msg: Any, diag: Dict[str, Any], 

@@ -413,31 +413,39 @@ class ControllerManager:
             超时检测基于数据接收时间（单调时钟），而非消息时间戳。
             这确保了超时检测不受系统时间跳变影响。
             
-            重要：update_odom/trajectory/imu 应该在数据实际接收时调用，
-            而不是在控制循环中调用。这里只调用 check() 检查超时状态。
+            重要：notify_odom_received()/notify_trajectory_received() 应该在数据
+            实际接收时调用（如 ROS 回调中），而不是在控制循环中调用。
+            这里只调用 check() 检查超时状态。
         """
         # 检查 notify_xxx_received() 是否被正确调用
         # 如果 update() 被调用但长时间没有收到 notify 调用，发出警告
         current_time = get_monotonic_time()
         if not self._notify_warning_logged:
             # 只在启动后一段时间检查，避免启动期间的误报
+            # 这个延迟是必要的，因为：
+            # 1. 系统启动时可能还没有收到第一条消息
+            # 2. startup_grace_ms 期间超时检测本身就是禁用的
             if self._last_update_time is not None:
                 time_since_start = current_time - (self._last_update_time - self.dt)
                 if time_since_start > self._notify_check_interval:
                     # 检查 odom notify
                     if self._last_odom_notify_time is None:
                         logger.warning(
-                            "notify_odom_received() has not been called. "
+                            "notify_odom_received() has not been called after %.1fs. "
                             "Timeout detection may not work correctly. "
-                            "Please call notify_odom_received() in your odom callback."
+                            "Please ensure notify_odom_received() is called in your odom callback. "
+                            "Example: self._controller.notify_odom_received() in odom_callback()",
+                            time_since_start
                         )
                         self._notify_warning_logged = True
                     # 检查 trajectory notify
                     elif self._last_traj_notify_time is None:
                         logger.warning(
-                            "notify_trajectory_received() has not been called. "
+                            "notify_trajectory_received() has not been called after %.1fs. "
                             "Timeout detection may not work correctly. "
-                            "Please call notify_trajectory_received() in your trajectory callback."
+                            "Please ensure notify_trajectory_received() is called in your trajectory callback. "
+                            "Example: self._controller.notify_trajectory_received() in trajectory_callback()",
+                            time_since_start
                         )
                         self._notify_warning_logged = True
         

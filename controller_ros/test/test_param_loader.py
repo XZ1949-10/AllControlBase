@@ -269,7 +269,8 @@ class TestConfigKeyMatching:
             yaml_config = yaml.safe_load(f)
         
         # 检查顶级键
-        ros_only_keys = {'node', 'topics', 'tf'}  # ROS 层特有的键
+        # ROS 层特有的键，不需要在 DEFAULT_CONFIG 中定义
+        ros_only_keys = {'node', 'topics', 'tf', 'visualizer'}
         
         for key in yaml_config.keys():
             if key not in ros_only_keys:

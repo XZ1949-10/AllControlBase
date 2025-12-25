@@ -229,6 +229,18 @@ class VisualizerMainWindow(QMainWindow):
         """设置紧急停止状态"""
         self._status_bar.set_emergency_stop_state(stopped)
     
+    def load_homography_calibration(self, calib_file: str) -> bool:
+        """
+        加载单应性标定文件
+        
+        Args:
+            calib_file: YAML 标定文件路径
+            
+        Returns:
+            是否加载成功
+        """
+        return self._trajectory_view.load_homography_calibration(calib_file)
+    
     def closeEvent(self, event):
         """窗口关闭事件"""
         self._update_timer.stop()

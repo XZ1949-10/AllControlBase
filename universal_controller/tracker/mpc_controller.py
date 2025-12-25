@@ -61,6 +61,19 @@ class MPCController(ITrajectoryTracker):
         self.Q_vel = mpc_weights.get('velocity', 1.0)
         self.Q_heading = mpc_weights.get('heading', 5.0)
         
+        # 权重验证：确保权重为正值，避免 ACADOS 数值问题
+        # 零权重会导致 Hessian 矩阵奇异，求解器可能失败
+        MIN_WEIGHT = 1e-6  # 最小权重值
+        if self.Q_pos < MIN_WEIGHT:
+            logger.warning(f"MPC position weight {self.Q_pos} too small, using {MIN_WEIGHT}")
+            self.Q_pos = MIN_WEIGHT
+        if self.Q_vel < MIN_WEIGHT:
+            logger.warning(f"MPC velocity weight {self.Q_vel} too small, using {MIN_WEIGHT}")
+            self.Q_vel = MIN_WEIGHT
+        if self.Q_heading < MIN_WEIGHT:
+            logger.warning(f"MPC heading weight {self.Q_heading} too small, using {MIN_WEIGHT}")
+            self.Q_heading = MIN_WEIGHT
+        
         # 控制输入权重
         # 优先使用新命名 control_accel/control_alpha
         # 向后兼容旧命名 control_v/control_omega（已弃用）
@@ -83,6 +96,14 @@ class MPCController(ITrajectoryTracker):
             self.R_alpha = mpc_weights['control_omega']
         else:
             self.R_alpha = 0.1
+        
+        # 控制权重验证
+        if self.R_accel < MIN_WEIGHT:
+            logger.warning(f"MPC control_accel weight {self.R_accel} too small, using {MIN_WEIGHT}")
+            self.R_accel = MIN_WEIGHT
+        if self.R_alpha < MIN_WEIGHT:
+            logger.warning(f"MPC control_alpha weight {self.R_alpha} too small, using {MIN_WEIGHT}")
+            self.R_alpha = MIN_WEIGHT
         
         # Fallback 求解器参数
         fallback_config = mpc_config.get('fallback', {})
@@ -285,16 +306,23 @@ class MPCController(ITrajectoryTracker):
             ocp.solver_options.nlp_solver_type = self.nlp_solver_type
             ocp.solver_options.nlp_solver_max_iter = self.nlp_max_iter
             
-            self._solver = AcadosOcpSolver(ocp, json_file='acados_ocp.json')
-            self._is_initialized = True
+            # 先赋值给局部变量，只有完全成功后才赋值给实例变量
+            solver = AcadosOcpSolver(ocp, json_file='acados_ocp.json')
+            
+            # 初始化成功，赋值给实例变量
+            self._solver = solver
             self._ocp = ocp
+            self._is_initialized = True
             logger.info("ACADOS MPC solver initialized successfully")
             
         except Exception as e:
             logger.error(f"ACADOS initialization failed: {e}")
-            # 清理局部变量
-            solver = None
-            ocp = None
+            # 清理局部变量（如果已创建）
+            # 注意：Python 的 del 只是删除引用，实际释放由 GC 处理
+            if solver is not None:
+                del solver
+            if ocp is not None:
+                del ocp
             # 确保实例变量也被清理
             self._solver = None
             self._ocp = None
@@ -651,10 +679,20 @@ class MPCController(ITrajectoryTracker):
             horizon: 新的预测时域长度
         
         Returns:
-            bool: True 表示 horizon 已更新，False 表示被节流或无需更新
+            bool: True 表示 horizon 已更新或无需更新，False 表示被节流
+        
+        Note:
+            当返回 False 时，调用者应该继续使用当前的 horizon 值，
+            而不是假设新的 horizon 已生效。可以通过 get_health_metrics()
+            获取当前实际使用的 horizon 值。
         """
         if horizon == self.horizon:
-            return True  # 无需更新，但状态是一致的
+            return True  # 无需更新，状态一致
+        
+        # 验证 horizon 值
+        if horizon < 1:
+            logger.warning(f"Invalid horizon value {horizon}, must be >= 1")
+            return False
         
         # 节流检查：防止频繁重新初始化
         current_time = time.time()
@@ -668,18 +706,36 @@ class MPCController(ITrajectoryTracker):
                 return False  # 明确返回 False 表示未更新
         
         old_horizon = self.horizon
+        was_initialized = self._is_initialized
+        
         self.horizon = horizon
         self._last_horizon_change_time = current_time
         logger.info(f"MPC horizon changed from {old_horizon} to {horizon}")
         
-        if self._is_initialized:
+        if was_initialized:
             logger.info("Reinitializing ACADOS solver with new horizon...")
             # 使用统一的资源释放方法
             self._release_solver_resources()
             self._is_initialized = False
             self._initialize_solver()
+            
+            # 检查重新初始化是否成功
+            if not self._is_initialized:
+                # ACADOS 初始化失败，但 horizon 值已更新
+                # 系统会使用 fallback 求解器，这是可接受的降级行为
+                # 不恢复旧 horizon，因为：
+                # 1. fallback 求解器也能使用新 horizon
+                # 2. 调用者请求的 horizon 应该被尊重
+                # 3. 恢复旧 horizon 可能导致状态不一致
+                logger.warning(
+                    f"ACADOS solver reinitialization failed. "
+                    f"Horizon updated to {horizon}, using fallback solver. "
+                    f"Check ACADOS installation and configuration."
+                )
         
-        return True  # 成功更新
+        # 返回 True 表示 horizon 已更新
+        # 调用者可通过 get_health_metrics()['acados_available'] 检查 ACADOS 状态
+        return True
     
     def get_health_metrics(self) -> Dict[str, Any]:
         return {

@@ -102,6 +102,8 @@ class VelocitySmoother:
         """
         平滑停止
         
+        使用向量限制确保合成加速度不超过 a_max，与 smooth() 方法保持一致。
+        
         Args:
             last_cmd: 上一次的控制命令
             frame_id: 输出坐标系
@@ -113,16 +115,30 @@ class VelocitySmoother:
             return ControlOutput(vx=0.0, vy=0.0, vz=0.0, omega=0.0, 
                                frame_id=frame_id, success=True)
         
-        def smooth_to_zero(value: float, max_change: float) -> float:
+        # 水平速度使用向量限制，确保合成加速度不超过 a_max
+        v_horizontal = np.sqrt(last_cmd.vx**2 + last_cmd.vy**2)
+        if v_horizontal <= self.max_dv:
+            # 可以在一步内停止
+            new_vx, new_vy = 0.0, 0.0
+        elif v_horizontal > 1e-9:
+            # 按比例缩减，保持速度方向
+            scale = (v_horizontal - self.max_dv) / v_horizontal
+            new_vx = last_cmd.vx * scale
+            new_vy = last_cmd.vy * scale
+        else:
+            new_vx, new_vy = 0.0, 0.0
+        
+        # 垂直速度和角速度独立处理
+        def smooth_scalar_to_zero(value: float, max_change: float) -> float:
             if abs(value) <= max_change:
                 return 0.0
             return value - max_change if value > 0 else value + max_change
         
         return ControlOutput(
-            vx=smooth_to_zero(last_cmd.vx, self.max_dv),
-            vy=smooth_to_zero(last_cmd.vy, self.max_dv),
-            vz=smooth_to_zero(last_cmd.vz, self.max_dvz),
-            omega=smooth_to_zero(last_cmd.omega, self.max_domega),
+            vx=new_vx,
+            vy=new_vy,
+            vz=smooth_scalar_to_zero(last_cmd.vz, self.max_dvz),
+            omega=smooth_scalar_to_zero(last_cmd.omega, self.max_domega),
             frame_id=frame_id,
             success=True
         )

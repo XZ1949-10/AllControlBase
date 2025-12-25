@@ -322,6 +322,13 @@ class ParamLoader:
         
         # 数值类型转换
         if default_type == int and not isinstance(ros_value, bool):
+            # 检查是否会丢失精度
+            if isinstance(ros_value, float) and ros_value != int(ros_value):
+                logger.warning(
+                    f"Type conversion from float to int will lose precision: "
+                    f"{ros_value} -> {int(ros_value)}. "
+                    f"Consider using float type in default config."
+                )
             try:
                 return int(ros_value)
             except (ValueError, TypeError):

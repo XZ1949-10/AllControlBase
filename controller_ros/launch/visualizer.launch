@@ -3,21 +3,45 @@
 
 启动 TurtleBot1 运行可视化界面。
 
+功能:
+- 轨迹可视化: 俯视图或相机图像叠加 (需要单应性标定)
+- 速度监控: 实时显示底盘线速度和角速度
+- 手柄控制: Xbox 手柄控制机器人，LB 键切换控制模式
+
 使用方法:
+    # 基本启动 (俯视图模式)
     roslaunch controller_ros visualizer.launch
+    
+    # 使用相机图像 + 轨迹叠加 (需要先标定)
+    roslaunch controller_ros visualizer.launch \
+        camera_image:=/usb_cam/image_raw \
+        calibration_file:=$(rospack find controller_ros)/config/homography_calib.yaml
     
     # 使用自定义配置
     roslaunch controller_ros visualizer.launch config_file:=/path/to/config.yaml
+
+标定说明:
+    如需在相机图像上显示轨迹，需要先进行单应性标定:
+    roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
 -->
 <launch>
     <!-- 参数 -->
     <arg name="config_file" default="$(find controller_ros)/config/visualizer_params.yaml"/>
+    <arg name="camera_image" default="" doc="相机图像话题 (留空使用俯视图)"/>
+    <arg name="calibration_file" default="" doc="单应性标定文件路径"/>
     
     <!-- 加载配置 -->
     <rosparam file="$(arg config_file)" command="load" ns="visualizer"/>
     
+    <!-- 覆盖相机配置 -->
+    <param name="visualizer/topics/camera_image" value="$(arg camera_image)" if="$(eval camera_image != '')"/>
+    <param name="visualizer/camera/calibration_file" value="$(arg calibration_file)" if="$(eval calibration_file != '')"/>
+    
     <!-- 可视化节点 -->
     <node pkg="controller_ros" type="visualizer_node.py" name="turtlebot_visualizer" output="screen">
         <rosparam file="$(arg config_file)" command="load"/>
+        <!-- 覆盖参数 -->
+        <param name="topics/camera_image" value="$(arg camera_image)" if="$(eval camera_image != '')"/>
+        <param name="camera/calibration_file" value="$(arg calibration_file)" if="$(eval calibration_file != '')"/>
     </node>
 </launch>

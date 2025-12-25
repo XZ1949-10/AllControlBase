@@ -19,7 +19,7 @@ class TestTimeSyncInit:
         max_ages = sync.get_max_ages()
         
         assert max_ages['odom'] == 0.1  # 100ms
-        assert max_ages['trajectory'] == 0.2  # 200ms
+        assert max_ages['traj'] == 0.2  # 200ms
         assert max_ages['imu'] == 0.05  # 50ms
     
     def test_custom_init(self):
@@ -34,7 +34,7 @@ class TestTimeSyncInit:
         max_ages = sync.get_max_ages()
         
         assert max_ages['odom'] == 0.5
-        assert max_ages['trajectory'] == 1.0
+        assert max_ages['traj'] == 1.0
         assert max_ages['imu'] == 0.2
     
     def test_disabled_timeout_zero(self):
@@ -341,7 +341,7 @@ class TestGetMaxAges:
         max_ages = sync.get_max_ages()
         
         assert max_ages['odom'] == 0.1
-        assert max_ages['trajectory'] is None
+        assert max_ages['traj'] is None
         assert max_ages['imu'] is None
 
 

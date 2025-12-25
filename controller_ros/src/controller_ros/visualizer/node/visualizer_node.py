@@ -77,6 +77,10 @@ class VisualizerNode:
         self._cmd_vel_topic = topics.get('cmd_vel_output', '/cmd_vel')
         self._mode_topic = topics.get('control_mode', '/visualizer/control_mode')
         self._estop_topic = topics.get('emergency_stop', '/controller/emergency_stop')
+        
+        # 相机标定配置
+        camera_config = self._config.get('camera', {})
+        self._homography_file = camera_config.get('calibration_file', '')
 
         # 适配器
         joy_config = self._config.get('joystick', {})
@@ -144,6 +148,10 @@ class VisualizerNode:
             'constraints': {
                 'v_max': 0.5,
                 'omega_max': 1.0,
+            },
+            'camera': {
+                'use_camera': False,
+                'calibration_file': '',  # 单应性标定文件路径
             },
         }
 
@@ -323,6 +331,14 @@ class VisualizerNode:
             self._config
         )
         self._window.emergency_stop_requested.connect(self._publish_emergency_stop)
+        
+        # 加载单应性标定 (如果配置了)
+        if self._homography_file:
+            if self._window.load_homography_calibration(self._homography_file):
+                self._ros.log_info(f"Homography calibration loaded: {self._homography_file}")
+            else:
+                self._ros.log_warn(f"Failed to load homography calibration: {self._homography_file}")
+        
         self._window.show()
         
         # 启动 ROS 线程

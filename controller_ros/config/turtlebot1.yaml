@@ -255,3 +255,25 @@ ekf:
   measurement_noise:
     odom_position: 0.05           # 里程计位置噪声 (TurtleBot1 精度较低)
     odom_velocity: 0.1            # 里程计速度噪声
+
+# =============================================================================
+# 可视化配置 (visualizer)
+# =============================================================================
+# 启用方式: roslaunch controller_ros turtlebot1.launch visualizer:=true
+# 
+# 功能说明:
+# - 轨迹可视化: 在俯视图上显示网络输出的轨迹
+# - 速度监控: 实时显示底盘线速度和角速度
+# - 手柄控制: Xbox 手柄控制机器人，LB 键切换控制模式
+#
+# 注意: 详细配置请参考 config/visualizer_params.yaml
+visualizer:
+  enabled: false                  # 是否默认启用 (launch 参数可覆盖)
+  display:
+    update_rate: 30               # GUI 刷新率 (Hz)
+    velocity_history_sec: 10      # 速度历史显示时长 (秒)
+  joystick:
+    enable_button: 4              # LB 键 - 使能手柄控制
+    max_linear: 0.5               # 手柄最大线速度 (m/s)
+    max_angular: 1.0              # 手柄最大角速度 (rad/s)
+    deadzone: 0.1                 # 摇杆死区

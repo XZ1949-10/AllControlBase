@@ -77,6 +77,16 @@ class PurePursuitController(ITrajectoryTracker):
         # 用于避免 arctan2 在 +π 和 -π 之间跳变导致的角速度突变
         self.rear_angle_thresh = backup_config.get('rear_angle_thresh', 0.9 * np.pi)  # ~162°
         
+        # 正后方转向方向判断的最小阈值
+        # 当 |local_y| < 此阈值时，认为目标点完全在正后方，使用默认转向方向
+        # 默认 0.05m，可配置以适应不同的噪声环境
+        self.rear_direction_min_thresh = backup_config.get('rear_direction_min_thresh', 0.05)
+        
+        # 正后方默认转向方向: 1 = 左转 (逆时针), -1 = 右转 (顺时针)
+        # 当目标点完全在正后方且无法判断偏向时使用此默认值
+        default_turn_str = backup_config.get('default_turn_direction', 'left')
+        self.default_turn_direction = 1 if default_turn_str.lower() == 'left' else -1
+        
         # 记录上一次的转向方向，用于正后方情况下保持一致的转向
         self._last_turn_direction: Optional[int] = None  # +1 左转, -1 右转
         
@@ -249,13 +259,13 @@ class PurePursuitController(ITrajectoryTracker):
                     else:
                         # 首次遇到正后方情况，选择较短的转向方向
                         # 使用 local_y 的符号来决定（目标点偏左还是偏右）
-                        # 阈值设为 min_distance_thresh 的一半，确保有足够的判断余量
-                        rear_direction_thresh = max(self.min_distance_thresh * 0.5, 0.02)
+                        # 使用配置的阈值，确保在噪声环境下判断稳定
+                        rear_direction_thresh = max(self.min_distance_thresh * 0.5, self.rear_direction_min_thresh)
                         if abs(local_y) > rear_direction_thresh:
                             self._last_turn_direction = 1 if local_y > 0 else -1
                         else:
-                            # 完全在正后方，默认左转
-                            self._last_turn_direction = 1
+                            # 完全在正后方，使用配置的默认转向方向
+                            self._last_turn_direction = self.default_turn_direction
                         omega_desired = self._last_turn_direction * omega_limit
                 else:
                     # 不在正后方，清除转向方向记录
@@ -489,42 +499,61 @@ class PurePursuitController(ITrajectoryTracker):
         v_min_forward = max(0.0, self.v_min)
         return np.clip(target_v, v_min_forward, self.v_max)
     
-    def _extract_velocity_magnitude(self, velocities: np.ndarray, idx: int) -> float:
-        """从速度数组中提取速度大小，处理各种数据格式"""
+    def _extract_velocity_magnitude(self, velocities: np.ndarray, idx: int) -> Optional[float]:
+        """
+        从速度数组中提取速度大小，处理各种数据格式
+        
+        Args:
+            velocities: 速度数组
+            idx: 索引
+        
+        Returns:
+            速度大小，如果无法提取或结果无效则返回 None
+        """
         if velocities is None or idx >= len(velocities):
             return None
         
         try:
             vel = velocities[idx]
+            result = None
+            
             # 处理不同的数组形状
             if isinstance(vel, np.ndarray):
                 if vel.ndim == 0:
                     # 0维数组 (标量)
-                    return abs(float(vel))
+                    result = abs(float(vel))
                 elif vel.size == 0:
                     # 空数组
                     return None
                 elif len(vel) >= 2:
                     # 多维速度向量 [vx, vy, ...]
-                    return np.sqrt(vel[0]**2 + vel[1]**2)
+                    result = np.sqrt(vel[0]**2 + vel[1]**2)
                 elif len(vel) == 1:
                     # 单元素数组
-                    return abs(float(vel[0]))
+                    result = abs(float(vel[0]))
                 else:
                     return None
             elif hasattr(vel, '__len__'):
                 # 列表或元组
                 if len(vel) >= 2:
-                    return np.sqrt(float(vel[0])**2 + float(vel[1])**2)
+                    result = np.sqrt(float(vel[0])**2 + float(vel[1])**2)
                 elif len(vel) == 1:
-                    return abs(float(vel[0]))
+                    result = abs(float(vel[0]))
                 else:
                     return None
             elif np.isscalar(vel):
                 # 纯标量
-                return abs(float(vel))
+                result = abs(float(vel))
             else:
                 return None
+            
+            # 检查结果是否为有效数值（非 NaN、非 Inf）
+            if result is not None and not np.isfinite(result):
+                logger.debug(f"Invalid velocity magnitude at index {idx}: {result}")
+                return None
+            
+            return result
+            
         except (IndexError, TypeError, ValueError) as e:
             logger.debug(f"Velocity data format issue at index {idx}: {e}")
             return None

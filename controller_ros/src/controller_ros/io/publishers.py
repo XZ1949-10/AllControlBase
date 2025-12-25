@@ -10,14 +10,15 @@ from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Int32
 
-from universal_controller.core.data_types import ControlOutput, Trajectory
-from ..adapters import OutputAdapter
+from universal_controller.core.data_types import ControlOutput, Trajectory, AttitudeCommand
+from ..adapters import OutputAdapter, AttitudeAdapter
 from ..utils.ros_compat import get_time_sec
 from ..utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsThrottler
 
 # 默认话题名常量
 DEFAULT_STATE_TOPIC = '/controller/state'
 DEFAULT_DEBUG_PATH_TOPIC = '/controller/debug_path'
+DEFAULT_ATTITUDE_CMD_TOPIC = '/controller/attitude_cmd'
 
 
 class PublisherManager:
@@ -27,13 +28,15 @@ class PublisherManager:
     职责:
     - 创建和管理所有发布器
     - 发布统一控制命令和诊断
+    - 支持四旋翼平台姿态命令发布
     
     注意: 不做平台特定转换，只发布 UnifiedCmd
     """
     
     def __init__(self, node: Node, topics: Dict[str, str],
                  default_frame_id: str = 'base_link',
-                 diag_publish_rate: int = 10):
+                 diag_publish_rate: int = 10,
+                 is_quadrotor: bool = False):
         """
         初始化发布管理器
         
@@ -42,15 +45,21 @@ class PublisherManager:
             topics: 话题配置字典
             default_frame_id: 默认输出坐标系
             diag_publish_rate: 诊断发布降频率 (每 N 次控制循环发布一次)
+            is_quadrotor: 是否为四旋翼平台
         """
         self._node = node
         self._topics = topics
+        self._is_quadrotor = is_quadrotor
         
         # 创建时间获取函数，支持仿真时间
-        self._output_adapter = OutputAdapter(
-            default_frame_id, 
-            get_time_func=lambda: get_time_sec(node)
-        )
+        self._get_time_func = lambda: get_time_sec(node)
+        self._output_adapter = OutputAdapter(default_frame_id, get_time_func=self._get_time_func)
+        
+        # 姿态适配器 (四旋翼平台)
+        if is_quadrotor:
+            self._attitude_adapter = AttitudeAdapter(get_time_func=self._get_time_func)
+        else:
+            self._attitude_adapter = None
         
         # 创建发布器
         self._create_publishers()
@@ -96,6 +105,21 @@ class PublisherManager:
         self._path_pub = self._node.create_publisher(
             Path, debug_path_topic, 1
         )
+        
+        # 姿态命令发布器 (四旋翼平台)
+        if self._is_quadrotor:
+            attitude_topic = self._topics.get('attitude_cmd', DEFAULT_ATTITUDE_CMD_TOPIC)
+            try:
+                from controller_ros.msg import AttitudeCmd
+                self._attitude_pub = self._node.create_publisher(
+                    AttitudeCmd, attitude_topic, 1
+                )
+                self._node.get_logger().info(f"Publishing attitude to: {attitude_topic}")
+            except ImportError:
+                self._attitude_pub = None
+                self._node.get_logger().warn("AttitudeCmd message not available")
+        else:
+            self._attitude_pub = None
     
     def publish_cmd(self, cmd: ControlOutput):
         """发布统一控制命令"""
@@ -183,3 +207,33 @@ class PublisherManager:
             path.poses.append(pose)
         
         self._path_pub.publish(path)
+    
+    def publish_attitude_cmd(self, attitude_cmd: AttitudeCommand,
+                             yaw_mode: int = 0, is_hovering: bool = False):
+        """
+        发布姿态命令 (四旋翼平台)
+        
+        Args:
+            attitude_cmd: 姿态命令
+            yaw_mode: 航向模式
+            is_hovering: 是否悬停
+        """
+        if self._attitude_pub is None or self._attitude_adapter is None:
+            return
+        
+        ros_msg = self._attitude_adapter.to_ros(
+            attitude_cmd,
+            yaw_mode=yaw_mode,
+            is_hovering=is_hovering
+        )
+        self._attitude_pub.publish(ros_msg)
+    
+    @property
+    def output_adapter(self) -> OutputAdapter:
+        """获取输出适配器"""
+        return self._output_adapter
+    
+    @property
+    def attitude_adapter(self) -> Optional[AttitudeAdapter]:
+        """获取姿态适配器"""
+        return self._attitude_adapter

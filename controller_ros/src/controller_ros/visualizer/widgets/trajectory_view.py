@@ -2,9 +2,11 @@
 轨迹可视化组件
 
 在相机图像或俯视图上显示轨迹和机器人位置。
+支持使用单应性变换将轨迹投影到相机图像上。
 """
 from typing import Optional, List, Tuple
 import math
+import logging
 
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
 from PyQt5.QtCore import Qt, QTimer, QPointF
@@ -12,6 +14,9 @@ from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QImage
 import numpy as np
 
 from ..models import TrajectoryData, RobotPose, Point3D
+from ..homography import HomographyTransform
+
+logger = logging.getLogger(__name__)
 
 
 class TrajectoryView(QWidget):
@@ -45,6 +50,10 @@ class TrajectoryView(QWidget):
         self._scale = 100.0          # 像素/米
         self._view_range = 3.0       # 视野范围 (米)
         self._use_camera = False     # 是否使用相机图像
+        
+        # 单应性变换 (用于相机图像模式)
+        self._homography = HomographyTransform()
+        self._boundary_margin = 50   # 边界容差 (像素)
         
         # 设置最小尺寸
         self.setMinimumSize(400, 300)
@@ -94,6 +103,28 @@ class TrajectoryView(QWidget):
         """设置视野范围 (米)"""
         self._view_range = max(0.5, range_m)
         self.update()
+    
+    def load_homography_calibration(self, calib_file: str) -> bool:
+        """
+        加载单应性标定文件
+        
+        Args:
+            calib_file: YAML 标定文件路径
+            
+        Returns:
+            是否加载成功
+        """
+        success = self._homography.load_calibration(calib_file)
+        if success:
+            logger.info(f"Homography calibration loaded: {calib_file}")
+            error = self._homography.compute_reprojection_error()
+            logger.info(f"Reprojection error: {error:.2f} pixels")
+        return success
+    
+    @property
+    def is_homography_calibrated(self) -> bool:
+        """是否已加载单应性标定"""
+        return self._homography.is_calibrated
     
     def _update_info_label(self):
         """更新信息标签"""
@@ -150,6 +181,11 @@ class TrajectoryView(QWidget):
         x = (self.width() - scaled.width()) // 2
         y = (self.height() - scaled.height()) // 2
         painter.drawPixmap(x, y, scaled)
+        
+        # 保存缩放信息 (用于轨迹投影)
+        self._camera_scale = scaled.width() / w
+        self._camera_offset = (x, y)
+        self._camera_size = (w, h)
     
     def _draw_grid_background(self, painter: QPainter):
         """绘制网格背景 (俯视图模式)"""
@@ -213,6 +249,14 @@ class TrajectoryView(QWidget):
         if self._trajectory is None or self._trajectory.num_points == 0:
             return
         
+        # 根据模式选择投影方式
+        if self._use_camera and self._homography.is_calibrated:
+            self._draw_trajectory_on_camera(painter)
+        else:
+            self._draw_trajectory_on_birdview(painter)
+    
+    def _draw_trajectory_on_birdview(self, painter: QPainter):
+        """在俯视图上绘制轨迹"""
         points = self._trajectory.points
         
         # 绘制轨迹线
@@ -240,6 +284,94 @@ class TrajectoryView(QWidget):
             
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(sx - radius, sy - radius, radius * 2, radius * 2)
+    
+    def _draw_trajectory_on_camera(self, painter: QPainter):
+        """在相机图像上绘制轨迹 (使用单应性变换)"""
+        if not hasattr(self, '_camera_scale'):
+            return
+        
+        points = self._trajectory.points
+        scale = self._camera_scale
+        offset_x, offset_y = self._camera_offset
+        img_w, img_h = self._camera_size
+        margin = self._boundary_margin
+        
+        # 投影所有轨迹点
+        projected_points = []
+        for p in points:
+            proj = self._homography.project(p.x, p.y)
+            if proj:
+                u, v = proj
+                # 检查是否在图像范围内 (带边界容差)
+                if -margin <= u < img_w + margin and -margin <= v < img_h + margin:
+                    # 裁剪到图像边界
+                    u = max(0, min(img_w - 1, u))
+                    v = max(0, min(img_h - 1, v))
+                    # 转换到窗口坐标
+                    sx = int(offset_x + u * scale)
+                    sy = int(offset_y + v * scale)
+                    projected_points.append((sx, sy))
+                else:
+                    projected_points.append(None)
+            else:
+                projected_points.append(None)
+        
+        # 绘制轨迹线
+        pen = QPen(self.COLOR_TRAJECTORY)
+        pen.setWidth(3)
+        painter.setPen(pen)
+        
+        num_points = len(projected_points)
+        for i in range(num_points - 1):
+            if projected_points[i] and projected_points[i + 1]:
+                # 渐变颜色
+                ratio = i / max(num_points - 1, 1)
+                color = QColor(
+                    int(255 * ratio),       # R: 0 -> 255
+                    int(255 * (1 - ratio)), # G: 255 -> 0
+                    0                        # B: 0
+                )
+                pen.setColor(color)
+                painter.setPen(pen)
+                painter.drawLine(
+                    projected_points[i][0], projected_points[i][1],
+                    projected_points[i + 1][0], projected_points[i + 1][1]
+                )
+        
+        # 绘制轨迹点
+        for i, pt in enumerate(projected_points):
+            if pt is None:
+                continue
+            
+            ratio = i / max(num_points - 1, 1)
+            
+            if i == 0:
+                # 第一个点 - 绿色大圆
+                color = self.COLOR_TRAJECTORY
+                radius = 12
+            elif i == num_points - 1:
+                # 最后一个点 - 蓝色
+                color = QColor(255, 100, 0)
+                radius = 10
+            else:
+                color = QColor(
+                    int(255 * ratio),
+                    int(255 * (1 - ratio)),
+                    0
+                )
+                radius = 8
+            
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(QColor(255, 255, 255), 2))
+            painter.drawEllipse(pt[0] - radius, pt[1] - radius, radius * 2, radius * 2)
+            
+            # 显示点序号
+            painter.setPen(QColor(255, 255, 255))
+            font = QFont()
+            font.setPointSize(9)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(pt[0] + radius + 3, pt[1] + 4, str(i + 1))
     
     def _draw_robot(self, painter: QPainter):
         """绘制机器人"""

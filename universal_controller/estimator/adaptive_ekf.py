@@ -153,6 +153,10 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         self.last_imu_time: Optional[float] = None
         self._imu_available = True
+        
+        # 日志节流标志 - 避免重复警告
+        self._quaternion_error_logged = False
+        self._euler_nan_logged = False
     
     def set_imu_available(self, available: bool) -> None:
         self._imu_available = available
@@ -405,6 +409,17 @@ class AdaptiveEKFEstimator(IStateEstimator):
                             # 使用配置的最大倾斜角阈值
                             elif abs(roll) < self.max_tilt_angle and abs(pitch) < self.max_tilt_angle:
                                 use_imu_orientation = True
+                            else:
+                                # roll/pitch 超出最大倾斜角阈值，使用默认姿态
+                                # 这可能是传感器故障或机器人翻倒
+                                if not hasattr(self, '_tilt_exceeded_logged'):
+                                    logger.warning(
+                                        f"IMU tilt angle exceeded max_tilt_angle ({np.degrees(self.max_tilt_angle):.1f}°): "
+                                        f"roll={np.degrees(roll):.1f}°, pitch={np.degrees(pitch):.1f}°. "
+                                        f"Using default horizontal orientation."
+                                    )
+                                    self._tilt_exceeded_logged = True
+                                use_imu_orientation = False
             except (TypeError, ValueError, IndexError, AttributeError) as e:
                 # 四元数数据格式错误，使用默认姿态
                 # 只在首次遇到时记录警告，避免日志泛滥
@@ -722,3 +737,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self._imu_available = True
         self._imu_drift_detected = False
         self._last_odom_orientation = None
+        # 重置日志节流标志，允许重置后再次记录警告
+        self._quaternion_error_logged = False
+        self._euler_nan_logged = False
+        self._tilt_exceeded_logged = False

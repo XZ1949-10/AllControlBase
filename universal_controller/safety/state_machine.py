@@ -63,6 +63,18 @@ class StateMachine:
         # 外部停止请求标志
         self._stop_requested = False
         
+        # 状态持续时间监控
+        # 用于检测系统是否长时间处于降级状态
+        self._state_entry_time: Optional[float] = None
+        self._degraded_state_timeout = sm_config.get('degraded_state_timeout', 30.0)  # 秒
+        self._backup_state_timeout = sm_config.get('backup_state_timeout', 60.0)  # 秒
+        # 是否启用状态超时自动停止（默认关闭，仅告警）
+        self._enable_state_timeout_stop = sm_config.get('enable_state_timeout_stop', False)
+        # 状态超时回调（可选，用于外部告警系统）
+        self._state_timeout_callback: Optional[Callable[[ControllerState, float], None]] = None
+        # 已触发超时告警的状态（避免重复告警）
+        self._timeout_warned_states: set = set()
+        
         # 状态处理器映射
         self._state_handlers: Dict[ControllerState, Callable[[DiagnosticsInput], Optional[ControllerState]]] = {
             ControllerState.INIT: self._handle_init,
@@ -92,8 +104,15 @@ class StateMachine:
         - 这是安全关键功能，用于紧急停止场景
         
         Returns:
-            True 表示请求已接受
+            True: 请求已接受，将在下次 update() 时转换到 STOPPING 状态
+            False: 请求被忽略，因为系统已经在 STOPPING 或 STOPPED 状态
         """
+        # 如果已经在停止过程中，返回 False 表示请求无效
+        # 这让调用者知道系统已经在处理停止
+        if self.state in (ControllerState.STOPPING, ControllerState.STOPPED):
+            logger.debug(f"Stop request ignored: already in {self.state.name} state")
+            return False
+        
         self._stop_requested = True
         logger.info("Stop requested via external interface")
         return True
@@ -122,7 +141,79 @@ class StateMachine:
         # 注意：_reset_all_counters 已经清空了 MPC 历史
         # 不需要额外的条件判断
         
+        # 更新状态进入时间
+        self._state_entry_time = get_monotonic_time()
+        # 清除该状态的超时告警标记（允许下次进入时重新告警）
+        self._timeout_warned_states.discard(new_state)
+        
         return new_state
+    
+    def set_state_timeout_callback(self, callback: Callable[[ControllerState, float], None]) -> None:
+        """
+        设置状态超时回调函数
+        
+        当状态持续时间超过阈值时，会调用此回调函数。
+        回调函数签名: callback(state: ControllerState, duration: float)
+        
+        Args:
+            callback: 回调函数，接收当前状态和持续时间（秒）
+        """
+        self._state_timeout_callback = callback
+    
+    def _check_state_duration(self) -> Optional[ControllerState]:
+        """
+        检查状态持续时间，返回是否需要转换状态
+        
+        Returns:
+            如果需要因超时而转换状态，返回目标状态；否则返回 None
+        """
+        if self._state_entry_time is None:
+            return None
+        
+        duration = get_monotonic_time() - self._state_entry_time
+        timeout = None
+        
+        # 根据当前状态确定超时阈值
+        if self.state == ControllerState.MPC_DEGRADED:
+            timeout = self._degraded_state_timeout
+        elif self.state == ControllerState.BACKUP_ACTIVE:
+            timeout = self._backup_state_timeout
+        
+        if timeout is None or timeout <= 0:
+            return None  # 该状态不需要超时检查或超时已禁用
+        
+        if duration > timeout:
+            # 触发超时告警（每个状态周期只告警一次）
+            if self.state not in self._timeout_warned_states:
+                self._timeout_warned_states.add(self.state)
+                logger.warning(
+                    f"State {self.state.name} duration ({duration:.1f}s) exceeded timeout ({timeout:.1f}s)"
+                )
+                # 调用外部回调（如果设置）
+                if self._state_timeout_callback is not None:
+                    try:
+                        self._state_timeout_callback(self.state, duration)
+                    except Exception as e:
+                        logger.error(f"State timeout callback error: {e}")
+            
+            # 如果启用了超时自动停止，返回 STOPPING 状态
+            if self._enable_state_timeout_stop:
+                logger.warning(f"Auto-stopping due to {self.state.name} timeout")
+                self._stopping_start_time = get_monotonic_time()
+                return ControllerState.STOPPING
+        
+        return None
+    
+    def get_state_duration(self) -> float:
+        """
+        获取当前状态的持续时间（秒）
+        
+        Returns:
+            当前状态的持续时间，如果状态刚进入则返回 0
+        """
+        if self._state_entry_time is None:
+            return 0.0
+        return get_monotonic_time() - self._state_entry_time
     
     def _check_mpc_should_switch_to_backup(self, mpc_success: bool) -> bool:
         """检查是否应该切换到备用控制器"""
@@ -147,21 +238,24 @@ class StateMachine:
         """
         检查 MPC 是否可以恢复
         
-        使用两种互补策略的组合:
-        1. 绝对容错 (tolerance): 最近 N 次中允许最多 tolerance 次失败
-           - 目的: 确保最近的表现稳定，没有连续失败
-           - 默认 tolerance=0 表示最近 N 次必须全部成功
-        2. 比例要求 (success_ratio): 整体成功率必须达到阈值
-           - 目的: 确保整体表现良好，不是偶然成功
-           - 默认 0.8 表示需要 80% 的成功率
+        使用分层恢复策略:
         
-        两个条件都满足才允许恢复，确保恢复决策的稳健性。
+        1. 快速恢复路径: 如果最近 N 次全部成功，立即允许恢复
+           - 目的: 短暂故障后快速恢复，减少不必要的降级时间
+           - 条件: recent_successes == recent_count
+        
+        2. 标准恢复路径: 使用两种互补策略的组合
+           a. 绝对容错 (tolerance): 最近 N 次中允许最多 tolerance 次失败
+              - 目的: 确保最近的表现稳定，没有连续失败
+              - 默认 tolerance=1 表示最近 N 次最多 1 次失败
+           b. 比例要求 (success_ratio): 整体成功率必须达到阈值
+              - 目的: 确保整体表现良好，不是偶然成功
+              - 默认 0.8 表示需要 80% 的成功率
         
         设计说明:
+        - 快速恢复路径优先，减少不必要的降级时间
+        - 标准恢复路径作为后备，确保恢复决策的稳健性
         - tolerance 和 success_ratio 应该配置为互补关系
-        - 例如: tolerance=0, success_ratio=0.8 表示:
-          "最近 5 次必须全部成功，且整体成功率 >= 80%"
-        - 这比单一条件更严格，避免 MPC 在不稳定状态下恢复
         """
         history_len = len(self._mpc_success_history)
         if history_len < self.mpc_recovery_history_min:
@@ -170,22 +264,22 @@ class StateMachine:
         recent_count = min(self.mpc_recovery_recent_count, history_len)
         
         # 直接从 deque 末尾迭代，避免 list() 转换的内存分配
-        # deque 支持负索引和迭代
         recent_successes = 0
         for i in range(recent_count):
-            # 从末尾开始访问: -1, -2, -3, ...
             if self._mpc_success_history[-(i + 1)]:
                 recent_successes += 1
         
-        # 条件1: 绝对容错 - 失败次数不超过 tolerance
+        # 快速恢复路径: 最近 N 次全部成功，立即恢复
+        if recent_successes == recent_count:
+            return True
+        
+        # 标准恢复路径: 绝对容错 + 比例要求
         failures = recent_count - recent_successes
         absolute_condition = failures <= self.mpc_recovery_tolerance
         
-        # 条件2: 比例要求 - 成功率达到阈值
         success_ratio = recent_successes / recent_count if recent_count > 0 else 0.0
         ratio_condition = success_ratio >= self.mpc_recovery_success_ratio
         
-        # 两个条件都满足才允许恢复
         return absolute_condition and ratio_condition
     
     def update(self, diagnostics: DiagnosticsInput) -> ControllerState:
@@ -205,6 +299,11 @@ class StateMachine:
                 self._stopping_start_time = get_monotonic_time()
                 return self._transition_to(ControllerState.STOPPING)
             return self.state
+        
+        # 状态持续时间检查 - 检测长时间处于降级状态
+        timeout_transition = self._check_state_duration()
+        if timeout_transition is not None:
+            return self._transition_to(timeout_transition)
         
         # 调用当前状态的处理器
         handler = self._state_handlers.get(self.state)
@@ -367,3 +466,6 @@ class StateMachine:
         self._reset_mpc_history()  # 完全重置时清空历史
         self._stopping_start_time = None
         self._stop_requested = False
+        # 重置状态持续时间监控
+        self._state_entry_time = None
+        self._timeout_warned_states.clear()

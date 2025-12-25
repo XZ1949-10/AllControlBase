@@ -2,7 +2,301 @@
 
 ## 重构日期: 2024-12-25 (最新更新)
 
-## 最新更新: 全面 Bug 分析与修复 (第三轮) ✅ 已完成
+## 最新更新: controller_ros Bug 修复与代码优化 (第七轮) ✅ 已完成
+
+### 本次修复完成的工作
+
+#### 1. ROS2 控制定时器资源清理 ✅ 已完成
+**问题**: ROS2 版本的 `ControllerNode.shutdown()` 未显式清理 `_control_timer`。
+
+**分析**: 
+- 虽然 `destroy_node()` 会自动清理定时器，但显式清理是更好的实践
+- 与 ROS1 版本保持一致性
+
+**解决方案**: 
+- 在 `shutdown()` 方法中显式取消控制定时器
+- 添加详细注释说明设计意图
+
+**修改文件**: `controller_ros/src/controller_ros/node/controller_node.py`
+
+#### 2. 连续错误计数添加上限 ✅ 已完成
+**问题**: `_consecutive_errors` 计数器无限增长，语义不清晰。
+
+**分析**: 
+- Python int 不会溢出，但无限增长的计数器语义不清晰
+- 在极端情况下可能影响日志逻辑（`% 50` 计算）
+
+**解决方案**: 
+- 添加上限为 `max_consecutive_errors * 100`（默认 1000）
+- 足够记录长时间错误，同时避免无限增长
+
+**修改文件**: `controller_ros/src/controller_ros/node/base_node.py`
+
+#### 3. HomographyTransform 输入验证增强 ✅ 已完成
+**问题**: `project()` 和 `unproject()` 方法缺少 NaN/Inf 输入验证。
+
+**分析**: 
+- 如果输入包含 NaN 或 Inf，会导致计算结果无效
+- 防御性编程应该检查输入有效性
+
+**解决方案**: 
+- 在 `project()` 中添加 `np.isfinite()` 检查
+- 在 `unproject()` 中添加类型转换和有效性检查
+- 添加输出结果验证
+
+**修改文件**: `controller_ros/src/controller_ros/visualizer/homography.py`
+
+#### 4. TF2InjectionManager 控制频率传递优化 ✅ 已完成
+**问题**: 向后兼容 `retry_interval_cycles` 时使用硬编码的 50Hz 默认值。
+
+**分析**: 
+- 实际控制频率可能不是 50Hz
+- 应该从 `system.ctrl_freq` 获取实际值
+
+**解决方案**: 
+- 在创建 TF2InjectionManager 时传入实际控制频率
+- 改进弃用警告信息，提供更清晰的迁移指导
+
+**修改文件**: 
+- `controller_ros/src/controller_ros/node/base_node.py`
+- `controller_ros/src/controller_ros/utils/tf2_injection_manager.py`
+
+#### 5. DataManager 时钟跳变回调设计文档化 ✅ 已完成
+**问题**: 锁外调用回调的设计意图不够清晰。
+
+**分析**: 
+- 在锁外调用回调是**正确的设计**，避免死锁
+- 回调函数可能需要调用 DataManager 的其他方法
+- `_data_invalidated` 状态在锁内已设置完成
+
+**解决方案**: 
+- 添加详细注释说明设计意图和安全性保证
+
+**修改文件**: `controller_ros/src/controller_ros/io/data_manager.py`
+
+### 设计分析确认（无需修改）
+
+以下问题经分析确认为合理的设计决策：
+
+1. **DiagnosticsThrottler 首次调用标志**: `_first_call` 的检查和重置都在锁内进行，是线程安全的
+2. **ROS1 IMU 订阅空话题检查**: 已有检查，与 ROS2 版本一致
+3. **TimeSync 键名不一致**: 内部使用 `traj`，对外兼容 `trajectory`，设计合理
+4. **ROS1PublisherManager 消息类型延迟导入**: 已有防护检查，设计合理
+5. **轨迹适配器速度填充策略**: 根据轨迹模式区分填充策略，设计合理
+
+---
+
+## 重构日期: 2024-12-25 (第六轮)
+
+## Bug 修复与设计优化 (第六轮) ✅ 已完成
+
+### 本次修复完成的工作
+
+#### 1. MPC `set_horizon()` 资源管理优化 ✅ 已完成
+**问题**: 当 ACADOS 重新初始化失败时，代码逻辑不够清晰，注释不够详细。
+
+**分析**: 
+- 当前设计是合理的：horizon 值更新成功就返回 True，即使 ACADOS 不可用（会使用 fallback）
+- 调用者可通过 `get_health_metrics()['acados_available']` 检查 ACADOS 状态
+- 不恢复旧 horizon 是正确的，因为 fallback 求解器也能使用新 horizon
+
+**解决方案**: 
+- 改进代码注释，明确设计意图
+- 添加 `was_initialized` 变量，使逻辑更清晰
+- 改进日志信息，提供更多诊断信息
+
+**修改文件**: `universal_controller/tracker/mpc_controller.py`
+
+#### 2. 状态机 `request_stop()` 返回值语义优化 ✅ 已完成
+**问题**: 原设计总是返回 True，调用者无法知道请求是否有效。
+
+**分析**: 
+- 当系统已经在 STOPPING/STOPPED 状态时，再次请求停止是无效的
+- 调用者应该知道请求是否会产生效果
+
+**解决方案**: 
+- 返回 True: 请求已接受，将在下次 update() 时转换到 STOPPING 状态
+- 返回 False: 请求被忽略，因为系统已经在 STOPPING 或 STOPPED 状态
+
+**修改文件**: `universal_controller/safety/state_machine.py`
+
+#### 3. MPC 恢复条件优化 - 添加快速恢复路径 ✅ 已完成
+**问题**: 原设计要求同时满足绝对容错和比例要求，可能导致恢复过慢。
+
+**分析**: 
+- 原设计是保守的，确保 MPC 在稳定后才恢复
+- 但如果 MPC 连续成功多次，应该允许更快恢复
+
+**解决方案**: 
+- 添加快速恢复路径：如果最近 N 次全部成功，立即允许恢复
+- 保持原有的标准恢复路径作为后备
+
+**修改文件**: `universal_controller/safety/state_machine.py`
+
+#### 4. Pure Pursuit 正后方转向阈值可配置化 ✅ 已完成
+**问题**: 硬编码的 0.02m 阈值在某些配置下可能过小。
+
+**分析**: 
+- 当前阈值计算 `max(min_distance_thresh * 0.5, 0.02)` 是合理的
+- 但硬编码的下界应该可配置
+
+**解决方案**: 
+- 添加新配置参数 `rear_direction_min_thresh`，默认 0.05m
+- 使用 `max(min_distance_thresh * 0.5, rear_direction_min_thresh)` 计算阈值
+
+**修改文件**: `universal_controller/tracker/pure_pursuit.py`
+
+#### 5. 安全监控器预热阈值上限 ✅ 已完成
+**问题**: 如果用户配置过大的 `accel_warmup_margin_multiplier`，可能导致安全检查过于宽松。
+
+**分析**: 
+- 预热期间放宽阈值是为了避免滤波器未收敛时的误报
+- 但放宽太多会降低安全性
+
+**解决方案**: 
+- 添加新配置参数 `accel_warmup_margin_max`，默认 3.0
+- 使用 `min(accel_warmup_margin_multiplier, accel_warmup_margin_max)` 限制倍数
+
+**修改文件**: `universal_controller/safety/safety_monitor.py`
+
+#### 6. Pure Pursuit 速度提取 NaN 检查 ✅ 已完成
+**问题**: `_extract_velocity_magnitude()` 可能返回 NaN，但调用处只检查 None。
+
+**分析**: 
+- 如果输入包含 NaN，`np.sqrt()` 会返回 NaN
+- NaN 不等于 None，所以检查会失效
+
+**解决方案**: 
+- 在函数内部添加 `np.isfinite()` 检查
+- 如果结果无效，返回 None 而非 NaN
+- 更新返回类型注解为 `Optional[float]`
+
+**修改文件**: `universal_controller/tracker/pure_pursuit.py`
+
+#### 7. Trajectory 数据完整性验证 ✅ 已完成
+**问题**: `Trajectory.__post_init__` 缺少 velocities 维度检查。
+
+**分析**: 
+- 空 points 列表是合法的（表示没有轨迹）
+- velocities 维度不匹配应该发出警告
+
+**解决方案**: 
+- 添加 velocities 与 points 长度匹配检查
+- 不匹配时发出警告，但不阻止构造
+
+**修改文件**: `universal_controller/core/data_types.py`
+
+#### 8. ControllerManager notify 警告信息改进 ✅ 已完成
+**问题**: notify 检查的警告信息不够详细。
+
+**分析**: 
+- 当前设计是合理的：延迟检查是为了给系统启动时间
+- 但警告信息应该更具指导性
+
+**解决方案**: 
+- 改进警告信息，包含时间信息和示例代码
+- 添加更详细的文档说明
+
+**修改文件**: `universal_controller/manager/controller_manager.py`
+
+### 测试验证结果
+- `test_components.py`: 13 passed ✅
+- `test_trackers.py`: 13 passed ✅
+- `test_integration.py`: 9 passed ✅
+
+---
+
+## 重构日期: 2024-12-25 (第五轮)
+
+## 最新更新: 架构清理与模块职责统一 (第五轮) ✅ 已完成
+
+### 本次修复完成的工作
+
+#### 1. 删除空的 visualization 目录 ✅ 已完成
+**问题**: `universal_controller/visualization/` 是一个空目录，造成混淆。
+
+**分析**: 
+- `universal_controller/dashboard/`: 诊断监控面板 (通用，PyQt5)
+- `controller_ros/visualizer/`: 轨迹可视化 (ROS 专用)
+- `universal_controller/visualization/`: 空目录，无任何文件
+
+**解决方案**: 删除空目录，避免混淆。
+
+#### 2. 简化 mock 模块 ✅ 已完成
+**问题**: `mock/__init__.py` 有 170+ 行代码，但只是重新导出 `compat/` 和 `core.data_types` 的内容。
+
+**设计意图分析**: 保持向后兼容，让旧代码能继续工作。设计意图合理，但实现过于冗余。
+
+**解决方案**: 
+- 简化为最小的向后兼容层 (~100 行)
+- 保留必要的别名导出
+- 添加明确的弃用警告和迁移指南
+- 标注将在 v4.0 版本中移除
+
+**修改文件**: `universal_controller/mock/__init__.py`
+
+#### 3. 清理 compat 模块的数据类型导出 ✅ 已完成
+**问题**: `compat/__init__.py` 导出了 `Vector3`, `Quaternion` 等数据类型，违反单一职责原则。
+
+**设计意图分析**: 可能是为了方便用户一站式导入，但这混淆了模块职责。
+
+**解决方案**: 
+- `compat/` 只负责 ROS 兼容层 (StandaloneRospy, StandaloneTF2Buffer 等)
+- 数据类型应从 `core.data_types` 导入
+- 更新文档说明正确的导入方式
+
+**修改文件**: `universal_controller/compat/__init__.py`
+
+### 架构职责划分 (最终版)
+
+```
+universal_controller/
+├── core/                 # 基础设施
+│   ├── data_types.py     # 所有数据类型的唯一来源
+│   ├── interfaces.py     # 接口定义
+│   ├── enums.py          # 枚举类型
+│   └── ros_compat.py     # ROS 环境自动检测和切换
+│
+├── compat/               # ROS 兼容层 (独立运行支持)
+│   └── ros_compat_impl.py  # Standalone* 实现
+│
+├── mock/                 # 向后兼容模块 (已弃用，v4.0 移除)
+│   └── __init__.py       # 仅重新导出，带弃用警告
+│
+├── dashboard/            # 诊断监控面板 (PyQt5)
+│
+└── tests/                # 测试代码
+    └── fixtures/         # 测试数据生成器
+```
+
+### 正确的导入方式
+
+```python
+# 数据类型 - 从 core.data_types 导入
+from universal_controller.core.data_types import (
+    Vector3, Quaternion, Transform, TransformStamped,
+    Odometry, Imu, Header, Point3D, Pose, Twist,
+)
+
+# ROS 兼容层 - 从 compat 导入
+from universal_controller.compat import (
+    StandaloneRospy,
+    StandaloneTF2Buffer,
+)
+
+# 测试数据 - 从 tests.fixtures 导入 (仅测试代码)
+from universal_controller.tests.fixtures import (
+    create_test_trajectory,
+    create_test_odom,
+    generate_mock_diagnostics,
+)
+```
+
+---
+
+## 重构日期: 2024-12-25 (第三轮)
+
+## 全面 Bug 分析与修复 (第三轮) ✅ 已完成
 
 ### 本次修复完成的工作
 
@@ -432,19 +726,27 @@ class DataAvailability:
   - 测试数据生成器不再从 mock 模块导出
   - 在 ROS 环境中导入 mock 模块会发出更强的警告
 
-## 当前目录结构
+## 当前目录结构 (2024-12-25 更新)
 
 ```
 universal_controller/
 ├── compat/                           # ROS 兼容层 (生产代码，用于独立运行模式)
-│   ├── __init__.py                   # 导出 Standalone* 类和 Mock* 别名
+│   ├── __init__.py                   # 仅导出 Standalone* 类和异常类型
 │   └── ros_compat_impl.py            # StandaloneRospy, StandaloneTF2Buffer 等
 │
 ├── core/
+│   ├── data_types.py                 # 所有数据类型的唯一来源
+│   ├── interfaces.py                 # 接口定义
+│   ├── enums.py                      # 枚举类型
 │   └── ros_compat.py                 # 自动检测 ROS 环境，选择真实或独立实现
 │
-├── mock/                             # 向后兼容模块 (已弃用)
-│   └── __init__.py                   # 仅导出 ROS 兼容层别名，带弃用警告
+├── mock/                             # 向后兼容模块 (已弃用，v4.0 移除)
+│   └── __init__.py                   # 重新导出 compat 和 core.data_types，带弃用警告
+│
+├── dashboard/                        # 诊断监控面板 (PyQt5)
+│   ├── main_window.py                # 主窗口
+│   ├── data_source.py                # 数据源
+│   └── panels/                       # 各种面板组件
 │
 └── tests/
     ├── __init__.py
@@ -454,6 +756,8 @@ universal_controller/
     │   └── mock_diagnostics.py       # 模拟诊断数据 (仅用于 Dashboard 测试)
     ├── run_dashboard_mock.py         # Dashboard 测试模式启动脚本
     └── test_*.py                     # 测试文件
+
+注意: visualization/ 目录已删除 (原为空目录)
 ```
 
 ## 数据隔离原则

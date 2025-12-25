@@ -238,6 +238,9 @@ from collections import OrderedDict
 _throttle_lock = threading.Lock()
 _throttle_last_time: OrderedDict = OrderedDict()
 _THROTTLE_CACHE_MAX_SIZE = 100  # 最大缓存条目数
+_THROTTLE_CACHE_EXPIRE_SEC = 300.0  # 缓存条目过期时间（秒）
+_throttle_last_cleanup = 0.0  # 上次清理时间
+_THROTTLE_CLEANUP_INTERVAL = 60.0  # 清理间隔（秒）
 
 
 def _log_throttle(level: str, period: float, msg: str):
@@ -245,6 +248,7 @@ def _log_throttle(level: str, period: float, msg: str):
     简单的节流日志实现（线程安全）
     
     使用 OrderedDict 实现 LRU 缓存，自动清理最旧的条目。
+    定期清理过期条目，避免长时间运行时内存泄漏。
     
     注意:
     - 此函数主要用于非 ROS 环境的回退方案
@@ -257,15 +261,26 @@ def _log_throttle(level: str, period: float, msg: str):
         msg: 日志消息
     """
     import time
-    import hashlib
+    global _throttle_last_cleanup
     
-    # 使用消息哈希作为键
-    key = hashlib.md5(f"{level}:{msg}".encode()).hexdigest()[:16]
+    # 使用 (level, msg) 元组作为键，避免哈希碰撞
+    # 对于长消息，使用哈希以节省内存
+    if len(msg) > 200:
+        import hashlib
+        key = (level, hashlib.sha256(msg.encode()).hexdigest())
+    else:
+        key = (level, msg)
+    
     now = time.monotonic()
     
     should_log = False
     
     with _throttle_lock:
+        # 定期清理过期条目
+        if now - _throttle_last_cleanup > _THROTTLE_CLEANUP_INTERVAL:
+            _cleanup_expired_entries(now)
+            _throttle_last_cleanup = now
+        
         last_time = _throttle_last_time.get(key, 0)
         if now - last_time >= period:
             # 更新时间戳并移动到末尾（最近使用）
@@ -286,6 +301,25 @@ def _log_throttle(level: str, period: float, msg: str):
             logger.warning(msg)
         elif level == 'error':
             logger.error(msg)
+
+
+def _cleanup_expired_entries(now: float) -> None:
+    """
+    清理过期的节流缓存条目
+    
+    Args:
+        now: 当前时间（单调时钟）
+    
+    Note:
+        此函数应在持有 _throttle_lock 的情况下调用
+    """
+    expired_keys = []
+    for key, last_time in _throttle_last_time.items():
+        if now - last_time > _THROTTLE_CACHE_EXPIRE_SEC:
+            expired_keys.append(key)
+    
+    for key in expired_keys:
+        del _throttle_last_time[key]
 
 
 # ============================================================================

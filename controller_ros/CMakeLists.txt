@@ -49,6 +49,7 @@ catkin_install_python(PROGRAMS
   scripts/dashboard_node.py
   scripts/cmd_vel_adapter.py
   scripts/trajectory_publisher.py
+  scripts/trajectory_visualizer.py
   scripts/visualizer_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

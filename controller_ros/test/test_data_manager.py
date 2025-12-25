@@ -135,7 +135,7 @@ def test_data_manager_data_ages():
     ages = dm.get_data_ages()
     assert ages['odom'] == float('inf')
     assert ages['imu'] == float('inf')
-    assert ages['trajectory'] == float('inf')
+    assert ages['traj'] == float('inf')
     
     # 更新 odom（时间 = 0）
     dm.update_odom(MockRosOdometry())
@@ -163,14 +163,14 @@ def test_data_manager_is_data_fresh():
     dm.update_trajectory(MockRosTrajectory())
     
     # 数据刚更新，应该是新鲜的
-    assert dm.is_data_fresh({'odom': 0.1, 'trajectory': 0.2})
+    assert dm.is_data_fresh({'odom': 0.1, 'traj': 0.2})
     
     # 时间前进 0.15 秒
     current_time[0] = 0.15
     
-    # odom 超时（0.15 > 0.1），trajectory 未超时（0.15 < 0.2）
-    assert not dm.is_data_fresh({'odom': 0.1, 'trajectory': 0.2})
-    assert dm.is_data_fresh({'odom': 0.2, 'trajectory': 0.2})
+    # odom 超时（0.15 > 0.1），traj 未超时（0.15 < 0.2）
+    assert not dm.is_data_fresh({'odom': 0.1, 'traj': 0.2})
+    assert dm.is_data_fresh({'odom': 0.2, 'traj': 0.2})
 
 
 def test_data_manager_clear():

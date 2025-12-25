@@ -1,6 +1,6 @@
 # 通用控制器 (Universal Controller)
 
-> 版本: v3.17.12 | 日期: 2024-12-21
+> 版本: v3.18.1 | 日期: 2024-12-25
 
 基于 MPC 的通用轨迹跟踪控制器，支持多平台部署。
 
@@ -300,6 +300,16 @@ Dashboard 提供实时监控界面，显示：
 
 ## 版本历史
 
+- **v3.18.1** - 架构清理与模块职责统一:
+  - 删除空的 `visualization/` 目录，避免与 `dashboard/` 和 `controller_ros/visualizer/` 混淆
+  - 简化 `mock/` 模块，仅保留最小向后兼容层，标注将在 v4.0 移除
+  - 清理 `compat/` 模块，不再导出数据类型（应从 `core.data_types` 导入）
+  - 更新 REFACTORING_NOTES.md 记录架构变更
+  - 所有 145 个测试通过
+- **v3.18.0** - MPC 权重命名统一、接口修复:
+  - 重命名 `control_v`/`control_omega` 为 `control_accel`/`control_alpha`
+  - 修复 `ITrajectoryTracker.set_horizon()` 返回值为 `bool`
+  - 修复 `ControllerBridge.notify_xxx_received()` 调用链
 - **v3.17.12** - 新增轨迹可视化面板:
   - 在 Dashboard 中添加 `TrajectoryViewPanel` 实时轨迹可视化
   - 支持 2D/3D 视图切换

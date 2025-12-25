@@ -50,6 +50,12 @@ rosrun your_package trajectory_publisher.py
 
 # (可选) 带 Dashboard 监控启动
 roslaunch controller_ros turtlebot1.launch dashboard:=true
+
+# (可选) 带运行可视化界面启动 (轨迹、速度、手柄控制)
+roslaunch controller_ros turtlebot1.launch visualizer:=true
+
+# (可选) 同时启动 Dashboard 和运行可视化
+roslaunch controller_ros turtlebot1.launch dashboard:=true visualizer:=true
 ```
 
 ---

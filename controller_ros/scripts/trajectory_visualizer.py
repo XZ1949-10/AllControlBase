@@ -489,21 +489,30 @@ class TrajectoryVisualizer:
         
         is_windows = platform.system() == 'Windows'
         
+        # 初始化输入处理
+        has_msvcrt = False
+        has_select = False
+        
         if is_windows:
             # Windows 平台：使用 msvcrt 进行非阻塞输入检测
             try:
                 import msvcrt
                 has_msvcrt = True
             except ImportError:
-                has_msvcrt = False
                 rospy.logwarn(
                     "Windows platform detected but msvcrt not available. "
-                    "Calibration input may not work properly."
+                    "Using blocking input mode - enter coordinates after clicking each point."
                 )
         else:
             # Unix 平台：使用 select
-            import select
-            has_msvcrt = False
+            try:
+                import select
+                has_select = True
+            except ImportError:
+                rospy.logwarn(
+                    "select module not available. "
+                    "Using blocking input mode - enter coordinates after clicking each point."
+                )
         
         # 输入缓冲区（用于 Windows 逐字符读取）
         input_buffer = ""
@@ -521,37 +530,60 @@ class TrajectoryVisualizer:
                             if char in ('\r', '\n'):
                                 line = input_buffer.strip()
                                 input_buffer = ""
+                                print()  # 换行
                                 break
                             elif char == '\b':  # 退格
-                                input_buffer = input_buffer[:-1]
+                                if input_buffer:
+                                    input_buffer = input_buffer[:-1]
+                                    # 清除屏幕上的字符
+                                    print('\b \b', end='', flush=True)
                             else:
                                 input_buffer += char
                                 print(char, end='', flush=True)
-                    else:
+                    elif has_select:
                         # Unix: 使用 select 非阻塞检查输入
                         if select.select([sys.stdin], [], [], 0.0)[0]:
                             line = sys.stdin.readline().strip()
+                    else:
+                        # 备用方案：阻塞式输入（每次点击后等待输入）
+                        # 这种模式下，用户需要在终端输入坐标后按回车
+                        # 由于是阻塞的，图像窗口可能会暂时无响应
+                        pass
                     
                     if line:
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            try:
-                                x, y = float(parts[0]), float(parts[1])
-                                self.calib_ground_points.append([x, y])
-                                rospy.loginfo(f"地面坐标: ({x}, {y})")
-                                
-                                # 如果有4个点，计算单应性矩阵
-                                if len(self.calib_ground_points) >= 4:
-                                    self._compute_homography()
-                            except ValueError:
-                                rospy.logwarn("请输入有效的数字: x y")
-                        else:
-                            rospy.logwarn("请输入两个数字: x y")
+                        self._process_calibration_input(line)
                 except Exception as e:
-                    # 静默处理异常，避免干扰标定流程
-                    pass
+                    # 记录异常但不中断标定流程
+                    rospy.logdebug(f"Input processing exception: {e}")
             
             rate.sleep()
+    
+    def _process_calibration_input(self, line: str) -> bool:
+        """
+        处理标定输入
+        
+        Args:
+            line: 输入的坐标字符串 "x y"
+        
+        Returns:
+            是否成功处理
+        """
+        parts = line.split()
+        if len(parts) >= 2:
+            try:
+                x, y = float(parts[0]), float(parts[1])
+                self.calib_ground_points.append([x, y])
+                rospy.loginfo(f"地面坐标: ({x}, {y})")
+                
+                # 如果有4个点，计算单应性矩阵
+                if len(self.calib_ground_points) >= 4:
+                    self._compute_homography()
+                return True
+            except ValueError:
+                rospy.logwarn("请输入有效的数字: x y")
+        else:
+            rospy.logwarn("请输入两个数字: x y")
+        return False
 
 
 def main():

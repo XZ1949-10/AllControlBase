@@ -102,6 +102,7 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
     - min_lookahead < max_lookahead
     - horizon_degraded <= horizon
     - v_min <= v_max
+    - MPC 权重必须为正值
     
     Args:
         config: 配置字典
@@ -114,6 +115,23 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
     def _is_numeric(value) -> bool:
         """检查值是否为数值类型"""
         return isinstance(value, (int, float)) and not isinstance(value, bool)
+    
+    # MPC 权重验证 - 必须为正值
+    MIN_MPC_WEIGHT = 1e-6
+    mpc_weight_keys = [
+        ('mpc.weights.position', 'MPC 位置权重'),
+        ('mpc.weights.velocity', 'MPC 速度权重'),
+        ('mpc.weights.heading', 'MPC 航向权重'),
+        ('mpc.weights.control_accel', 'MPC 加速度控制权重'),
+        ('mpc.weights.control_alpha', 'MPC 角加速度控制权重'),
+    ]
+    for key_path, description in mpc_weight_keys:
+        weight = get_config_value(config, key_path)
+        if weight is not None and _is_numeric(weight):
+            if weight < MIN_MPC_WEIGHT:
+                errors.append((key_path, 
+                              f'{description} ({weight}) 过小，可能导致求解器数值问题，'
+                              f'建议设置为 >= {MIN_MPC_WEIGHT}'))
     
     # MPC horizon 一致性
     horizon = get_config_value(config, 'mpc.horizon')

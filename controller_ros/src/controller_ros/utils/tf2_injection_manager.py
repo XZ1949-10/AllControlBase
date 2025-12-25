@@ -94,13 +94,16 @@ class TF2InjectionManager:
             self._retry_interval_sec = self._config['retry_interval_sec']
         elif 'retry_interval_cycles' in self._config:
             # 向后兼容：将周期数转换为秒
-            # 尝试从配置中获取控制频率，否则使用默认值 50Hz
+            # 优先从 system.ctrl_freq 获取控制频率，否则使用默认值 50Hz
+            # 注意：config 可能是 tf 配置的子集，需要从外部传入 ctrl_freq
             ctrl_freq = self._config.get('ctrl_freq', 50)
             cycles = self._config['retry_interval_cycles']
             self._retry_interval_sec = cycles / ctrl_freq
             self._log_warn(
                 f"'retry_interval_cycles' is deprecated, use 'retry_interval_sec' instead. "
-                f"Converting {cycles} cycles to {self._retry_interval_sec:.2f}s (using ctrl_freq={ctrl_freq}Hz)."
+                f"Converting {cycles} cycles to {self._retry_interval_sec:.2f}s "
+                f"(using ctrl_freq={ctrl_freq}Hz). "
+                f"To avoid this warning, set 'retry_interval_sec' directly in tf config."
             )
         else:
             self._retry_interval_sec = self.DEFAULT_RETRY_INTERVAL_SEC
@@ -157,6 +160,8 @@ class TF2InjectionManager:
         tf2_ready = self._wait_for_tf2_ready(blocking)
         
         self._injection_attempted = True
+        # 记录注入尝试时间，确保首次重试也遵循间隔设置
+        self._last_retry_time = self._get_time()
         
         # 注入回调
         if hasattr(coord_transformer, 'set_tf2_lookup_callback'):
@@ -189,23 +194,31 @@ class TF2InjectionManager:
         
         Returns:
             TF2 是否就绪
+        
+        Note:
+            此方法使用 time.monotonic() 而非 self._get_time()，因为：
+            1. 阻塞等待需要测量真实的墙钟时间间隔
+            2. 仿真时间在阻塞期间可能不会前进（如 Gazebo 暂停时）
+            3. 单调时钟不受系统时间调整影响，更适合测量超时
         """
         can_transform_func = getattr(self._tf_bridge, 'can_transform', None)
         if can_transform_func is None:
             return False
         
         if blocking:
-            start_time = time.time()
-            while time.time() - start_time < self._buffer_warmup_timeout_sec:
+            # 使用单调时钟测量阻塞等待时间
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < self._buffer_warmup_timeout_sec:
                 try:
                     if can_transform_func(
                         self._target_frame, 
                         self._source_frame, 
                         timeout_sec=0.01
                     ):
+                        elapsed = time.monotonic() - start_time
                         self._log_info(
                             f"TF2 buffer ready: {self._source_frame} -> {self._target_frame} "
-                            f"(waited {time.time() - start_time:.2f}s)"
+                            f"(waited {elapsed:.2f}s)"
                         )
                         return True
                 except Exception:

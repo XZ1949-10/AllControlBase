@@ -18,16 +18,17 @@ from ..models import JoystickState, ControlMode
 class JoystickIndicator(QWidget):
     """摇杆指示器"""
     
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, subtitle: str = "", parent=None):
         super().__init__(parent)
         
         self._title = title
+        self._subtitle = subtitle
         self._x = 0.0
         self._y = 0.0
         self._value_label = ""
         
-        self.setMinimumSize(100, 120)
-        self.setMaximumSize(150, 150)
+        self.setMinimumSize(120, 140)
+        self.setMaximumSize(180, 180)
     
     def set_position(self, x: float, y: float, label: str = ""):
         """设置摇杆位置 [-1, 1]"""
@@ -43,17 +44,27 @@ class JoystickIndicator(QWidget):
         w, h = self.width(), self.height()
         
         # 标题
-        painter.setPen(QColor(170, 170, 170))
+        painter.setPen(QColor(200, 200, 200))
         font = QFont()
-        font.setPointSize(9)
+        font.setPointSize(10)
+        font.setBold(True)
         painter.setFont(font)
         painter.drawText(0, 0, w, 20, Qt.AlignCenter, self._title)
         
+        # 副标题
+        if self._subtitle:
+            painter.setPen(QColor(150, 150, 150))
+            font.setPointSize(8)
+            font.setBold(False)
+            painter.setFont(font)
+            painter.drawText(0, 18, w, 16, Qt.AlignCenter, self._subtitle)
+        
         # 摇杆区域
         margin = 10
-        area_size = min(w - 2 * margin, h - 40)
+        title_height = 38 if self._subtitle else 24
+        area_size = min(w - 2 * margin, h - title_height - 25)
         area_x = (w - area_size) // 2
-        area_y = 25
+        area_y = title_height
         
         # 背景圆
         painter.setPen(QPen(QColor(80, 80, 80), 2))
@@ -85,9 +96,9 @@ class JoystickIndicator(QWidget):
         # 数值标签
         if self._value_label:
             painter.setPen(QColor(150, 150, 150))
-            font.setPointSize(8)
+            font.setPointSize(9)
             painter.setFont(font)
-            painter.drawText(0, h - 15, w, 15, Qt.AlignCenter, self._value_label)
+            painter.drawText(0, h - 18, w, 18, Qt.AlignCenter, self._value_label)
         
         painter.end()
 
@@ -144,12 +155,12 @@ class JoystickPanel(QWidget):
         
         # 摇杆显示区域
         sticks_layout = QHBoxLayout()
-        sticks_layout.setSpacing(20)
+        sticks_layout.setSpacing(30)
         
-        self._left_stick = JoystickIndicator("左摇杆\n前进/后退")
+        self._left_stick = JoystickIndicator("左摇杆", "前进/后退")
         sticks_layout.addWidget(self._left_stick)
         
-        self._right_stick = JoystickIndicator("右摇杆\n转向")
+        self._right_stick = JoystickIndicator("右摇杆", "转向")
         sticks_layout.addWidget(self._right_stick)
         
         layout.addLayout(sticks_layout)

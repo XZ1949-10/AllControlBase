@@ -32,7 +32,7 @@
     cmd = manager.update(odom, trajectory)
 """
 
-__version__ = "3.18.0"
+__version__ = "3.18.1"
 __author__ = "Universal Controller Team"
 
 # 导出主要类和配置

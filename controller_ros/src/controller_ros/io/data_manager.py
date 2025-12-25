@@ -297,14 +297,15 @@ class DataManager:
         获取各数据的年龄（秒）
         
         Returns:
-            字典，键为数据名 ('odom', 'imu', 'trajectory')，
+            字典，键为数据名 ('odom', 'imu', 'traj')，
             值为距上次更新的秒数。未收到的数据返回 float('inf')。
             
         Note:
             - 如果时钟回退（如仿真时间重置），所有数据年龄返回 inf，
               表示数据已过时，需要等待新数据。
-            - 时钟回退会设置 _clock_jumped_back 标志并触发回调。
+            - 时钟跳变（回退或大幅前跳）会触发回调通知上层。
             - 新数据到来后会自动恢复正常。
+            - 内部使用 'trajectory' 存储，但返回 'traj' 以保持键名一致性
         """
         now = self._get_time_func()
         callback_event = None
@@ -312,23 +313,31 @@ class DataManager:
         with self._lock:
             # 检测时钟跳变
             event = self._check_clock_jump(now)
-            if event is not None and event.is_backward:
+            # 所有跳变事件都触发回调，让上层决定如何处理
+            if event is not None:
                 callback_event = event
             
             self._last_time = now
             
             ages = {}
-            for key in ['odom', 'imu', 'trajectory']:
+            # 键名映射: 内部 'trajectory' -> 外部 'traj'
+            key_mapping = {'odom': 'odom', 'imu': 'imu', 'trajectory': 'traj'}
+            for internal_key, external_key in key_mapping.items():
                 if self._data_invalidated:
                     # 数据被标记为无效，返回 inf
-                    ages[key] = float('inf')
-                elif key in self._timestamps:
+                    ages[external_key] = float('inf')
+                elif internal_key in self._timestamps:
                     # 正常计算年龄，防止负值
-                    ages[key] = max(0.0, now - self._timestamps[key])
+                    ages[external_key] = max(0.0, now - self._timestamps[internal_key])
                 else:
-                    ages[key] = float('inf')
+                    ages[external_key] = float('inf')
         
         # 在锁外调用回调，避免死锁
+        # 设计说明：
+        # 1. 回调函数可能需要调用 DataManager 的其他方法（如 clear()）
+        # 2. 如果在锁内调用回调，会导致死锁（即使使用 RLock，回调中的其他线程也可能阻塞）
+        # 3. _data_invalidated 状态在锁内已经设置完成，回调只是通知上层
+        # 4. 回调执行期间，其他线程可能更新数据，但这是预期行为（新数据会恢复有效性）
         if callback_event is not None and self._on_clock_jump is not None:
             try:
                 self._on_clock_jump(callback_event)

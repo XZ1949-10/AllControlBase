@@ -213,12 +213,11 @@ def test_base_node_error_handling():
     mock = MockControllerNode()
     mock.initialize()
     
-    # 模拟错误 - 需要先增加 consecutive_errors（模拟 _control_loop_core 的行为）
+    # 模拟错误 - _handle_control_error 内部会增加 consecutive_errors
     timeouts = {'odom_timeout': True, 'traj_timeout': False, 'imu_timeout': False}
     error = Exception("Test error")
     
-    # 模拟 _control_loop_core 中的行为：先增加计数，再调用 _handle_control_error
-    mock.node._consecutive_errors += 1
+    # 调用 _handle_control_error，它会自动增加计数
     mock.node._handle_control_error(error, timeouts)
     
     assert mock.node._consecutive_errors == 1
@@ -238,9 +237,8 @@ def test_base_node_error_throttling():
     timeouts = {'odom_timeout': False, 'traj_timeout': False, 'imu_timeout': False}
     error = Exception("Test error")
     
-    # 连续触发多次错误（模拟 _control_loop_core 的行为）
+    # 连续触发多次错误 - _handle_control_error 内部会增加计数
     for i in range(15):
-        mock.node._consecutive_errors += 1
         mock.node._handle_control_error(error, timeouts)
     
     # 检查错误计数

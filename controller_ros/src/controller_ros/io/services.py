@@ -1,9 +1,9 @@
 """
 服务管理器
 
-管理 ROS 服务。
+管理 ROS2 服务。
 """
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 import logging
 
 from rclpy.node import Node
@@ -18,12 +18,16 @@ class ServiceManager:
     职责:
     - 创建和管理服务
     - 处理服务请求
+    - 支持四旋翼平台专用服务
     """
     
     def __init__(self, node: Node,
                  reset_callback: Optional[Callable] = None,
                  get_diagnostics_callback: Optional[Callable] = None,
-                 set_state_callback: Optional[Callable[[int], bool]] = None):
+                 set_state_callback: Optional[Callable[[int], bool]] = None,
+                 set_hover_yaw_callback: Optional[Callable[[float], bool]] = None,
+                 get_attitude_rate_limits_callback: Optional[Callable[[], Optional[Dict[str, float]]]] = None,
+                 is_quadrotor: bool = False):
         """
         初始化服务管理器
         
@@ -32,11 +36,17 @@ class ServiceManager:
             reset_callback: 重置回调函数
             get_diagnostics_callback: 获取诊断回调函数
             set_state_callback: 设置状态回调函数，接收目标状态，返回是否成功
+            set_hover_yaw_callback: 设置悬停航向回调 (四旋翼)
+            get_attitude_rate_limits_callback: 获取姿态角速度限制回调 (四旋翼)
+            is_quadrotor: 是否为四旋翼平台
         """
         self._node = node
         self._reset_callback = reset_callback
         self._get_diagnostics_callback = get_diagnostics_callback
         self._set_state_callback = set_state_callback
+        self._set_hover_yaw_callback = set_hover_yaw_callback
+        self._get_attitude_rate_limits_callback = get_attitude_rate_limits_callback
+        self._is_quadrotor = is_quadrotor
         
         self._create_services()
     
@@ -77,6 +87,38 @@ class ServiceManager:
         except ImportError:
             self._set_state_srv = None
             logger.warning("SetControllerState service not available")
+        
+        # 四旋翼平台专用服务
+        if self._is_quadrotor:
+            self._create_quadrotor_services()
+    
+    def _create_quadrotor_services(self):
+        """创建四旋翼平台专用服务"""
+        # 设置悬停航向服务
+        try:
+            from controller_ros.srv import SetHoverYaw
+            self._set_hover_yaw_srv = self._node.create_service(
+                SetHoverYaw,
+                '/controller/set_hover_yaw',
+                self._handle_set_hover_yaw
+            )
+            logger.info("Created set_hover_yaw service: /controller/set_hover_yaw")
+        except ImportError:
+            self._set_hover_yaw_srv = None
+            logger.warning("SetHoverYaw service not available")
+        
+        # 获取姿态角速度限制服务
+        try:
+            from controller_ros.srv import GetAttitudeRateLimits
+            self._get_attitude_limits_srv = self._node.create_service(
+                GetAttitudeRateLimits,
+                '/controller/get_attitude_rate_limits',
+                self._handle_get_attitude_rate_limits
+            )
+            logger.info("Created get_attitude_rate_limits service")
+        except ImportError:
+            self._get_attitude_limits_srv = None
+            logger.warning("GetAttitudeRateLimits service not available")
     
     def _handle_reset(self, request, response):
         """处理重置请求"""
@@ -146,4 +188,46 @@ class ServiceManager:
             response.success = False
             response.message = f"Set state failed: {e}"
             logger.error(f"Set state failed: {e}")
+        return response
+    
+    def _handle_set_hover_yaw(self, request, response):
+        """处理设置悬停航向请求"""
+        try:
+            if self._set_hover_yaw_callback:
+                success = self._set_hover_yaw_callback(request.yaw)
+                response.success = success
+                if success:
+                    response.message = f"Hover yaw set to {request.yaw:.3f} rad"
+                else:
+                    response.message = "Failed to set hover yaw"
+            else:
+                response.success = False
+                response.message = "Set hover yaw callback not configured"
+        except Exception as e:
+            response.success = False
+            response.message = f"Set hover yaw failed: {e}"
+            logger.error(f"Set hover yaw failed: {e}")
+        return response
+    
+    def _handle_get_attitude_rate_limits(self, request, response):
+        """处理获取姿态角速度限制请求"""
+        try:
+            if self._get_attitude_rate_limits_callback:
+                limits = self._get_attitude_rate_limits_callback()
+                if limits:
+                    response.success = True
+                    response.message = "Attitude rate limits retrieved"
+                    response.roll_rate_max = limits.get('roll_rate_max', 0.0)
+                    response.pitch_rate_max = limits.get('pitch_rate_max', 0.0)
+                    response.yaw_rate_max = limits.get('yaw_rate_max', 0.0)
+                else:
+                    response.success = False
+                    response.message = "Attitude rate limits not available"
+            else:
+                response.success = False
+                response.message = "Get attitude rate limits callback not configured"
+        except Exception as e:
+            response.success = False
+            response.message = f"Get attitude rate limits failed: {e}"
+            logger.error(f"Get attitude rate limits failed: {e}")
         return response

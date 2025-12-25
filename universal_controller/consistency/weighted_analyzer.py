@@ -43,6 +43,10 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         self.w_velocity = weights.get('velocity', 1.5)
         self.w_temporal = weights.get('temporal', 0.8)
         self.alpha_min = consistency_config.get('alpha_min', 0.1)
+        
+        # 数据无效时的保守 confidence 值
+        # 与 TrajectoryDefaults.default_confidence (0.9) 不同，这是运行时异常的保守处理
+        self.invalid_data_confidence = consistency_config.get('invalid_data_confidence', 0.5)
     
     def compute(self, trajectory: Trajectory) -> ConsistencyResult:
         if not trajectory.soft_enabled or trajectory.velocities is None:
@@ -60,14 +64,14 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         if np.any(~np.isfinite(soft_velocities)):
             logger.warning("NaN/Inf detected in soft velocities, disabling soft mode")
             return ConsistencyResult(
-                alpha=0.5, kappa_consistency=0.0, v_dir_consistency=0.0,
+                alpha=self.invalid_data_confidence, kappa_consistency=0.0, v_dir_consistency=0.0,
                 temporal_smooth=0.0, should_disable_soft=True, data_valid=False
             )
         
         if np.any(~np.isfinite(hard_velocities)):
             logger.warning("NaN/Inf detected in hard velocities, using conservative alpha")
             return ConsistencyResult(
-                alpha=0.5, kappa_consistency=0.0, v_dir_consistency=0.0,
+                alpha=self.invalid_data_confidence, kappa_consistency=0.0, v_dir_consistency=0.0,
                 temporal_smooth=0.0, should_disable_soft=True, data_valid=False
             )
         
@@ -107,10 +111,10 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
             # 防御性检查：确保 confidence 是有效数值
             confidence = trajectory.confidence
             if confidence is None or not np.isfinite(confidence):
-                confidence = 0.5  # 使用保守的默认值
+                confidence = self.invalid_data_confidence  # 使用保守的默认值
             
             return ConsistencyResult(
-                alpha=0.5 * confidence,  # 保守估计
+                alpha=self.invalid_data_confidence * confidence,  # 保守估计
                 kappa_consistency=kappa_consistency,
                 v_dir_consistency=v_dir_consistency,
                 temporal_smooth=temporal_smooth,
@@ -124,13 +128,28 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         # 防御性检查：确保 confidence 是有效数值
         confidence = trajectory.confidence
         if confidence is None or not np.isfinite(confidence):
-            confidence = 0.5  # 使用保守的默认值
+            confidence = self.invalid_data_confidence  # 使用保守的默认值
         
-        alpha = (
-            (max(effective_kappa, 1e-6) ** effective_w_kappa) *
-            (max(effective_v_dir, 1e-6) ** effective_w_velocity) *
-            (max(effective_temporal, 1e-6) ** effective_w_temporal)
-        ) ** (1.0 / total_effective_weight) * confidence
+        # 使用对数空间计算加权几何平均，避免数值下溢
+        # 几何平均公式: (x1^w1 * x2^w2 * x3^w3)^(1/W) = exp((w1*log(x1) + w2*log(x2) + w3*log(x3)) / W)
+        # 
+        # 数值稳定性说明:
+        # - 直接计算 (1e-6)^1.5 ≈ 3.16e-9 可能导致下溢
+        # - 对数空间: log(1e-6) * 1.5 = -13.8 * 1.5 = -20.7，然后 exp(-20.7) ≈ 1e-9
+        # - 对数空间计算更稳定，避免中间结果下溢
+        # 
+        # 下界选择 1e-10:
+        # - log(1e-10) = -23，乘以最大权重 1.5 后为 -34.5
+        # - exp(-34.5) ≈ 1e-15，仍在 float64 精度范围内
+        MIN_VALUE_FOR_LOG = 1e-10
+        
+        log_alpha = (
+            effective_w_kappa * np.log(max(effective_kappa, MIN_VALUE_FOR_LOG)) +
+            effective_w_velocity * np.log(max(effective_v_dir, MIN_VALUE_FOR_LOG)) +
+            effective_w_temporal * np.log(max(effective_temporal, MIN_VALUE_FOR_LOG))
+        ) / total_effective_weight
+        
+        alpha = np.exp(log_alpha) * confidence
         
         # data_valid: 只有当数据包含 NaN 或异常值时才设为 False
         # 数据不足（如启动期间）不影响 data_valid

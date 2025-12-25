@@ -132,8 +132,11 @@ class TrajectoryAdapter(IMsgConverter):
                 # 根据轨迹模式决定填充策略
                 padding_count = num_points - num_vel_points
                 
-                # 判断是否为停止模式 (MODE_STOP=1, MODE_EMERGENCY=3)
-                is_stop_mode = mode in (1, 3)  # TrajectoryMode.MODE_STOP, MODE_EMERGENCY
+                # 判断是否为停止模式
+                is_stop_mode = mode in (
+                    TrajectoryMode.MODE_STOP.value, 
+                    TrajectoryMode.MODE_EMERGENCY.value
+                )
                 
                 if is_stop_mode:
                     # 停止模式：使用零速度填充，实现平滑停车

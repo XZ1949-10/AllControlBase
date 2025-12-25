@@ -2,7 +2,7 @@
 控制器 ROS2 节点
 
 主节点实现，组装所有组件，管理控制循环。
-支持 TF2 坐标变换集成。
+支持 TF2 坐标变换集成和四旋翼平台。
 
 继承 ControllerNodeBase，实现 ROS2 特定的接口。
 """
@@ -13,7 +13,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 
-from universal_controller.core.data_types import ControlOutput
+from universal_controller.core.data_types import ControlOutput, AttitudeCommand
 
 from .base_node import ControllerNodeBase
 from ..bridge import TFBridge
@@ -31,6 +31,8 @@ class ControllerNode(ControllerNodeBase, Node):
     输出:
     - /cmd_unified (UnifiedCmd)
     - /controller/diagnostics (DiagnosticsV2)
+    - /controller/state (Int32)
+    - /controller/attitude_cmd (AttitudeCmd, 仅四旋翼)
     """
     
     def __init__(self):
@@ -71,7 +73,8 @@ class ControllerNode(ControllerNodeBase, Node):
         
         self.get_logger().info(
             f'Controller node initialized (platform={self._platform_type}, '
-            f'rate={control_rate}Hz, tf2={self._tf_bridge.is_initialized})'
+            f'rate={control_rate}Hz, tf2={self._tf_bridge.is_initialized}, '
+            f'quadrotor={self._is_quadrotor})'
         )
     
     def _create_ros_interfaces(self):
@@ -83,7 +86,8 @@ class ControllerNode(ControllerNodeBase, Node):
         diag_publish_rate = self._params.get('diagnostics', {}).get('publish_rate', 10)
         self._publishers = PublisherManager(
             self, self._topics, self._default_frame_id,
-            diag_publish_rate=diag_publish_rate
+            diag_publish_rate=diag_publish_rate,
+            is_quadrotor=self._is_quadrotor
         )
         
         # 创建服务管理器
@@ -91,7 +95,10 @@ class ControllerNode(ControllerNodeBase, Node):
             self,
             reset_callback=self._handle_reset,
             get_diagnostics_callback=self._handle_get_diagnostics,
-            set_state_callback=self._handle_set_state
+            set_state_callback=self._handle_set_state,
+            set_hover_yaw_callback=self._handle_set_hover_yaw if self._is_quadrotor else None,
+            get_attitude_rate_limits_callback=self._handle_get_attitude_rate_limits if self._is_quadrotor else None,
+            is_quadrotor=self._is_quadrotor
         )
     
     def _create_subscriptions(self):
@@ -247,10 +254,39 @@ class ControllerNode(ControllerNodeBase, Node):
         """发布诊断信息"""
         self._publishers.publish_diagnostics(diag, force=force)
     
+    def _publish_attitude_cmd(self, attitude_cmd: AttitudeCommand):
+        """发布姿态命令 (四旋翼平台)"""
+        if not self._is_quadrotor:
+            return
+        
+        # 获取悬停状态
+        is_hovering = False
+        if self._controller_bridge and self._controller_bridge.manager:
+            attitude_controller = self._controller_bridge.manager.attitude_controller
+            if attitude_controller and hasattr(attitude_controller, '_is_hovering'):
+                is_hovering = attitude_controller._is_hovering
+        
+        self._publishers.publish_attitude_cmd(
+            attitude_cmd,
+            yaw_mode=self._attitude_yaw_mode,
+            is_hovering=is_hovering
+        )
+    
     # ==================== 生命周期 ====================
     
     def shutdown(self):
-        """清理资源"""
+        """
+        清理资源
+        
+        显式取消控制定时器，确保资源及时释放。
+        虽然 destroy_node() 也会清理定时器，但显式清理是更好的实践。
+        """
+        # 取消控制定时器
+        if hasattr(self, '_control_timer') and self._control_timer is not None:
+            self._control_timer.cancel()
+            self._control_timer = None
+        
+        # 调用基类清理
         ControllerNodeBase.shutdown(self)
 
 

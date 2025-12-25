@@ -5,17 +5,24 @@
   使用方法:
     roslaunch controller_ros turtlebot1.launch
     roslaunch controller_ros turtlebot1.launch dashboard:=true
+    roslaunch controller_ros turtlebot1.launch visualizer:=true
+    roslaunch controller_ros turtlebot1.launch visualizer:=true camera_image:=/usb_cam/image_raw
+    roslaunch controller_ros turtlebot1.launch dashboard:=true visualizer:=true
     roslaunch controller_ros turtlebot1.launch use_sim_time:=true
   
   前置条件:
     1. TurtleBot1 驱动已启动: roslaunch turtlebot_bringup minimal.launch
     2. universal_controller 已安装 (pip install -e .)
     3. 轨迹发布器已启动 (发布 /nn/local_trajectory)
+    4. (可选) 相机标定: roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
 -->
 <launch>
   <!-- ========== 参数 ========== -->
   <arg name="use_sim_time" default="false" doc="Use simulation time"/>
   <arg name="dashboard" default="true" doc="Launch Dashboard GUI for monitoring"/>
+  <arg name="visualizer" default="false" doc="Launch TurtleBot1 运行可视化界面 (轨迹、速度、手柄控制)"/>
+  <arg name="camera_image" default="" doc="相机图像话题 (留空使用俯视图模式)"/>
+  <arg name="calibration_file" default="$(find controller_ros)/config/homography_calib.yaml" doc="单应性标定文件"/>
   <arg name="max_linear" default="0.5" doc="Maximum linear velocity (m/s)"/>
   <arg name="max_angular" default="1.0" doc="Maximum angular velocity (rad/s)"/>
   
@@ -72,6 +79,35 @@
     - 需要 PyQt5: pip install PyQt5
     -->
   </node>
+  
+  <!-- ========== 运行可视化节点 (可选) ========== -->
+  <group if="$(arg visualizer)">
+    <!-- 加载可视化配置 -->
+    <rosparam file="$(find controller_ros)/config/visualizer_params.yaml" command="load" ns="visualizer"/>
+    
+    <node pkg="controller_ros" type="visualizer_node.py" name="turtlebot_visualizer" 
+          output="screen">
+      <rosparam file="$(find controller_ros)/config/visualizer_params.yaml" command="load"/>
+      <!-- 相机和标定配置 -->
+      <param name="topics/camera_image" value="$(arg camera_image)"/>
+      <param name="camera/calibration_file" value="$(arg calibration_file)"/>
+      <!-- 
+      TurtleBot1 运行可视化界面
+      功能:
+      - 轨迹可视化: 俯视图或相机图像叠加 (需要单应性标定)
+      - 速度监控: 实时显示底盘线速度和角速度
+      - 手柄控制: Xbox 手柄控制机器人，LB 键切换控制模式
+      
+      相机模式:
+      - 设置 camera_image 参数启用相机图像显示
+      - 需要先运行标定: roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
+      
+      依赖:
+      - PyQt5: pip install PyQt5
+      - 手柄驱动: sudo apt install ros-noetic-joy
+      -->
+    </node>
+  </group>
 </launch>
 
 

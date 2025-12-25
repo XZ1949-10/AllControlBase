@@ -554,6 +554,20 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         
         # 如果有真实 TF2 位置，计算精确漂移
         if current_tf2_position is not None and current_tf2_yaw is not None:
+            # 验证输入数据有效性
+            if not (np.all(np.isfinite(current_tf2_position)) and np.isfinite(current_tf2_yaw)):
+                logger.warning(
+                    f"Invalid TF2 data for drift correction: "
+                    f"position={current_tf2_position}, yaw={current_tf2_yaw}. "
+                    f"Skipping drift correction."
+                )
+                # 清理状态并返回
+                self._fallback_start_tf2_position = None
+                self._fallback_start_estimator_position = None
+                self._fallback_start_tf2_yaw = 0.0
+                self._fallback_start_estimator_theta = 0.0
+                return
+            
             # 计算 TF2 实际位移
             tf2_displacement = current_tf2_position - self._fallback_start_tf2_position
             tf2_theta_change = current_tf2_yaw - self._fallback_start_tf2_yaw
@@ -564,6 +578,20 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             drift_y = odom_displacement[1] - tf2_displacement[1]
             drift_theta = odom_theta_change - tf2_theta_change
             drift_theta = normalize_angle(drift_theta)
+            
+            # 验证计算结果有效性
+            if not (np.isfinite(drift_x) and np.isfinite(drift_y) and np.isfinite(drift_theta)):
+                logger.warning(
+                    f"Drift calculation resulted in invalid values: "
+                    f"dx={drift_x}, dy={drift_y}, dtheta={drift_theta}. "
+                    f"Skipping drift correction."
+                )
+                # 清理状态并返回
+                self._fallback_start_tf2_position = None
+                self._fallback_start_estimator_position = None
+                self._fallback_start_tf2_yaw = 0.0
+                self._fallback_start_estimator_theta = 0.0
+                return
             
             # 应用校正 (反向)
             # 使用配置的漂移校正阈值
