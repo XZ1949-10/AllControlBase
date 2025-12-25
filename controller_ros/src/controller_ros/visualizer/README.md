@@ -90,9 +90,38 @@ pip install opencv-python
 
 | 话题 | 类型 | 说明 |
 |------|------|------|
-| `/cmd_vel` | geometry_msgs/Twist | 手柄控制命令 |
-| `/visualizer/control_mode` | std_msgs/Bool | 控制模式 |
+| `/joy_cmd_vel` | geometry_msgs/Twist | 手柄控制命令 (由 cmd_vel_adapter 选择) |
+| `/visualizer/control_mode` | std_msgs/Bool | 控制模式 (true=手柄, false=网络) |
 | `/controller/emergency_stop` | std_msgs/Empty | 紧急停止 |
+
+### 控制流程
+
+```
+                    ┌─────────────────┐
+                    │  可视化器        │
+                    │  (visualizer)   │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+              ▼                             ▼
+    /joy_cmd_vel                  /visualizer/control_mode
+    (手柄命令)                     (模式切换)
+              │                             │
+              └──────────────┬──────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │ cmd_vel_adapter │
+                    │ (命令选择器)     │
+                    └────────┬────────┘
+                             │
+         ┌───────────────────┼───────────────────┐
+         │                   │                   │
+         ▼                   ▼                   ▼
+  /cmd_unified         control_mode          /cmd_vel
+  (控制器输出)         选择逻辑              (底盘输入)
+```
 
 ## 配置
 
