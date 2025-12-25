@@ -3,12 +3,10 @@ from typing import Dict, Any, Optional
 
 from ..core.data_types import TimeoutStatus
 from ..core.ros_compat import get_monotonic_time
+from ..core.constants import NEVER_RECEIVED_TIME_MS
 
-
-# 表示"从未收到消息"的超时值 (毫秒)
-# 使用大的有限值代替无穷大，避免 JSON 序列化问题
-# 1e9 ms ≈ 11.5 天，足够表示"非常长时间"
-NEVER_RECEIVED_AGE_MS = 1e9
+# 向后兼容别名
+NEVER_RECEIVED_AGE_MS = NEVER_RECEIVED_TIME_MS
 
 
 class TimeoutMonitor:
@@ -123,11 +121,26 @@ class TimeoutMonitor:
         """检查所有超时状态
         
         Args:
-            current_time: 已废弃参数，保留用于向后兼容，实际使用单调时钟
+            current_time: 已废弃参数，保留用于向后兼容，实际使用单调时钟。
+                         此参数将在未来版本中移除。
         
         Note:
             超时阈值 <= 0 表示禁用该数据源的超时检测
+        
+        .. deprecated:: 1.0
+            `current_time` 参数已废弃，超时检测现在使用单调时钟 (time.monotonic())
+            以避免系统时间跳变的影响。此参数将在 2.0 版本中移除。
         """
+        # 废弃参数警告 (仅在传入非 None 值时警告，避免频繁日志)
+        if current_time is not None:
+            import warnings
+            warnings.warn(
+                "TimeoutMonitor.check() 的 current_time 参数已废弃，"
+                "超时检测现在使用单调时钟。此参数将在 2.0 版本中移除。",
+                DeprecationWarning,
+                stacklevel=2
+            )
+        
         # 使用单调时钟，忽略外部传入的时间
         monotonic_now = get_monotonic_time()
         

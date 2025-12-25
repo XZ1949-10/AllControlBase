@@ -38,6 +38,10 @@ class BasicSafetyMonitor(ISafetyMonitor):
         # 预热期间裕度倍数的上限，防止配置错误导致安全检查过于宽松
         # 即使用户配置了更大的值，也不会超过此上限
         self.accel_warmup_margin_max = safety_config.get('accel_warmup_margin_max', 3.0)
+        # 绝对加速度上限 - 即使在预热期间也不能超过此值
+        # 这是一个硬性安全限制，防止任何情况下的危险加速度
+        # 默认为 a_max 的 3 倍，确保即使滤波器未收敛也能捕获极端情况
+        self.accel_absolute_max_multiplier = safety_config.get('accel_absolute_max_multiplier', 3.0)
         self.max_dt_for_accel = safety_config.get('max_dt_for_accel', 1.0)  # 加速度计算最大时间间隔
         self.min_dt_for_accel = safety_config.get('min_dt_for_accel', 0.001)  # 加速度计算最小时间间隔
         
@@ -216,9 +220,23 @@ class BasicSafetyMonitor(ISafetyMonitor):
                     effective_multiplier = min(self.accel_warmup_margin_multiplier, self.accel_warmup_margin_max)
                     accel_margin_effective = self.accel_margin * effective_multiplier
                 
+                # 绝对加速度上限检查 - 无论预热状态如何都执行
+                # 这是一个硬性安全限制，防止任何情况下的危险加速度
+                accel_absolute_limit = self.a_max * self.accel_absolute_max_multiplier
+                alpha_absolute_limit = self.alpha_max * self.accel_absolute_max_multiplier
+                
                 accel_horizontal = np.sqrt(ax**2 + ay**2)
                 
-                if accel_horizontal > self.a_max * accel_margin_effective:
+                # 首先检查绝对上限（硬性限制）
+                if accel_horizontal > accel_absolute_limit:
+                    reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds absolute limit {accel_absolute_limit:.2f}")
+                    if accel_horizontal > 1e-6:
+                        scale = self.a_max / accel_horizontal  # 限制到正常值
+                        limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
+                        limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
+                    needs_limiting = True
+                # 然后检查正常限制（考虑预热裕度）
+                elif accel_horizontal > self.a_max * accel_margin_effective:
                     reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds limit")
                     if accel_horizontal > 1e-6:
                         scale = self.a_max / accel_horizontal
@@ -227,12 +245,23 @@ class BasicSafetyMonitor(ISafetyMonitor):
                     needs_limiting = True
                 
                 if self.is_3d:
-                    if abs(az) > self.az_max * accel_margin_effective:
+                    # 垂直加速度绝对上限检查
+                    az_absolute_limit = self.az_max * self.accel_absolute_max_multiplier
+                    if abs(az) > az_absolute_limit:
+                        reasons.append(f"az {az:.2f} exceeds absolute limit {az_absolute_limit:.2f}")
+                        limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
+                        needs_limiting = True
+                    elif abs(az) > self.az_max * accel_margin_effective:
                         reasons.append(f"az {az:.2f} exceeds limit")
                         limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
                         needs_limiting = True
                 
-                if abs(alpha) > self.alpha_max * accel_margin_effective:
+                # 角加速度绝对上限检查
+                if abs(alpha) > alpha_absolute_limit:
+                    reasons.append(f"alpha {alpha:.2f} exceeds absolute limit {alpha_absolute_limit:.2f}")
+                    limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
+                    needs_limiting = True
+                elif abs(alpha) > self.alpha_max * accel_margin_effective:
                     reasons.append(f"alpha {alpha:.2f} exceeds limit")
                     limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
                     needs_limiting = True

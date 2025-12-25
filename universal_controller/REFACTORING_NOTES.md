@@ -218,22 +218,20 @@
 **分析**: 
 - `universal_controller/dashboard/`: 诊断监控面板 (通用，PyQt5)
 - `controller_ros/visualizer/`: 轨迹可视化 (ROS 专用)
-- `universal_controller/visualization/`: 空目录，无任何文件
 
 **解决方案**: 删除空目录，避免混淆。
 
-#### 2. 简化 mock 模块 ✅ 已完成
-**问题**: `mock/__init__.py` 有 170+ 行代码，但只是重新导出 `compat/` 和 `core.data_types` 的内容。
+#### 2. 删除 mock 模块 ✅ 已完成 (2024-12-25 第八轮)
+**问题**: `mock/` 模块已标记弃用，且没有实际代码依赖。
 
-**设计意图分析**: 保持向后兼容，让旧代码能继续工作。设计意图合理，但实现过于冗余。
+**分析**: 
+- 搜索所有 `.py` 文件，没有发现 `from universal_controller.mock import` 的使用
+- 只有文档中有引用（作为"不推荐"的示例）
+- 保留该模块增加了维护负担和混淆
 
 **解决方案**: 
-- 简化为最小的向后兼容层 (~100 行)
-- 保留必要的别名导出
-- 添加明确的弃用警告和迁移指南
-- 标注将在 v4.0 版本中移除
-
-**修改文件**: `universal_controller/mock/__init__.py`
+- 直接删除 `mock/` 目录
+- 更新相关文档
 
 #### 3. 清理 compat 模块的数据类型导出 ✅ 已完成
 **问题**: `compat/__init__.py` 导出了 `Vector3`, `Quaternion` 等数据类型，违反单一职责原则。
@@ -247,7 +245,53 @@
 
 **修改文件**: `universal_controller/compat/__init__.py`
 
-### 架构职责划分 (最终版)
+#### 4. 删除 tests/test_data_generator.py 向后兼容层 ✅ 已完成 (2024-12-25 第八轮)
+**问题**: `tests/test_data_generator.py` 是一个向后兼容的重导出文件。
+
+**分析**:
+- 有多个文件在使用旧路径（文档和 controller_ros 测试）
+- 设计意图合理，但应该更新使用者后删除
+
+**解决方案**:
+- 更新所有使用旧路径的文件改为使用 `tests.fixtures`
+- 删除向后兼容层文件
+
+**修改文件**:
+- `文档/02_使用文档.md`
+- `文档/04_快速参考.md`
+- `controller_ros/test/test_bridge.py`
+- `controller_ros/test/test_integration.py`
+- `controller_ros/test/test_quadrotor_features.py`
+- `controller_ros/test/test_emergency_stop.py`
+- `controller_ros/test/test_base_node.py`
+- 删除 `universal_controller/tests/test_data_generator.py`
+
+#### 5. 移除 MPC 权重旧命名向后兼容代码 ✅ 已完成 (2024-12-25 第八轮)
+**问题**: `mpc_controller.py` 中有 `control_v`/`control_omega` 的向后兼容代码。
+
+**分析**:
+- 搜索所有 `.yaml` 配置文件，没有使用旧命名
+- 向后兼容代码增加了复杂度但没有实际使用
+
+**解决方案**:
+- 移除向后兼容代码，直接使用 `control_accel`/`control_alpha`
+
+**修改文件**: `universal_controller/tracker/mpc_controller.py`
+
+#### 6. 合并状态机的冗余方法 ✅ 已完成 (2024-12-25 第八轮)
+**问题**: `_reset_all_counters()` 和 `_reset_mpc_history()` 功能重叠。
+
+**分析**:
+- `_reset_all_counters()` 已经包含了 `_mpc_success_history.clear()`
+- `_reset_mpc_history()` 只在 `reset()` 方法中被调用，是冗余的
+
+**解决方案**:
+- 删除 `_reset_mpc_history()` 方法
+- 统一使用 `_reset_all_counters()`
+
+**修改文件**: `universal_controller/safety/state_machine.py`
+
+### 架构职责划分 (最终版 v2)
 
 ```
 universal_controller/
@@ -260,14 +304,13 @@ universal_controller/
 ├── compat/               # ROS 兼容层 (独立运行支持)
 │   └── ros_compat_impl.py  # Standalone* 实现
 │
-├── mock/                 # 向后兼容模块 (已弃用，v4.0 移除)
-│   └── __init__.py       # 仅重新导出，带弃用警告
-│
 ├── dashboard/            # 诊断监控面板 (PyQt5)
 │
 └── tests/                # 测试代码
     └── fixtures/         # 测试数据生成器
 ```
+
+注意: `mock/` 和 `visualization/` 目录已删除。
 
 ### 正确的导入方式
 

@@ -258,3 +258,17 @@ class DataAggregator:
         siny_cosp = 2.0 * (w * z + x * y)
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         return math.atan2(siny_cosp, cosy_cosp)
+
+    def reset(self):
+        """重置数据聚合器状态"""
+        with self._lock:
+            self._data = VisualizerData()
+            self._velocity_history = VelocityHistory(
+                max_duration_sec=self._velocity_history.max_duration_sec
+            )
+            self._last_odom_time = 0.0
+            self._last_traj_time = 0.0
+            self._last_cmd_time = 0.0
+            self._last_diag_time = 0.0
+            self._last_joy_time = 0.0
+        logger.info("DataAggregator reset")

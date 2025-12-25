@@ -1,8 +1,8 @@
 """
 通用控制器 (Universal Controller)
 
-版本: v3.18.0
-日期: 2024-12-22
+版本: v3.19.0
+日期: 2024-12-25
 
 基于 MPC 的通用轨迹跟踪控制器，支持多平台部署。
 
@@ -15,6 +15,8 @@
 - ROS 兼容: 支持 ROS 环境和独立运行模式，自动检测切换
 - 强类型诊断: DiagnosticsInput 数据类提供类型安全
 - 职责分离: DiagnosticsPublisher 独立处理诊断发布
+- 统一常量管理: core.constants 模块提供全局常量定义
+- 统一异常体系: core.exceptions 模块提供分层异常类
 
 支持平台:
 - 阿克曼转向车辆 (Ackermann)
@@ -32,7 +34,7 @@
     cmd = manager.update(odom, trajectory)
 """
 
-__version__ = "3.18.1"
+__version__ = "3.19.0"
 __author__ = "Universal Controller Team"
 
 # 导出主要类和配置
@@ -50,8 +52,19 @@ from .core.data_types import (
 )
 from .core.diagnostics_input import DiagnosticsInput
 from .core.interfaces import (
+    ILifecycleComponent,
     IStateEstimator, ITrajectoryTracker, IConsistencyChecker,
-    ISafetyMonitor, ISmoothTransition, ICoordinateTransformer
+    ISafetyMonitor, ISmoothTransition, ICoordinateTransformer,
+    IAttitudeController
+)
+# 导出常量
+from .core.constants import (
+    EPSILON, EPSILON_SMALL, EPSILON_ANGLE,
+    DEFAULT_GRAVITY, NEVER_RECEIVED_TIME_MS,
+)
+# 导出异常类
+from .core.exceptions import (
+    ControllerError, ConfigurationError, ConfigValidationError,
 )
 
 __all__ = [
@@ -72,6 +85,13 @@ __all__ = [
     # ROS geometry_msgs 兼容类型
     'Pose', 'Twist', 'PoseWithCovariance', 'TwistWithCovariance',
     # 接口
+    'ILifecycleComponent',
     'IStateEstimator', 'ITrajectoryTracker', 'IConsistencyChecker',
     'ISafetyMonitor', 'ISmoothTransition', 'ICoordinateTransformer',
+    'IAttitudeController',
+    # 常量
+    'EPSILON', 'EPSILON_SMALL', 'EPSILON_ANGLE',
+    'DEFAULT_GRAVITY', 'NEVER_RECEIVED_TIME_MS',
+    # 异常
+    'ControllerError', 'ConfigurationError', 'ConfigValidationError',
 ]

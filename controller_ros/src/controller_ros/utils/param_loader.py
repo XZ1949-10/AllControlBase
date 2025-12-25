@@ -42,14 +42,18 @@ logger = logging.getLogger(__name__)
 # 话题配置 (独立于算法配置，仅 ROS 层使用)
 # =============================================================================
 TOPICS_DEFAULTS = {
+    # 输入话题
     'odom': '/odom',
     'imu': '/imu',
     'trajectory': '/nn/local_trajectory',
+    'emergency_stop': '/controller/emergency_stop',
+    
+    # 输出话题
     'cmd_unified': '/cmd_unified',
     'diagnostics': '/controller/diagnostics',
     'state': '/controller/state',
-    'emergency_stop': '/controller/emergency_stop',
     'attitude_cmd': '/controller/attitude_cmd',
+    'debug_path': '/controller/debug_path',
 }
 
 # TF 配置 (ROS 层使用，部分映射到 transform)
@@ -61,6 +65,7 @@ TF_DEFAULTS = {
     'buffer_warmup_interval_sec': 0.1,
     'retry_interval_sec': 1.0,  # 重试间隔（秒），与控制频率无关
     'max_retries': -1,
+    'expected_source_frames': [],  # 预期的源坐标系列表 (空列表表示不检查)
 }
 
 # 节点配置 (仅 ROS 层使用)

@@ -69,6 +69,13 @@ class ExponentialSmoothTransition(ISmoothTransition):
     
     def get_progress(self) -> float:
         return self.progress
+    
+    def reset(self) -> None:
+        """重置过渡状态"""
+        self.start_time = None
+        self.in_transition = False
+        self.from_cmd = None
+        self.progress = 0.0
 
 
 class LinearSmoothTransition(ISmoothTransition):
@@ -131,3 +138,10 @@ class LinearSmoothTransition(ISmoothTransition):
     
     def get_progress(self) -> float:
         return self.progress
+    
+    def reset(self) -> None:
+        """重置过渡状态"""
+        self.start_time = None
+        self.in_transition = False
+        self.from_cmd = None
+        self.progress = 0.0

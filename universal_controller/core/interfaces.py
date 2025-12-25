@@ -14,7 +14,47 @@ if TYPE_CHECKING:
     from .diagnostics_input import DiagnosticsInput
 
 
-class IStateEstimator(ABC):
+class ILifecycleComponent(ABC):
+    """
+    生命周期组件基础接口
+    
+    所有需要生命周期管理的组件都应实现此接口。
+    提供统一的 reset() 和 shutdown() 方法。
+    
+    生命周期说明:
+    - reset(): 重置内部状态，保留资源，可继续使用
+    - shutdown(): 释放所有资源，对象不应再使用
+    
+    设计原则:
+    - reset() 是必须实现的，用于状态重置
+    - shutdown() 有默认空实现，只有持有外部资源的组件需要覆盖
+    """
+    
+    @abstractmethod
+    def reset(self) -> None:
+        """
+        重置组件内部状态
+        
+        调用后组件应恢复到初始状态，但保留已分配的资源。
+        可以继续调用其他方法。
+        """
+        pass
+    
+    def shutdown(self) -> None:
+        """
+        关闭组件并释放所有资源
+        
+        调用后组件不应再使用。默认实现为空，
+        只有持有外部资源（如 C 库、文件句柄、网络连接）的组件需要覆盖。
+        
+        子类覆盖时应该:
+        1. 释放外部资源
+        2. 调用 reset() 清理内部状态
+        """
+        pass
+
+
+class IStateEstimator(ILifecycleComponent):
     """状态估计器接口"""
     
     @abstractmethod
@@ -34,10 +74,6 @@ class IStateEstimator(ABC):
         pass
     
     @abstractmethod
-    def reset(self) -> None:
-        pass
-    
-    @abstractmethod
     def set_imu_available(self, available: bool) -> None:
         pass
     
@@ -47,7 +83,7 @@ class IStateEstimator(ABC):
         pass
 
 
-class ITrajectoryTracker(ABC):
+class ITrajectoryTracker(ILifecycleComponent):
     """轨迹跟踪器接口"""
     
     @abstractmethod
@@ -71,44 +107,26 @@ class ITrajectoryTracker(ABC):
             bool: True 表示成功更新，False 表示被节流或无需更新
         """
         pass
-    
-    @abstractmethod
-    def reset(self) -> None:
-        """重置控制器内部状态（不释放资源）"""
-        pass
-    
-    @abstractmethod
-    def shutdown(self) -> None:
-        """资源清理并关闭控制器"""
-        pass
 
 
-class IConsistencyChecker(ABC):
+class IConsistencyChecker(ILifecycleComponent):
     """一致性检查器接口"""
     
     @abstractmethod
     def compute(self, trajectory: Trajectory) -> ConsistencyResult:
         pass
-    
-    @abstractmethod
-    def reset(self) -> None:
-        pass
 
 
-class ISafetyMonitor(ABC):
+class ISafetyMonitor(ILifecycleComponent):
     """安全监控器接口"""
     
     @abstractmethod
     def check(self, state: np.ndarray, cmd: ControlOutput, 
               diagnostics: 'DiagnosticsInput') -> SafetyDecision:
         pass
-    
-    @abstractmethod
-    def reset(self) -> None:
-        pass
 
 
-class ISmoothTransition(ABC):
+class ISmoothTransition(ILifecycleComponent):
     """平滑过渡接口"""
     
     @abstractmethod
@@ -129,7 +147,7 @@ class ISmoothTransition(ABC):
         pass
 
 
-class ICoordinateTransformer(ABC):
+class ICoordinateTransformer(ILifecycleComponent):
     """坐标变换器接口"""
     
     @abstractmethod
@@ -146,7 +164,7 @@ class ICoordinateTransformer(ABC):
         pass
 
 
-class IAttitudeController(ABC):
+class IAttitudeController(ILifecycleComponent):
     """
     姿态内环控制器接口 (F14.1)
     
@@ -178,9 +196,4 @@ class IAttitudeController(ABC):
     @abstractmethod
     def get_attitude_rate_limits(self) -> Dict[str, float]:
         """获取姿态角速度限制"""
-        pass
-    
-    @abstractmethod
-    def reset(self) -> None:
-        """重置控制器状态"""
         pass

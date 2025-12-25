@@ -3,6 +3,12 @@
 
 管理传感器数据的缓存和访问，支持 ROS1 和 ROS2。
 将数据缓存逻辑从节点实现中抽离，避免代码重复。
+
+生命周期说明：
+- 实现 ILifecycle 接口（通过 LifecycleMixin）
+- reset(): 清除所有缓存数据，重置时钟状态
+- shutdown(): 清除数据并释放回调引用
+- 支持健康状态查询
 """
 from typing import Dict, Any, Optional, Callable, List
 import threading
@@ -12,6 +18,7 @@ import logging
 from universal_controller.core.data_types import Odometry, Imu, Trajectory
 from ..adapters import OdomAdapter, ImuAdapter, TrajectoryAdapter
 from ..utils.ros_compat import ROS_VERSION
+from ..lifecycle import LifecycleMixin, LifecycleState
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +42,7 @@ class ClockJumpEvent:
         return f"ClockJumpEvent({direction}, delta={self.jump_delta:.3f}s)"
 
 
-class DataManager:
+class DataManager(LifecycleMixin):
     """
     统一数据管理器
     
@@ -45,6 +52,12 @@ class DataManager:
     - 管理数据时间戳
     - 计算数据年龄
     - 检测时钟回退并安全处理
+    
+    生命周期:
+    - 实现 ILifecycle 接口（通过 LifecycleMixin）
+    - initialize(): 自动在构造时调用
+    - reset(): 清除所有缓存数据，重置时钟状态（原 clear() 方法）
+    - shutdown(): 清除数据并释放回调引用
     
     时钟回退处理策略:
     - 检测到时钟回退时，标记所有数据为"过时"（年龄设为 inf）
@@ -80,6 +93,9 @@ class DataManager:
                           默认 False (适合仿真快进场景)。
                           设为 True 可用于需要严格时间同步的场景。
         """
+        # 初始化 LifecycleMixin
+        super().__init__()
+        
         # 适配器
         self._odom_adapter = OdomAdapter()
         self._imu_adapter = ImuAdapter()
@@ -108,6 +124,12 @@ class DataManager:
         
         # 数据有效性标记 - 时钟回退后数据被标记为无效
         self._data_invalidated: bool = False
+        
+        # 统计信息
+        self._update_counts: Dict[str, int] = {'odom': 0, 'imu': 0, 'trajectory': 0}
+        
+        # 自动初始化
+        self.initialize()
     
     @property
     def odom_adapter(self) -> OdomAdapter:
@@ -226,6 +248,7 @@ class DataManager:
         with self._lock:
             self._latest_data['odom'] = uc_odom
             self._timestamps['odom'] = self._get_time_func()
+            self._update_counts['odom'] += 1
             self._on_new_data('odom')
         return uc_odom
     
@@ -243,6 +266,7 @@ class DataManager:
         with self._lock:
             self._latest_data['imu'] = uc_imu
             self._timestamps['imu'] = self._get_time_func()
+            self._update_counts['imu'] += 1
             self._on_new_data('imu')
         return uc_imu
     
@@ -260,6 +284,7 @@ class DataManager:
         with self._lock:
             self._latest_data['trajectory'] = uc_traj
             self._timestamps['trajectory'] = self._get_time_func()
+            self._update_counts['trajectory'] += 1
             self._on_new_data('trajectory')
         return uc_traj
     
@@ -378,7 +403,38 @@ class DataManager:
             return 'odom' in self._latest_data and 'trajectory' in self._latest_data
     
     def clear(self):
-        """清除所有缓存数据"""
+        """
+        清除所有缓存数据
+        
+        .. deprecated:: 3.18
+            使用 reset() 代替，clear() 将在未来版本中移除
+        """
+        import warnings
+        warnings.warn(
+            "clear() is deprecated, use reset() instead",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        self.reset()
+    
+    # ==================== LifecycleMixin 实现 ====================
+    
+    def _do_initialize(self) -> bool:
+        """初始化数据管理器"""
+        # DataManager 不需要特殊的初始化逻辑
+        # 所有资源在 __init__ 中已经创建
+        return True
+    
+    def _do_shutdown(self) -> None:
+        """关闭数据管理器，释放资源"""
+        with self._lock:
+            self._latest_data.clear()
+            self._timestamps.clear()
+            self._clock_jump_events.clear()
+            self._on_clock_jump = None  # 释放回调引用
+    
+    def _do_reset(self) -> None:
+        """重置数据管理器状态"""
         with self._lock:
             self._latest_data.clear()
             self._timestamps.clear()
@@ -386,6 +442,24 @@ class DataManager:
             self._clock_jumped_back = False
             self._data_invalidated = False
             self._clock_jump_events.clear()
+            # 重置统计信息
+            for key in self._update_counts:
+                self._update_counts[key] = 0
+    
+    def _get_health_details(self) -> Dict[str, Any]:
+        """获取详细健康信息"""
+        with self._lock:
+            ages = self.get_data_ages()
+            return {
+                'has_odom': 'odom' in self._latest_data,
+                'has_imu': 'imu' in self._latest_data,
+                'has_trajectory': 'trajectory' in self._latest_data,
+                'data_valid': not self._data_invalidated,
+                'clock_jumped_back': self._clock_jumped_back,
+                'odom_age_ms': ages.get('odom', float('inf')) * 1000,
+                'traj_age_ms': ages.get('traj', float('inf')) * 1000,
+                'update_counts': self._update_counts.copy(),
+            }
     
     def did_clock_jump_back(self) -> bool:
         """

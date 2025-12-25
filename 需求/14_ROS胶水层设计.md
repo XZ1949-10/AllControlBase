@@ -799,13 +799,13 @@ class TFErrorHandler:
 ### 12.3 Mock 测试
 
 ```python
-# 使用 universal_controller 提供的 mock 模块
-from universal_controller.mock import MockOdometry, MockTrajectory
+# 使用 universal_controller 提供的测试数据生成器
+from universal_controller.tests.fixtures import create_test_odom, create_test_trajectory
 
 def test_controller_bridge():
     bridge = ControllerBridge(config)
-    odom = MockOdometry(vx=1.0)
-    traj = MockTrajectory(num_points=10)
+    odom = create_test_odom(vx=1.0)
+    traj = create_test_trajectory(num_points=10)
     
     cmd = bridge.update(odom, traj)
     assert cmd.success

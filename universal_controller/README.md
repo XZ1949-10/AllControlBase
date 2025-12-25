@@ -156,9 +156,6 @@ universal_controller/
 │   ├── __init__.py
 │   └── ros_compat_impl.py   # 独立运行实现 (StandaloneRospy, StandaloneTF2Buffer)
 │
-├── mock/                    # 向后兼容模块 (已弃用，请使用 compat/)
-│   └── __init__.py          # 重导出 ROS 兼容层，带弃用警告
-│
 ├── dashboard/               # 可视化界面
 │   ├── __init__.py
 │   ├── main_window.py       # 主窗口
@@ -186,7 +183,10 @@ universal_controller/
 │
 └── tests/                   # 测试模块
     ├── __init__.py
-    ├── test_data_generator.py # 测试数据生成器 (轨迹、里程计)
+    ├── fixtures/            # 测试夹具
+    │   ├── __init__.py
+    │   ├── test_data_generator.py  # 测试数据生成 (轨迹、里程计、IMU)
+    │   └── mock_diagnostics.py     # 模拟诊断数据 (仅用于 Dashboard 测试)
     ├── test_core.py         # 核心模块测试
     ├── test_components.py   # 组件测试
     ├── test_tf2_transform.py # TF2 变换测试 (F3)

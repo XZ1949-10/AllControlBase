@@ -73,6 +73,9 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self.drift_rate = transform_config.get('drift_rate', 0.01)
         self.drift_velocity_factor = transform_config.get('drift_velocity_factor', 0.1)  # 速度漂移因子
         self.max_drift_dt = transform_config.get('max_drift_dt', 0.5)
+        # 漂移累积上限 - 防止长时间运行后漂移估计值过大
+        # 当累积漂移超过此值时，停止累积（认为估计已不可靠）
+        self.max_accumulated_drift = transform_config.get('max_accumulated_drift', 1.0)  # 米
         self.source_frame = transform_config.get('source_frame', 'base_link')
         self.drift_correction_thresh = transform_config.get('drift_correction_thresh', 0.01)
         
@@ -454,7 +457,18 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                 # 速度因子默认 0.1，即每 1 m/s 增加 10% 的漂移率
                 effective_drift_rate = self.drift_rate * (1.0 + velocity * self.drift_velocity_factor)
             
-            self.accumulated_drift += effective_drift_rate * dt
+            # 累积漂移，但不超过上限
+            # 超过上限后停止累积，因为估计已不可靠
+            if self.accumulated_drift < self.max_accumulated_drift:
+                new_drift = self.accumulated_drift + effective_drift_rate * dt
+                self.accumulated_drift = min(new_drift, self.max_accumulated_drift)
+                if self.accumulated_drift >= self.max_accumulated_drift:
+                    logger.warning(
+                        f"Accumulated drift reached maximum ({self.max_accumulated_drift}m). "
+                        f"Drift estimation is no longer reliable. "
+                        f"Consider checking TF2 availability."
+                    )
+            
             self._last_fallback_update_time = current_time
         
         # 确定降级状态
@@ -663,3 +677,29 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self._last_fallback_update_time = None
         # 重置警告记录
         self._warned_frames.clear()
+    
+    def shutdown(self) -> None:
+        """
+        关闭变换器并释放资源
+        
+        释放 TF2 Buffer 和 Listener 资源。
+        调用后变换器不应再使用。
+        """
+        # 清除外部回调
+        self._external_tf2_lookup = None
+        
+        # 释放 TF2 资源
+        # 注意：TF2 Listener 在 ROS 环境中会自动清理
+        # 这里主要是清除引用，帮助 GC
+        if self._tf_listener is not None:
+            self._tf_listener = None
+        if self._tf_buffer is not None:
+            self._tf_buffer = None
+        
+        self._tf2_initialized = False
+        
+        # 清除状态估计器引用
+        self.state_estimator = None
+        
+        # 重置内部状态
+        self.reset()

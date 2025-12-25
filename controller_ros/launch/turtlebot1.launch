@@ -36,9 +36,12 @@
   <!-- TurtleBot1 专用配置 (覆盖基础配置) -->
   <rosparam file="$(find controller_ros)/config/turtlebot1.yaml" command="load"/>
   
-  <!-- ========== 覆盖参数 ========== -->
-  <param name="system/platform" value="differential"/>
-  <param name="system/ctrl_freq" value="20"/>
+  <!-- 
+  注意: 平台和控制频率已在 turtlebot1.yaml 中配置
+  如需运行时覆盖，可使用:
+    <param name="system/platform" value="differential"/>
+    <param name="system/ctrl_freq" value="20"/>
+  -->
   
   <!-- ========== 控制器节点 ========== -->
   <node pkg="controller_ros" type="controller_node.py" name="universal_controller_node" output="screen">
@@ -82,12 +85,11 @@
   
   <!-- ========== 运行可视化节点 (可选) ========== -->
   <group if="$(arg visualizer)">
-    <!-- 加载可视化配置 -->
-    <rosparam file="$(find controller_ros)/config/visualizer_params.yaml" command="load" ns="visualizer"/>
+    <!-- 加载可视化配置到全局命名空间 (visualizer_node.py 从这里读取) -->
+    <rosparam file="$(find controller_ros)/config/visualizer_params.yaml" command="load"/>
     
     <node pkg="controller_ros" type="visualizer_node.py" name="turtlebot_visualizer" 
           output="screen">
-      <rosparam file="$(find controller_ros)/config/visualizer_params.yaml" command="load"/>
       <!-- 相机和标定配置 -->
       <param name="topics/camera_image" value="$(arg camera_image)"/>
       <param name="camera/calibration_file" value="$(arg calibration_file)"/>

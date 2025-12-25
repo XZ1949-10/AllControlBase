@@ -158,3 +158,11 @@ class JoystickHandler:
         
         mode_text = "手柄控制" if self._current_mode == ControlMode.JOYSTICK else "网络轨迹"
         return f"模式: {mode_text}"
+
+    def reset(self):
+        """重置手柄处理器状态"""
+        self._current_mode = ControlMode.NETWORK
+        self._last_joystick_state = None
+        self._joystick_connected = False
+        self._last_update_time = 0.0
+        logger.info("JoystickHandler reset")

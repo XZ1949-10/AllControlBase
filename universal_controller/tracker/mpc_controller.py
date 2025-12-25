@@ -8,7 +8,7 @@ import gc
 from ..core.interfaces import ITrajectoryTracker
 from ..core.data_types import Trajectory, ControlOutput, ConsistencyResult
 from ..core.enums import PlatformType
-from ..core.ros_compat import normalize_angle, angle_difference
+from ..core.ros_compat import normalize_angle, angle_difference, get_monotonic_time
 from ..core.velocity_smoother import VelocitySmoother
 from ..config.default_config import PLATFORM_CONFIG
 
@@ -74,28 +74,11 @@ class MPCController(ITrajectoryTracker):
             logger.warning(f"MPC heading weight {self.Q_heading} too small, using {MIN_WEIGHT}")
             self.Q_heading = MIN_WEIGHT
         
-        # 控制输入权重
-        # 优先使用新命名 control_accel/control_alpha
-        # 向后兼容旧命名 control_v/control_omega（已弃用）
-        if 'control_accel' in mpc_weights:
-            self.R_accel = mpc_weights['control_accel']
-        elif 'control_v' in mpc_weights:
-            logger.warning(
-                "MPC weight 'control_v' is deprecated, use 'control_accel' instead"
-            )
-            self.R_accel = mpc_weights['control_v']
-        else:
-            self.R_accel = 0.1
-        
-        if 'control_alpha' in mpc_weights:
-            self.R_alpha = mpc_weights['control_alpha']
-        elif 'control_omega' in mpc_weights:
-            logger.warning(
-                "MPC weight 'control_omega' is deprecated, use 'control_alpha' instead"
-            )
-            self.R_alpha = mpc_weights['control_omega']
-        else:
-            self.R_alpha = 0.1
+        # 控制输入权重 (R 矩阵)
+        # control_accel: 加速度控制权重 (用于 ax, ay, az)
+        # control_alpha: 角加速度控制权重 (用于 alpha)
+        self.R_accel = mpc_weights.get('control_accel', 0.1)
+        self.R_alpha = mpc_weights.get('control_alpha', 0.1)
         
         # 控制权重验证
         if self.R_accel < MIN_WEIGHT:
@@ -476,7 +459,7 @@ class MPCController(ITrajectoryTracker):
                 self._last_solve_time_ms = result.solve_time_ms
                 result.health_metrics['fallback_reason'] = 'solver_runtime_error'
                 return result
-            except Exception:
+            except (ValueError, RuntimeError):
                 return ControlOutput(vx=0, vy=0, vz=0, omega=0,
                                    frame_id=self.output_frame, success=False,
                                    health_metrics={'error_type': 'solver_runtime'})
@@ -489,12 +472,15 @@ class MPCController(ITrajectoryTracker):
             return ControlOutput(vx=0, vy=0, vz=0, omega=0,
                                frame_id=self.output_frame, success=False,
                                health_metrics={'error_type': 'memory_error'})
+        except (KeyboardInterrupt, SystemExit):
+            # 不捕获这些异常，让它们正常传播
+            raise
         except Exception as e:
-            # 其他未预期的错误
-            logger.error(f"Unexpected error: {type(e).__name__}: {e}")
+            # 其他未预期的错误 - 记录详细信息以便调试
+            logger.error(f"Unexpected error in MPC compute: {type(e).__name__}: {e}", exc_info=True)
             return ControlOutput(vx=0, vy=0, vz=0, omega=0,
                                frame_id=self.output_frame, success=False,
-                               health_metrics={'error_type': 'unexpected'})
+                               health_metrics={'error_type': 'unexpected', 'error_class': type(e).__name__})
     
     def _solve_fallback(self, state: np.ndarray, trajectory: Trajectory,
                        consistency: ConsistencyResult) -> ControlOutput:
@@ -695,7 +681,8 @@ class MPCController(ITrajectoryTracker):
             return False
         
         # 节流检查：防止频繁重新初始化
-        current_time = time.time()
+        # 使用单调时钟避免系统时间调整的影响
+        current_time = get_monotonic_time()
         if self._last_horizon_change_time is not None:
             elapsed = current_time - self._last_horizon_change_time
             if elapsed < self._horizon_change_min_interval:

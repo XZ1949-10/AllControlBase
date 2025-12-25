@@ -36,11 +36,8 @@ from universal_controller.core.data_types import ControlOutput, AttitudeCommand
 from controller_ros.node.base_node import ControllerNodeBase
 from controller_ros.io import ROS1PublisherManager, ROS1ServiceManager
 from controller_ros.utils.ros_compat import get_time_sec
-from controller_ros.utils.param_loader import ParamLoader
+from controller_ros.utils.param_loader import ParamLoader, TOPICS_DEFAULTS
 from controller_ros.bridge import TFBridge
-
-# 默认话题名常量
-DEFAULT_EMERGENCY_STOP_TOPIC = '/controller/emergency_stop'
 
 
 class ControllerNodeROS1(ControllerNodeBase):
@@ -143,10 +140,10 @@ class ControllerNodeROS1(ControllerNodeBase):
     
     def _create_subscriptions(self):
         """创建所有订阅"""
-        odom_topic = self._topics.get('odom', '/odom')
+        odom_topic = self._topics.get('odom', TOPICS_DEFAULTS['odom'])
         imu_topic = self._topics.get('imu', '')
-        traj_topic = self._topics.get('trajectory', '/nn/local_trajectory')
-        emergency_stop_topic = self._topics.get('emergency_stop', DEFAULT_EMERGENCY_STOP_TOPIC)
+        traj_topic = self._topics.get('trajectory', TOPICS_DEFAULTS['trajectory'])
+        emergency_stop_topic = self._topics.get('emergency_stop', TOPICS_DEFAULTS['emergency_stop'])
         
         # 里程计订阅
         self._odom_sub = rospy.Subscriber(
@@ -272,6 +269,10 @@ class ControllerNodeROS1(ControllerNodeBase):
             yaw_mode=self._attitude_yaw_mode,
             is_hovering=is_hovering
         )
+    
+    def _publish_debug_path(self, trajectory):
+        """发布调试路径 (用于 RViz 可视化)"""
+        self._publishers.publish_debug_path(trajectory)
     
     # ==================== 生命周期 ====================
     

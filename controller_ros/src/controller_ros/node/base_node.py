@@ -9,6 +9,12 @@
 - TF2 集成
 - 紧急停止处理
 - 姿态控制接口 (四旋翼平台)
+
+生命周期说明：
+- 实现 ILifecycle 接口（通过 LifecycleMixin）
+- initialize(): 初始化所有组件（由 _initialize() 调用）
+- reset(): 重置控制器和数据管理器
+- shutdown(): 关闭所有组件，释放资源
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
@@ -26,11 +32,12 @@ from universal_controller.core.enums import ControllerState, PlatformType
 from ..bridge import ControllerBridge
 from ..io.data_manager import DataManager
 from ..utils import TimeSync, TF2InjectionManager
+from ..lifecycle import LifecycleMixin, LifecycleState
 
 logger = logging.getLogger(__name__)
 
 
-class ControllerNodeBase(ABC):
+class ControllerNodeBase(LifecycleMixin, ABC):
     """
     控制器节点基类
     
@@ -42,6 +49,12 @@ class ControllerNodeBase(ABC):
     - 诊断处理
     - 紧急停止处理
     - 姿态控制接口 (四旋翼平台)
+    
+    生命周期:
+    - 实现 ILifecycle 接口（通过 LifecycleMixin）
+    - _initialize(): 初始化所有组件（调用 LifecycleMixin.initialize()）
+    - reset(): 重置控制器和数据管理器（通过 _handle_reset()）
+    - shutdown(): 关闭所有组件，释放资源
     
     子类需要实现：
     - _create_ros_interfaces(): 创建 ROS 特定的接口
@@ -55,6 +68,9 @@ class ControllerNodeBase(ABC):
     
     def __init__(self):
         """初始化基类（子类应在调用 super().__init__() 前完成 ROS 节点初始化）"""
+        # 初始化 LifecycleMixin
+        LifecycleMixin.__init__(self)
+        
         # 配置属性（由子类在调用 _initialize() 前设置）
         self._params: Dict[str, Any] = {}
         self._topics: Dict[str, str] = {}
@@ -88,34 +104,119 @@ class ControllerNodeBase(ABC):
         初始化控制器组件
         
         子类应在加载参数后调用此方法。
+        内部调用 LifecycleMixin.initialize() 来执行实际初始化。
         """
-        # 1. 获取平台配置
-        self._platform_type = self._params.get('system', {}).get('platform', 'differential')
-        platform_config = PLATFORM_CONFIG.get(self._platform_type, PLATFORM_CONFIG['differential'])
-        self._default_frame_id = platform_config.get('output_frame', 'base_link')
+        # 调用 LifecycleMixin 的 initialize 方法
+        # 这会调用 _do_initialize()
+        if not LifecycleMixin.initialize(self):
+            self._log_error("Controller node initialization failed")
+    
+    # ==================== LifecycleMixin 实现 ====================
+    
+    def _do_initialize(self) -> bool:
+        """
+        实际的初始化逻辑
         
-        # 检查是否为四旋翼平台
-        self._is_quadrotor = platform_config.get('type') == PlatformType.QUADROTOR
+        由 LifecycleMixin.initialize() 调用。
+        """
+        try:
+            # 1. 获取平台配置
+            self._platform_type = self._params.get('system', {}).get('platform', 'differential')
+            platform_config = PLATFORM_CONFIG.get(self._platform_type, PLATFORM_CONFIG['differential'])
+            self._default_frame_id = platform_config.get('output_frame', 'base_link')
+            
+            # 检查是否为四旋翼平台
+            self._is_quadrotor = platform_config.get('type') == PlatformType.QUADROTOR
+            
+            # 2. 创建数据管理器（带时钟跳变回调）
+            self._data_manager = DataManager(
+                get_time_func=self._get_time,
+                on_clock_jump=self._on_clock_jump
+            )
+            
+            # 3. 创建控制器桥接
+            self._controller_bridge = ControllerBridge(self._params)
+            
+            # 4. 创建时间同步
+            watchdog_config = self._params.get('watchdog', {})
+            self._time_sync = TimeSync(
+                max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 500),
+                max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 2500),
+                max_imu_age_ms=watchdog_config.get('imu_timeout_ms', -1)
+            )
+            
+            # 5. 设置诊断回调
+            self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Controller node initialization error: {e}")
+            return False
+    
+    def _do_shutdown(self) -> None:
+        """
+        实际的关闭逻辑
         
-        # 2. 创建数据管理器（带时钟跳变回调）
-        self._data_manager = DataManager(
-            get_time_func=self._get_time,
-            on_clock_jump=self._on_clock_jump
-        )
+        由 LifecycleMixin.shutdown() 调用。
+        """
+        # 关闭控制器桥接
+        if self._controller_bridge is not None:
+            self._controller_bridge.shutdown()
+            self._controller_bridge = None
         
-        # 3. 创建控制器桥接
-        self._controller_bridge = ControllerBridge(self._params)
+        # 关闭数据管理器
+        if self._data_manager is not None:
+            self._data_manager.shutdown()
+            self._data_manager = None
         
-        # 4. 创建时间同步
-        watchdog_config = self._params.get('watchdog', {})
-        self._time_sync = TimeSync(
-            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 500),
-            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 2500),
-            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', -1)
-        )
+        # 清理 TF2 注入管理器
+        if self._tf2_injection_manager is not None:
+            self._tf2_injection_manager.reset()
+            self._tf2_injection_manager = None
         
-        # 5. 设置诊断回调
-        self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
+        self._log_info('Controller node shutdown complete')
+    
+    def _do_reset(self) -> None:
+        """
+        实际的重置逻辑
+        
+        由 LifecycleMixin.reset() 调用。
+        """
+        if self._controller_bridge is not None:
+            self._controller_bridge.reset()
+        if self._data_manager is not None:
+            self._data_manager.reset()
+        if self._tf2_injection_manager is not None:
+            self._tf2_injection_manager.reset()
+        self._waiting_for_data = True
+        self._consecutive_errors = 0
+        self._clear_emergency_stop()
+        self._last_attitude_cmd = None
+        self._log_info('Controller node reset complete')
+    
+    def _get_health_details(self) -> Dict[str, Any]:
+        """获取详细健康信息"""
+        details = {
+            'platform': self._platform_type,
+            'is_quadrotor': self._is_quadrotor,
+            'waiting_for_data': self._waiting_for_data,
+            'consecutive_errors': self._consecutive_errors,
+            'emergency_stop': self._emergency_stop_requested,
+            'traj_msg_available': self._traj_msg_available,
+        }
+        
+        # 添加子组件健康状态
+        if self._controller_bridge is not None:
+            details['controller_bridge'] = self._controller_bridge.get_health_status()
+        
+        if self._data_manager is not None:
+            details['data_manager'] = self._data_manager.get_health_status()
+        
+        if self._tf2_injection_manager is not None:
+            details['tf2_injected'] = self._tf2_injection_manager.is_injected
+        
+        return details
     
     def _notify_odom_received(self) -> None:
         """通知收到里程计数据（更新超时监控）"""
@@ -429,6 +530,9 @@ class ControllerNodeBase(ABC):
             if self._is_quadrotor and self._controller_bridge.manager is not None:
                 self._try_publish_attitude_command(cmd)
             
+            # 6. 发布调试路径 (用于 RViz 可视化)
+            self._publish_debug_path(trajectory)
+            
             return cmd
         except Exception as e:
             self._handle_control_error(e, timeouts)
@@ -510,17 +614,9 @@ class ControllerNodeBase(ABC):
     
     def _handle_reset(self):
         """处理重置请求"""
-        if self._controller_bridge is not None:
-            self._controller_bridge.reset()
-        if self._data_manager is not None:
-            self._data_manager.clear()
-        if self._tf2_injection_manager is not None:
-            self._tf2_injection_manager.reset()
-        self._waiting_for_data = True
-        self._consecutive_errors = 0
-        self._clear_emergency_stop()
-        self._last_attitude_cmd = None
-        self._log_info('Controller reset')
+        # 使用 LifecycleMixin 的 reset 方法
+        self.reset()
+        self._log_info('Controller reset via service')
     
     def _handle_get_diagnostics(self) -> Optional[Dict[str, Any]]:
         """处理获取诊断请求"""
@@ -563,10 +659,13 @@ class ControllerNodeBase(ABC):
             return False
     
     def shutdown(self):
-        """关闭控制器"""
-        if self._controller_bridge is not None:
-            self._controller_bridge.shutdown()
-        self._log_info('Controller node shutdown')
+        """
+        关闭控制器
+        
+        调用 LifecycleMixin.shutdown() 执行实际关闭逻辑。
+        """
+        # 使用 LifecycleMixin 的 shutdown 方法
+        LifecycleMixin.shutdown(self)
     
     # ==================== 抽象方法 ====================
     
@@ -615,5 +714,17 @@ class ControllerNodeBase(ABC):
         发布姿态命令 (四旋翼平台)
         
         子类可选实现。默认实现为空操作。
+        """
+        pass
+    
+    def _publish_debug_path(self, trajectory: Trajectory):
+        """
+        发布调试路径 (用于 RViz 可视化)
+        
+        子类可选实现。默认实现为空操作。
+        将轨迹转换为 nav_msgs/Path 消息发布。
+        
+        Args:
+            trajectory: UC 轨迹数据
         """
         pass

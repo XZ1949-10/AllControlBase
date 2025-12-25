@@ -173,8 +173,8 @@ def test_data_manager_is_data_fresh():
     assert dm.is_data_fresh({'odom': 0.2, 'traj': 0.2})
 
 
-def test_data_manager_clear():
-    """测试清除数据"""
+def test_data_manager_reset():
+    """测试重置数据"""
     from controller_ros.io.data_manager import DataManager
     
     dm = DataManager()
@@ -184,7 +184,7 @@ def test_data_manager_clear():
     
     assert dm.has_required_data()
     
-    dm.clear()
+    dm.reset()  # 使用新 API
     
     assert not dm.has_required_data()
     assert dm.get_latest_odom() is None
@@ -323,8 +323,8 @@ def test_data_manager_clock_jump_flag():
     assert dm.did_clock_jump_back() == False
 
 
-def test_data_manager_clear_resets_clock_state():
-    """测试 clear() 重置时钟状态"""
+def test_data_manager_reset_resets_clock_state():
+    """测试 reset() 重置时钟状态"""
     from controller_ros.io.data_manager import DataManager
     
     mock_time = [100.0]
@@ -342,8 +342,8 @@ def test_data_manager_clear_resets_clock_state():
     dm.get_data_ages()
     assert dm.did_clock_jump_back() == True
     
-    # clear 应该重置所有状态
-    dm.clear()
+    # reset 应该重置所有状态
+    dm.reset()  # 使用新 API
     assert dm.did_clock_jump_back() == False
 
 

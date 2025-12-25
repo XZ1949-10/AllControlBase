@@ -621,7 +621,9 @@ class ROSDashboardDataSource:
     def _build_controller_status(self, diag: Dict) -> ControllerStatus:
         """构建控制器状态"""
         # 如果没有诊断数据，使用 -1 表示未知状态
-        if not diag or not self._diagnostics_received:
+        # 使用 getattr 安全访问 _diagnostics_received，支持测试场景
+        diagnostics_received = getattr(self, '_diagnostics_received', False)
+        if not diag or not diagnostics_received:
             state = -1
         else:
             state = diag.get('state', -1)  # 默认 -1 表示未知

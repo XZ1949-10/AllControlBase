@@ -70,10 +70,18 @@ class TrajectoryPublisher:
         self.confidence = rospy.get_param('~confidence', 1.0)  # 默认置信度
         self.soft_enabled = rospy.get_param('~soft_enabled', False)  # 是否启用 Soft 约束
         
-        # 坐标系配置 - 从 TF 配置读取，保持与控制器一致
-        # 默认使用 base_footprint (TurtleBot 标准)，也支持 base_link
-        self.frame_id = rospy.get_param('~frame_id', 
-                                        rospy.get_param('tf/source_frame', 'base_footprint'))
+        # 坐标系配置 - 使用统一的参数加载器
+        # 优先级: 私有参数 > TF 配置 > 默认值
+        private_frame = rospy.get_param('~frame_id', None)
+        if private_frame:
+            self.frame_id = private_frame
+        else:
+            try:
+                from controller_ros.utils import ParamLoader
+                tf_config = ParamLoader.get_tf_config(None)
+                self.frame_id = tf_config.get('source_frame', 'base_footprint')
+            except ImportError:
+                self.frame_id = rospy.get_param('tf/source_frame', 'base_footprint')
         
         input_topic = rospy.get_param('~input_topic', '/waypoint')
         output_topic = rospy.get_param('~output_topic', '/nn/local_trajectory')
@@ -231,9 +239,19 @@ class StopTrajectoryPublisher:
     def __init__(self):
         rospy.init_node('stop_trajectory_publisher', anonymous=True)
         output_topic = rospy.get_param('~output_topic', '/nn/local_trajectory')
-        # 坐标系配置 - 与 TrajectoryPublisher 保持一致
-        self.frame_id = rospy.get_param('~frame_id', 
-                                        rospy.get_param('tf/source_frame', 'base_footprint'))
+        
+        # 坐标系配置 - 使用统一的参数加载器
+        private_frame = rospy.get_param('~frame_id', None)
+        if private_frame:
+            self.frame_id = private_frame
+        else:
+            try:
+                from controller_ros.utils import ParamLoader
+                tf_config = ParamLoader.get_tf_config(None)
+                self.frame_id = tf_config.get('source_frame', 'base_footprint')
+            except ImportError:
+                self.frame_id = rospy.get_param('tf/source_frame', 'base_footprint')
+        
         self.pub = rospy.Publisher(output_topic, LocalTrajectoryV4, queue_size=1)
         rospy.sleep(0.5)  # 等待连接
     

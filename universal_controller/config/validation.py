@@ -7,10 +7,7 @@
 """
 from typing import Dict, Any, List, Tuple, Optional
 
-
-class ConfigValidationError(ValueError):
-    """配置验证错误"""
-    pass
+from ..core.exceptions import ConfigValidationError
 
 
 def get_config_value(
@@ -103,6 +100,7 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
     - horizon_degraded <= horizon
     - v_min <= v_max
     - MPC 权重必须为正值
+    - EKF 数值稳定性参数必须为正值
     
     Args:
         config: 配置字典
@@ -115,6 +113,24 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
     def _is_numeric(value) -> bool:
         """检查值是否为数值类型"""
         return isinstance(value, (int, float)) and not isinstance(value, bool)
+    
+    # EKF 数值稳定性参数验证
+    MIN_VELOCITY_FOR_JACOBIAN = 1e-6  # Jacobian 计算的最小速度阈值
+    min_vel_jacobian = get_config_value(config, 'ekf.min_velocity_for_jacobian')
+    if min_vel_jacobian is not None and _is_numeric(min_vel_jacobian):
+        if min_vel_jacobian < MIN_VELOCITY_FOR_JACOBIAN:
+            errors.append(('ekf.min_velocity_for_jacobian',
+                          f'Jacobian 最小速度阈值 ({min_vel_jacobian}) 过小，'
+                          f'可能导致数值不稳定，建议设置为 >= {MIN_VELOCITY_FOR_JACOBIAN}'))
+    
+    # EKF 协方差最小特征值验证
+    MIN_EIGENVALUE = 1e-10
+    min_eigenvalue = get_config_value(config, 'ekf.covariance.min_eigenvalue')
+    if min_eigenvalue is not None and _is_numeric(min_eigenvalue):
+        if min_eigenvalue < MIN_EIGENVALUE:
+            errors.append(('ekf.covariance.min_eigenvalue',
+                          f'协方差最小特征值 ({min_eigenvalue}) 过小，'
+                          f'可能导致协方差矩阵奇异，建议设置为 >= {MIN_EIGENVALUE}'))
     
     # MPC 权重验证 - 必须为正值
     MIN_MPC_WEIGHT = 1e-6

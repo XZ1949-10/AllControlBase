@@ -128,6 +128,7 @@ class TestROSDashboardDataSource:
         
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         data_source._config = {}
+        data_source._diagnostics_received = True  # 模拟已接收诊断数据
         
         diag = {
             'state': 1,
@@ -220,10 +221,11 @@ class TestROSDashboardDataSource:
         
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         data_source._config = {}
+        data_source._diagnostics_received = False  # 模拟未接收诊断数据
         
-        # 空字典
+        # 空字典 + 未接收诊断 → UNKNOWN 状态
         status = data_source._build_controller_status({})
-        assert status.state_name == 'INIT'
+        assert status.state_name == 'UNKNOWN'
         
         health = data_source._build_mpc_health({})
         assert health.healthy == False

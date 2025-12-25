@@ -9,19 +9,18 @@ import logging
 try:
     import rospy
     from std_msgs.msg import Int32
+    from nav_msgs.msg import Path
+    from geometry_msgs.msg import PoseStamped
     ROS1_AVAILABLE = True
 except ImportError:
     ROS1_AVAILABLE = False
 
-from universal_controller.core.data_types import ControlOutput, AttitudeCommand
+from universal_controller.core.data_types import ControlOutput, AttitudeCommand, Trajectory
 from ..adapters import OutputAdapter, AttitudeAdapter
 from ..utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsThrottler
+from ..utils.param_loader import TOPICS_DEFAULTS
 
 logger = logging.getLogger(__name__)
-
-# 默认话题名常量
-DEFAULT_STATE_TOPIC = '/controller/state'
-DEFAULT_ATTITUDE_CMD_TOPIC = '/controller/attitude_cmd'
 
 
 class ROS1PublisherManager:
@@ -88,7 +87,7 @@ class ROS1PublisherManager:
             rospy.logwarn("Custom messages (UnifiedCmd, DiagnosticsV2) not available")
         
         # 控制命令发布器
-        cmd_topic = self._topics.get('cmd_unified', '/cmd_unified')
+        cmd_topic = self._topics.get('cmd_unified', TOPICS_DEFAULTS['cmd_unified'])
         if self._UnifiedCmd is not None:
             self._cmd_pub = rospy.Publisher(cmd_topic, self._UnifiedCmd, queue_size=1)
             rospy.loginfo(f"Publishing cmd to: {cmd_topic}")
@@ -97,7 +96,7 @@ class ROS1PublisherManager:
             rospy.logerr(f"Cannot create command publisher: UnifiedCmd not available")
         
         # 诊断发布器
-        diag_topic = self._topics.get('diagnostics', '/controller/diagnostics')
+        diag_topic = self._topics.get('diagnostics', TOPICS_DEFAULTS['diagnostics'])
         if self._DiagnosticsV2 is not None:
             self._diag_pub = rospy.Publisher(diag_topic, self._DiagnosticsV2, queue_size=10)
             rospy.loginfo(f"Publishing diagnostics to: {diag_topic}")
@@ -106,13 +105,18 @@ class ROS1PublisherManager:
             rospy.logwarn(f"Cannot create diagnostics publisher: DiagnosticsV2 not available")
         
         # 状态发布器 (标准消息，始终可用)
-        state_topic = self._topics.get('state', DEFAULT_STATE_TOPIC)
+        state_topic = self._topics.get('state', TOPICS_DEFAULTS['state'])
         self._state_pub = rospy.Publisher(state_topic, Int32, queue_size=1)
         rospy.loginfo(f"Publishing state to: {state_topic}")
         
+        # 调试路径发布器
+        debug_path_topic = self._topics.get('debug_path', TOPICS_DEFAULTS['debug_path'])
+        self._path_pub = rospy.Publisher(debug_path_topic, Path, queue_size=1)
+        rospy.loginfo(f"Publishing debug_path to: {debug_path_topic}")
+        
         # 姿态命令发布器 (四旋翼平台)
         if self._is_quadrotor:
-            attitude_topic = self._topics.get('attitude_cmd', DEFAULT_ATTITUDE_CMD_TOPIC)
+            attitude_topic = self._topics.get('attitude_cmd', TOPICS_DEFAULTS['attitude_cmd'])
             try:
                 from controller_ros.msg import AttitudeCmd
                 self._AttitudeCmd = AttitudeCmd
@@ -184,6 +188,37 @@ class ROS1PublisherManager:
             is_hovering=is_hovering
         )
         self._attitude_pub.publish(ros_msg)
+    
+    def publish_debug_path(self, trajectory: Trajectory):
+        """
+        发布调试路径
+        
+        将轨迹转换为 nav_msgs/Path 消息发布，用于 RViz 可视化。
+        
+        Args:
+            trajectory: UC 轨迹数据
+        """
+        if self._path_pub is None:
+            return
+        
+        # 检查轨迹点是否有效
+        if trajectory.points is None or len(trajectory.points) == 0:
+            return
+        
+        path = Path()
+        path.header.stamp = rospy.Time.now()
+        path.header.frame_id = trajectory.header.frame_id or 'odom'
+        
+        for p in trajectory.points:
+            pose = PoseStamped()
+            pose.header = path.header
+            pose.pose.position.x = p.x
+            pose.pose.position.y = p.y
+            pose.pose.position.z = p.z
+            pose.pose.orientation.w = 1.0
+            path.poses.append(pose)
+        
+        self._path_pub.publish(path)
     
     @property
     def output_adapter(self) -> OutputAdapter:

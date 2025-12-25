@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from universal_controller.config.default_config import DEFAULT_CONFIG
 from universal_controller.core.data_types import Odometry, Trajectory, Header, Point3D
 from universal_controller.core.enums import ControllerState
-from universal_controller.tests.test_data_generator import create_test_odom, create_test_trajectory
+from universal_controller.tests.fixtures import create_test_odom, create_test_trajectory
 
 
 def test_controller_bridge_initialization():
@@ -22,11 +22,11 @@ def test_controller_bridge_initialization():
     config = DEFAULT_CONFIG.copy()
     bridge = ControllerBridge(config)
     
-    assert bridge.is_initialized
+    assert bridge.is_running  # 使用新 API
     assert bridge.get_state() == ControllerState.INIT
     
     bridge.shutdown()
-    assert not bridge.is_initialized
+    assert not bridge.is_running  # 使用新 API
 
 
 def test_controller_bridge_update():

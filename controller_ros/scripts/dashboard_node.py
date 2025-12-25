@@ -101,36 +101,12 @@ def _process_ros_callbacks():
 
 
 def _load_config_from_ros() -> dict:
-    """从 ROS 参数服务器加载配置"""
-    config = {
-        'system': {
-            'platform': rospy.get_param('system/platform', 'differential'),
-            'ctrl_freq': rospy.get_param('system/ctrl_freq', 50),
-        },
-        'mpc': {
-            'horizon': rospy.get_param('mpc/horizon', 20),
-            'horizon_degraded': rospy.get_param('mpc/horizon_degraded', 10),
-            'dt': rospy.get_param('mpc/dt', 0.1),
-        },
-        'constraints': {
-            'v_max': rospy.get_param('constraints/v_max', 2.0),
-            'omega_max': rospy.get_param('constraints/omega_max', 2.0),
-            'a_max': rospy.get_param('constraints/a_max', 1.5),
-        },
-        'watchdog': {
-            'odom_timeout_ms': rospy.get_param('watchdog/odom_timeout_ms', 500),
-            'traj_timeout_ms': rospy.get_param('watchdog/traj_timeout_ms', 2500),
-            'traj_grace_ms': rospy.get_param('watchdog/traj_grace_ms', 1500),
-            'imu_timeout_ms': rospy.get_param('watchdog/imu_timeout_ms', -1),
-            'startup_grace_ms': rospy.get_param('watchdog/startup_grace_ms', 5000),
-        },
-        'attitude': {
-            'mass': rospy.get_param('attitude/mass', 1.5),
-            'roll_max': rospy.get_param('attitude/roll_max', 0.5),
-            'pitch_max': rospy.get_param('attitude/pitch_max', 0.5),
-        },
-    }
-    return config
+    """从 ROS 参数服务器加载配置
+    
+    使用统一的 ParamLoader 加载配置，确保与控制器节点一致。
+    """
+    from controller_ros.utils import ParamLoader
+    return ParamLoader.load(None)
 
 
 if __name__ == '__main__':

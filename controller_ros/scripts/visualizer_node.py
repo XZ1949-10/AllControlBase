@@ -16,67 +16,41 @@ TurtleBot1 运行可视化节点启动脚本
 import sys
 import os
 
-# 先测试 ROS 消息是否可用（在修改 sys.path 之前）
-try:
-    from controller_ros.msg import LocalTrajectoryV4, UnifiedCmd, DiagnosticsV2
-    _msgs_available = True
-except ImportError:
-    _msgs_available = False
-
-# 添加包路径（用于导入 visualizer 模块）
-script_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.join(os.path.dirname(script_dir), 'src')
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
-
 from controller_ros.visualizer import create_visualizer_node
 
 
 def load_config_from_ros():
-    """从 ROS 参数服务器加载配置"""
+    """从 ROS 参数服务器加载配置
+    
+    使用统一的 VisualizerParamLoader 加载配置，
+    支持私有参数和全局参数的优先级回退。
+    """
     try:
         import rospy
         
-        # 从参数服务器读取配置
-        config = {
-            'topics': {
-                'odom': rospy.get_param('~topics/odom', rospy.get_param('topics/odom', '/odom')),
-                'trajectory': rospy.get_param('~topics/trajectory', rospy.get_param('topics/trajectory', '/nn/local_trajectory')),
-                'cmd_unified': rospy.get_param('~topics/cmd_unified', rospy.get_param('topics/cmd_unified', '/cmd_unified')),
-                'diagnostics': rospy.get_param('~topics/diagnostics', rospy.get_param('topics/diagnostics', '/controller/diagnostics')),
-                'camera_image': rospy.get_param('~topics/camera_image', rospy.get_param('topics/camera_image', '')),
-                'joy': rospy.get_param('~topics/joy', rospy.get_param('topics/joy', '/joy')),
-                'cmd_vel_output': rospy.get_param('~topics/cmd_vel_output', rospy.get_param('topics/cmd_vel_output', '/joy_cmd_vel')),
-                'control_mode': rospy.get_param('~topics/control_mode', rospy.get_param('topics/control_mode', '/visualizer/control_mode')),
-                'emergency_stop': rospy.get_param('~topics/emergency_stop', rospy.get_param('topics/emergency_stop', '/controller/emergency_stop')),
-            },
-            'display': {
-                'update_rate': rospy.get_param('~display/update_rate', rospy.get_param('display/update_rate', 30)),
-                'velocity_history_sec': rospy.get_param('~display/velocity_history_sec', rospy.get_param('display/velocity_history_sec', 10)),
-            },
-            'joystick': {
-                'enable_button': rospy.get_param('~joystick/enable_button', rospy.get_param('joystick/enable_button', 4)),
-                'linear_axis': rospy.get_param('~joystick/linear_axis', rospy.get_param('joystick/linear_axis', 1)),
-                'angular_axis': rospy.get_param('~joystick/angular_axis', rospy.get_param('joystick/angular_axis', 3)),
-                'max_linear': rospy.get_param('~joystick/max_linear', rospy.get_param('joystick/max_linear', 0.5)),
-                'max_angular': rospy.get_param('~joystick/max_angular', rospy.get_param('joystick/max_angular', 1.0)),
-                'deadzone': rospy.get_param('~joystick/deadzone', rospy.get_param('joystick/deadzone', 0.1)),
-            },
-            'constraints': {
-                'v_max': rospy.get_param('~constraints/v_max', rospy.get_param('constraints/v_max', 0.5)),
-                'omega_max': rospy.get_param('~constraints/omega_max', rospy.get_param('constraints/omega_max', 1.0)),
-            },
-            'camera': {
-                'use_camera': rospy.get_param('~camera/use_camera', rospy.get_param('camera/use_camera', False)),
-                'calibration_file': rospy.get_param('~camera/calibration_file', rospy.get_param('camera/calibration_file', '')),
-            },
-        }
+        # 必须先初始化节点才能读取参数
+        if not rospy.core.is_initialized():
+            rospy.init_node('turtlebot_visualizer', anonymous=False)
         
-        # 如果指定了相机话题，自动启用相机模式
+        # 使用统一的参数加载器
+        from controller_ros.utils import VisualizerParamLoader
+        config = VisualizerParamLoader.load()
+        
+        # 日志输出
         if config['topics']['camera_image']:
-            config['camera']['use_camera'] = True
             rospy.loginfo(f"[Visualizer] Camera topic: {config['topics']['camera_image']}")
             rospy.loginfo(f"[Visualizer] Calibration file: {config['camera']['calibration_file']}")
+            
+            # 检查标定文件是否存在
+            calib_file = config['camera']['calibration_file']
+            if calib_file:
+                if os.path.exists(calib_file):
+                    rospy.loginfo(f"[Visualizer] Calibration file found: {calib_file}")
+                else:
+                    rospy.logwarn(f"[Visualizer] Calibration file NOT found: {calib_file}")
+                    rospy.logwarn("[Visualizer] Trajectory will be shown in bird's eye view mode")
+            else:
+                rospy.logwarn("[Visualizer] No calibration file specified, using bird's eye view mode")
         
         return config
         

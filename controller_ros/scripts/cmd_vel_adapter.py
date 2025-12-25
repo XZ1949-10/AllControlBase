@@ -15,6 +15,11 @@ cmd_vel 适配器 - 将 UnifiedCmd 转换为 TurtleBot 的 cmd_vel
 - control_mode = False: 使用控制器输出 (/cmd_unified)
 - control_mode = True:  使用手柄输出 (/joy_cmd_vel)
 
+生命周期:
+- 实现统一的生命周期管理
+- shutdown(): 停止定时器，发布零速度
+- reset(): 重置内部状态
+
 使用方法:
     rosrun controller_ros cmd_vel_adapter.py
     
@@ -41,6 +46,8 @@ cmd_vel 适配器 - 将 UnifiedCmd 转换为 TurtleBot 的 cmd_vel
 # PYTHONPATH 已经由 source devel/setup.bash 正确设置
 
 import rospy
+import math
+from typing import Optional
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool
 
@@ -52,10 +59,20 @@ except ImportError:
 
 
 class CmdVelAdapter:
-    """cmd_vel 适配器类"""
+    """
+    cmd_vel 适配器类
+    
+    生命周期:
+    - __init__(): 初始化节点和订阅/发布
+    - shutdown(): 停止并发布零速度
+    - reset(): 重置内部状态
+    """
     
     def __init__(self):
         rospy.init_node('cmd_vel_adapter', anonymous=False)
+        
+        # 关闭标志
+        self._shutting_down = False
         
         # 获取参数
         self.max_linear = rospy.get_param('~max_linear', 0.5)
@@ -75,7 +92,7 @@ class CmdVelAdapter:
         
         # 最新的手柄命令
         self.latest_joy_cmd = Twist()
-        self.joy_cmd_time = None
+        self.joy_cmd_time: Optional[rospy.Time] = None
         self.joy_timeout = 0.5  # 手柄命令超时时间 (秒)
         
         # 订阅控制器输出
@@ -93,12 +110,15 @@ class CmdVelAdapter:
         # 状态（用于速度变化率限制）
         self.last_linear_x = 0.0
         self.last_angular_z = 0.0
-        self.last_time = None
+        self.last_time: Optional[rospy.Time] = None
         
         # 统计
         self.msg_count = 0
         self.clamp_count = 0
         self.rate_limit_count = 0
+        
+        # 注册关闭回调
+        rospy.on_shutdown(self.shutdown)
         
         rospy.loginfo(f"CmdVelAdapter 已启动:")
         rospy.loginfo(f"  控制器输入话题: {input_topic}")
@@ -109,6 +129,34 @@ class CmdVelAdapter:
         rospy.loginfo(f"  最大角速度: {self.max_angular} rad/s")
         if self.max_linear_accel > 0:
             rospy.loginfo(f"  最大线加速度: {self.max_linear_accel} m/s² (启用)")
+        if self.max_angular_accel > 0:
+            rospy.loginfo(f"  最大角加速度: {self.max_angular_accel} rad/s² (启用)")
+    
+    def shutdown(self):
+        """关闭适配器，发布零速度"""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        
+        rospy.loginfo("CmdVelAdapter 正在关闭，发布零速度...")
+        
+        # 发布零速度
+        try:
+            stop_cmd = Twist()
+            self.pub.publish(stop_cmd)
+        except Exception as e:
+            rospy.logwarn(f"关闭时发布零速度失败: {e}")
+    
+    def reset(self):
+        """重置内部状态"""
+        self.last_linear_x = 0.0
+        self.last_angular_z = 0.0
+        self.last_time = None
+        self.joystick_mode = False
+        self.msg_count = 0
+        self.clamp_count = 0
+        self.rate_limit_count = 0
+        rospy.loginfo("CmdVelAdapter 状态已重置")
         if self.max_angular_accel > 0:
             rospy.loginfo(f"  最大角加速度: {self.max_angular_accel} rad/s² (启用)")
     
@@ -149,6 +197,10 @@ class CmdVelAdapter:
             linear_x: 线速度
             angular_z: 角速度
         """
+        # 检查关闭标志
+        if self._shutting_down:
+            return
+        
         twist = Twist()
         
         # 保存原始值用于日志
@@ -156,7 +208,6 @@ class CmdVelAdapter:
         original_angular_z = angular_z
         
         # 0. 数据有效性检查 - 检测 NaN 和 Inf
-        import math
         if not (math.isfinite(linear_x) and math.isfinite(angular_z)):
             rospy.logwarn_throttle(1.0, 
                 f"收到无效速度命令: vx={linear_x}, omega={angular_z}，发布零速度")

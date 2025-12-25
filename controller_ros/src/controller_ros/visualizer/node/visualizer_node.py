@@ -3,6 +3,11 @@
 
 管理 ROS 订阅/发布和 GUI 的交互。
 支持 ROS1 (rospy) 和 ROS2 (rclpy)。
+
+生命周期说明：
+- initialize(): 创建订阅和发布（在构造时自动调用）
+- shutdown(): 停止 ROS 线程，关闭 GUI
+- reset(): 重置数据聚合器状态
 """
 from typing import Dict, Any, Optional
 import threading
@@ -56,13 +61,25 @@ class VisualizerNode:
     - 管理 GUI 生命周期
     - 桥接 ROS 回调和 GUI 更新
     
+    生命周期:
+    - __init__(): 初始化节点，创建订阅和发布
+    - start_gui(): 启动 GUI（阻塞直到关闭）
+    - shutdown(): 停止 ROS 线程，关闭 GUI
+    - reset(): 重置数据聚合器状态
+    
     支持 ROS1 和 ROS2。
     """
     
     def __init__(self, config: Dict[str, Any] = None):
         # ROS 桥接
         self._ros = create_ros_bridge()
-        self._ros.init('turtlebot_visualizer')
+        # 只在未初始化时初始化 (可能已在 load_config_from_ros 中初始化)
+        if ROS_VERSION == 1:
+            import rospy
+            if not rospy.core.is_initialized():
+                self._ros.init('turtlebot_visualizer')
+        else:
+            self._ros.init('turtlebot_visualizer')
         
         self._config = config or self._load_default_config()
         
@@ -104,6 +121,7 @@ class VisualizerNode:
         self._window: Optional[VisualizerMainWindow] = None
         self._ros_thread: Optional[threading.Thread] = None
         self._running = False
+        self._shutting_down = False
         
         # 发布器
         self._cmd_vel_pub = None
@@ -118,6 +136,30 @@ class VisualizerNode:
         self._ros.log_info(f"  Odom topic: {self._odom_topic}")
         self._ros.log_info(f"  Trajectory topic: {self._traj_topic}")
         self._ros.log_info(f"  Joy topic: {self._joy_topic}")
+    
+    def shutdown(self):
+        """关闭可视化器节点"""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        
+        self._ros.log_info("Visualizer node shutting down...")
+        
+        # 停止 ROS 线程
+        self._running = False
+        if self._ros_thread is not None and self._ros_thread.is_alive():
+            self._ros_thread.join(timeout=1.0)
+        
+        # 关闭 ROS
+        self._ros.shutdown()
+        
+        self._ros.log_info("Visualizer node shutdown complete")
+    
+    def reset(self):
+        """重置可视化器状态"""
+        self._data_aggregator.reset()
+        self._joystick_handler.reset()
+        self._ros.log_info("Visualizer node reset")
     
     def _load_default_config(self) -> Dict[str, Any]:
         """加载默认配置"""
@@ -287,6 +329,14 @@ class VisualizerNode:
         image = self._image_adapter.to_model(msg)
         if image is not None:
             self._data_aggregator.update_camera_image(image)
+            # 只在第一次收到图像时记录
+            if not hasattr(self, '_image_logged'):
+                self._ros.log_info(f"Camera image received: {msg.width}x{msg.height}, encoding={msg.encoding}")
+                self._image_logged = True
+        else:
+            if not hasattr(self, '_image_error_logged'):
+                self._ros.log_warn(f"Failed to convert camera image: encoding={msg.encoding}")
+                self._image_error_logged = True
 
     # ==================== 处理器回调 ====================
     

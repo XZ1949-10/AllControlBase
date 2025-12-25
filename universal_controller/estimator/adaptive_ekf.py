@@ -8,29 +8,9 @@ from ..core.interfaces import IStateEstimator
 from ..core.data_types import EstimatorOutput, Odometry, Imu
 from ..config.default_config import PLATFORM_CONFIG
 from ..core.ros_compat import euler_from_quaternion, get_monotonic_time, normalize_angle
+from ..core.constants import QUATERNION_NORM_SQ_MIN, QUATERNION_NORM_SQ_MAX
 
 logger = logging.getLogger(__name__)
-
-
-# 四元数有效性检查常量
-# 单位四元数的范数平方应该为 1.0
-# 
-# 设计说明：
-# - 四元数范数偏离 1.0 通常是由于数值累积误差或传感器噪声
-# - 正确的处理方式是：检测到非单位四元数时进行归一化
-# - 只有当四元数接近零向量（无法归一化）或明显错误时才拒绝
-# 
-# 阈值选择：
-# - MIN: 0.25 (范数 > 0.5) - 低于此值认为四元数无效，无法可靠归一化
-# - MAX: 4.0 (范数 < 2.0) - 高于此值认为数据明显错误
-# 
-# 范围 [0.5, 2.0] 的理由：
-# - 正常的数值误差不会导致范数偏离 1.0 超过 2 倍
-# - 如果范数 < 0.5 或 > 2.0，说明数据本身有问题，不应使用
-# 
-# 注意：euler_from_quaternion 函数内部会进行归一化，这里只是预检查
-QUATERNION_NORM_SQ_MIN = 0.25  # 范数平方下界 (范数 > 0.5)，低于此值无法可靠归一化
-QUATERNION_NORM_SQ_MAX = 4.0   # 范数平方上界 (范数 < 2.0)，高于此值认为数据错误
 
 
 class AdaptiveEKFEstimator(IStateEstimator):
@@ -64,9 +44,10 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self.platform_config = PLATFORM_CONFIG.get(platform_name, PLATFORM_CONFIG['differential'])
         self.velocity_heading_coupled = self.platform_config.get('velocity_heading_coupled', True)
         
-        # 重力加速度 - 优先从 system.gravity 读取，其次从 attitude.gravity
-        self.gravity = config.get('system', {}).get('gravity', 
-                        config.get('attitude', {}).get('gravity', 9.81))
+        # 重力加速度 - 统一从 system.gravity 读取
+        # 使用 DEFAULT_GRAVITY 作为默认值
+        from ..core.constants import DEFAULT_GRAVITY
+        self.gravity = config.get('system', {}).get('gravity', DEFAULT_GRAVITY)
         
         # 自适应参数
         adaptive = ekf_config.get('adaptive', {})

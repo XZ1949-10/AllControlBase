@@ -14,11 +14,7 @@ from universal_controller.core.data_types import ControlOutput, Trajectory, Atti
 from ..adapters import OutputAdapter, AttitudeAdapter
 from ..utils.ros_compat import get_time_sec
 from ..utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsThrottler
-
-# 默认话题名常量
-DEFAULT_STATE_TOPIC = '/controller/state'
-DEFAULT_DEBUG_PATH_TOPIC = '/controller/debug_path'
-DEFAULT_ATTITUDE_CMD_TOPIC = '/controller/attitude_cmd'
+from ..utils.param_loader import TOPICS_DEFAULTS
 
 
 class PublisherManager:
@@ -70,7 +66,7 @@ class PublisherManager:
     def _create_publishers(self):
         """创建所有发布器"""
         # 统一控制命令发布
-        cmd_topic = self._topics.get('cmd_unified', '/cmd_unified')
+        cmd_topic = self._topics.get('cmd_unified', TOPICS_DEFAULTS['cmd_unified'])
         try:
             from controller_ros.msg import UnifiedCmd
             self._cmd_pub = self._node.create_publisher(
@@ -82,7 +78,7 @@ class PublisherManager:
             self._cmd_pub = None
         
         # 诊断发布
-        diag_topic = self._topics.get('diagnostics', '/controller/diagnostics')
+        diag_topic = self._topics.get('diagnostics', TOPICS_DEFAULTS['diagnostics'])
         try:
             from controller_ros.msg import DiagnosticsV2
             self._diag_pub = self._node.create_publisher(
@@ -94,21 +90,21 @@ class PublisherManager:
             self._diag_pub = None
         
         # 状态发布器 (需求文档要求)
-        state_topic = self._topics.get('state', DEFAULT_STATE_TOPIC)
+        state_topic = self._topics.get('state', TOPICS_DEFAULTS['state'])
         self._state_pub = self._node.create_publisher(
             Int32, state_topic, 1
         )
         self._node.get_logger().info(f"Publishing state to: {state_topic}")
         
         # 调试路径发布
-        debug_path_topic = self._topics.get('debug_path', DEFAULT_DEBUG_PATH_TOPIC)
+        debug_path_topic = self._topics.get('debug_path', TOPICS_DEFAULTS['debug_path'])
         self._path_pub = self._node.create_publisher(
             Path, debug_path_topic, 1
         )
         
         # 姿态命令发布器 (四旋翼平台)
         if self._is_quadrotor:
-            attitude_topic = self._topics.get('attitude_cmd', DEFAULT_ATTITUDE_CMD_TOPIC)
+            attitude_topic = self._topics.get('attitude_cmd', TOPICS_DEFAULTS['attitude_cmd'])
             try:
                 from controller_ros.msg import AttitudeCmd
                 self._attitude_pub = self._node.create_publisher(

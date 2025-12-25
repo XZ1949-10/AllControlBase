@@ -19,6 +19,7 @@ from .base_node import ControllerNodeBase
 from ..bridge import TFBridge
 from ..io import PublisherManager, ServiceManager
 from ..utils import ParamLoader
+from ..utils.param_loader import TOPICS_DEFAULTS
 
 
 class ControllerNode(ControllerNodeBase, Node):
@@ -108,7 +109,7 @@ class ControllerNode(ControllerNodeBase, Node):
         from std_msgs.msg import Empty
         
         # 里程计订阅
-        odom_topic = self._topics.get('odom', '/odom')
+        odom_topic = self._topics.get('odom', TOPICS_DEFAULTS['odom'])
         self._odom_sub = self.create_subscription(
             RosOdometry,
             odom_topic,
@@ -134,7 +135,7 @@ class ControllerNode(ControllerNodeBase, Node):
             self.get_logger().info("IMU topic not configured, skipping IMU subscription")
         
         # 轨迹订阅
-        traj_topic = self._topics.get('trajectory', '/nn/local_trajectory')
+        traj_topic = self._topics.get('trajectory', TOPICS_DEFAULTS['trajectory'])
         try:
             from controller_ros.msg import LocalTrajectoryV4
             self._traj_sub = self.create_subscription(
@@ -168,7 +169,7 @@ class ControllerNode(ControllerNodeBase, Node):
             self._traj_msg_available = False
         
         # 紧急停止话题订阅
-        emergency_stop_topic = self._topics.get('emergency_stop', '/controller/emergency_stop')
+        emergency_stop_topic = self._topics.get('emergency_stop', TOPICS_DEFAULTS['emergency_stop'])
         self._emergency_stop_sub = self.create_subscription(
             Empty,
             emergency_stop_topic,
@@ -209,11 +210,6 @@ class ControllerNode(ControllerNodeBase, Node):
         if cmd is not None:
             # 发布控制命令
             self._publish_cmd(cmd)
-            
-            # 发布调试路径
-            trajectory = self._data_manager.get_latest_trajectory()
-            if trajectory is not None:
-                self._publishers.publish_debug_path(trajectory)
     
     # ==================== 基类抽象方法实现 ====================
     
@@ -271,6 +267,10 @@ class ControllerNode(ControllerNodeBase, Node):
             yaw_mode=self._attitude_yaw_mode,
             is_hovering=is_hovering
         )
+    
+    def _publish_debug_path(self, trajectory):
+        """发布调试路径 (用于 RViz 可视化)"""
+        self._publishers.publish_debug_path(trajectory)
     
     # ==================== 生命周期 ====================
     

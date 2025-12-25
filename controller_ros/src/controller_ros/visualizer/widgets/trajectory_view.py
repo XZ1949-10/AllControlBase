@@ -96,7 +96,9 @@ class TrajectoryView(QWidget):
     def set_camera_image(self, image: np.ndarray):
         """设置相机图像"""
         self._camera_image = image
-        self._use_camera = image is not None
+        if image is not None and not self._use_camera:
+            self._use_camera = True
+            logger.info(f"Camera mode enabled, homography calibrated: {self._homography.is_calibrated}")
         self.update()
     
     def set_view_range(self, range_m: float):
@@ -119,6 +121,9 @@ class TrajectoryView(QWidget):
             logger.info(f"Homography calibration loaded: {calib_file}")
             error = self._homography.compute_reprojection_error()
             logger.info(f"Reprojection error: {error:.2f} pixels")
+            logger.info(f"Current state: _use_camera={self._use_camera}, camera_image={'set' if self._camera_image is not None else 'None'}")
+        else:
+            logger.warning(f"Failed to load homography calibration: {calib_file}")
         return success
     
     @property
@@ -248,6 +253,13 @@ class TrajectoryView(QWidget):
         """绘制轨迹"""
         if self._trajectory is None or self._trajectory.num_points == 0:
             return
+        
+        # 调试日志 (只记录一次)
+        if not hasattr(self, '_draw_mode_logged'):
+            logger.info(f"Drawing trajectory: _use_camera={self._use_camera}, "
+                       f"camera_image={'set' if self._camera_image is not None else 'None'}, "
+                       f"homography_calibrated={self._homography.is_calibrated}")
+            self._draw_mode_logged = True
         
         # 根据模式选择投影方式
         if self._use_camera and self._camera_image is not None:

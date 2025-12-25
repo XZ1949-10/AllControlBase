@@ -75,7 +75,10 @@ class ImageAdapter:
                 desired_encoding=self._target_encoding
             )
             return cv_image
-        except Exception:
+        except Exception as e:
+            # 记录错误以便调试
+            import logging
+            logging.getLogger(__name__).debug(f"cv_bridge conversion failed: {e}")
             return None
     
     def _convert_manual(self, ros_msg: Any) -> Optional[np.ndarray]:

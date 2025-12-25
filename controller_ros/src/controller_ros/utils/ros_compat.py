@@ -186,6 +186,48 @@ def sec_to_ros_time(sec: float):
 # 日志工具
 # ============================================================================
 
+def _setup_logging_for_ros():
+    """配置 logging 以便在 ROS 环境下正确输出"""
+    if ROS_VERSION == 1:
+        # ROS1: 配置 logging 使用 rospy 的日志系统
+        import rospy
+        
+        class RospyHandler(logging.Handler):
+            """将 Python logging 转发到 rospy"""
+            def emit(self, record):
+                try:
+                    msg = self.format(record)
+                    if record.levelno >= logging.ERROR:
+                        rospy.logerr(msg)
+                    elif record.levelno >= logging.WARNING:
+                        rospy.logwarn(msg)
+                    elif record.levelno >= logging.INFO:
+                        rospy.loginfo(msg)
+                    else:
+                        rospy.logdebug(msg)
+                except Exception:
+                    self.handleError(record)
+        
+        # 为 controller_ros 模块配置 handler
+        ros_handler = RospyHandler()
+        ros_handler.setFormatter(logging.Formatter('%(name)s: %(message)s'))
+        
+        for module_name in ['controller_ros', 'universal_controller']:
+            module_logger = logging.getLogger(module_name)
+            # 避免重复添加 handler
+            if not any(isinstance(h, RospyHandler) for h in module_logger.handlers):
+                module_logger.addHandler(ros_handler)
+                module_logger.setLevel(logging.DEBUG)
+
+
+# 在模块加载时配置日志
+if ROS_VERSION == 1:
+    try:
+        _setup_logging_for_ros()
+    except Exception:
+        pass  # 如果 rospy 未初始化，跳过配置
+
+
 def log_info(msg: str):
     """记录信息日志"""
     if ROS_VERSION == 1:

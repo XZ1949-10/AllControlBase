@@ -2,6 +2,7 @@
 from typing import Dict, Any, Optional, Callable
 from collections import deque
 import logging
+import threading
 
 from ..core.enums import ControllerState
 from ..core.diagnostics_input import DiagnosticsInput
@@ -19,14 +20,15 @@ class StateMachine:
     
     外部请求机制:
     - request_stop(): 请求紧急停止，这是唯一允许的外部状态干预
+    - clear_stop_request(): 清除停止请求（用于恢复）
     - 其他状态转换由内部逻辑自动控制
     
     线程安全性说明:
     - update() 方法不是线程安全的，应该在单个线程（控制循环）中调用
     - request_stop() 是线程安全的，可以从任何线程调用
-      - 使用请求标志模式，实际状态转换在 update() 中统一处理
-      - Python GIL 保证布尔赋值的原子性
-      - 最坏情况：请求延迟一个控制周期处理（通常 20-50ms）
+      - 使用 threading.Event 确保原子性和可见性
+      - 实际状态转换在 update() 中统一处理
+    - is_stop_requested() 是线程安全的
     - 如果需要完全的线程安全，调用者应在外部加锁
     """
     
@@ -60,8 +62,12 @@ class StateMachine:
         self.stopping_timeout = safety_config.get('stopping_timeout', 5.0)
         self._stopping_start_time: Optional[float] = None
         
-        # 外部停止请求标志
-        self._stop_requested = False
+        # 外部停止请求 - 使用 threading.Event 确保线程安全
+        # Event 比布尔标志更安全：
+        # 1. set()/clear()/is_set() 都是原子操作
+        # 2. 提供内存屏障，确保跨线程可见性
+        # 3. 可以用于等待（虽然这里不需要）
+        self._stop_event = threading.Event()
         
         # 状态持续时间监控
         # 用于检测系统是否长时间处于降级状态
@@ -95,11 +101,11 @@ class StateMachine:
         
         线程安全性:
         - 此方法是线程安全的，可以从任何线程调用
-        - Python GIL 保证 `self._stop_requested = True` 的原子性
+        - 使用 threading.Event 确保原子性和跨线程可见性
         - 实际状态转换在 update() 中进行，确保状态一致性
         
         设计说明:
-        - 使用请求标志而非直接修改状态，保持状态转换的一致性
+        - 使用 Event 而非布尔标志，提供更强的线程安全保证
         - 状态转换在 update() 中统一处理，确保计数器正确重置
         - 这是安全关键功能，用于紧急停止场景
         
@@ -109,28 +115,48 @@ class StateMachine:
         """
         # 如果已经在停止过程中，返回 False 表示请求无效
         # 这让调用者知道系统已经在处理停止
+        # 注意：这里读取 self.state 不是原子的，但这是可接受的：
+        # - 最坏情况是在状态刚变为 STOPPING 时返回 True
+        # - 这不会导致问题，因为 update() 会正确处理重复的停止请求
         if self.state in (ControllerState.STOPPING, ControllerState.STOPPED):
             logger.debug(f"Stop request ignored: already in {self.state.name} state")
             return False
         
-        self._stop_requested = True
+        self._stop_event.set()
         logger.info("Stop requested via external interface")
         return True
     
+    def clear_stop_request(self) -> None:
+        """
+        清除停止请求
+        
+        用于在系统恢复后清除未处理的停止请求。
+        通常在 reset() 中自动调用。
+        
+        线程安全性:
+        - 此方法是线程安全的
+        """
+        self._stop_event.clear()
+    
     def is_stop_requested(self) -> bool:
-        """检查是否有外部停止请求"""
-        return self._stop_requested
+        """
+        检查是否有外部停止请求
+        
+        线程安全性:
+        - 此方法是线程安全的
+        """
+        return self._stop_event.is_set()
     
     def _reset_all_counters(self) -> None:
-        """重置所有恢复计数器和 MPC 历史"""
+        """
+        重置所有恢复计数器和 MPC 历史
+        
+        在状态转换时调用，确保新状态从干净的监控周期开始。
+        """
         self.alpha_recovery_count = 0
         self.mpc_recovery_count = 0
         # 清空 MPC 历史：状态转换意味着进入新的监控周期
         # 旧的历史数据不应影响新状态的判断
-        self._mpc_success_history.clear()
-    
-    def _reset_mpc_history(self) -> None:
-        """重置 MPC 成功历史（显式调用）"""
         self._mpc_success_history.clear()
     
     def _transition_to(self, new_state: ControllerState) -> ControllerState:
@@ -285,8 +311,9 @@ class StateMachine:
     def update(self, diagnostics: DiagnosticsInput) -> ControllerState:
         """更新状态机"""
         # 外部停止请求 - 最高优先级
-        if self._stop_requested:
-            self._stop_requested = False  # 清除请求标志
+        # 使用 is_set() 检查并在处理后 clear()
+        if self._stop_event.is_set():
+            self._stop_event.clear()  # 清除请求标志
             if self.state != ControllerState.STOPPING:
                 self._stopping_start_time = get_monotonic_time()
                 logger.info("Transitioning to STOPPING due to external request")
@@ -462,10 +489,9 @@ class StateMachine:
     def reset(self) -> None:
         """重置状态机"""
         self.state = ControllerState.INIT
-        self._reset_all_counters()
-        self._reset_mpc_history()  # 完全重置时清空历史
+        self._reset_all_counters()  # 已包含 MPC 历史清空
         self._stopping_start_time = None
-        self._stop_requested = False
+        self._stop_event.clear()  # 清除停止请求
         # 重置状态持续时间监控
         self._state_entry_time = None
         self._timeout_warned_states.clear()

@@ -14,26 +14,26 @@ IO 层 - 管理 ROS 数据和发布
 - 在非 ROS 环境下，只有 DataManager 可用
 """
 from .data_manager import DataManager
+from ..utils.ros_compat import ROS_VERSION
 
-# ROS2 特定的类，延迟导入
-try:
-    from .publishers import PublisherManager
-    from .services import ServiceManager
-    _ROS2_AVAILABLE = True
-except ImportError:
-    PublisherManager = None
-    ServiceManager = None
-    _ROS2_AVAILABLE = False
+# 根据 ROS 版本导入对应的管理器
+PublisherManager = None
+ServiceManager = None
+ROS1PublisherManager = None
+ROS1ServiceManager = None
 
-# ROS1 特定的类，延迟导入
-try:
-    from .ros1_publishers import ROS1PublisherManager
-    from .ros1_services import ROS1ServiceManager
-    _ROS1_AVAILABLE = True
-except ImportError:
-    ROS1PublisherManager = None
-    ROS1ServiceManager = None
-    _ROS1_AVAILABLE = False
+if ROS_VERSION == 2:
+    try:
+        from .publishers import PublisherManager
+        from .services import ServiceManager
+    except ImportError:
+        pass
+elif ROS_VERSION == 1:
+    try:
+        from .ros1_publishers import ROS1PublisherManager
+        from .ros1_services import ROS1ServiceManager
+    except ImportError:
+        pass
 
 __all__ = [
     'DataManager',
