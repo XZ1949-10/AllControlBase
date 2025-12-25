@@ -452,18 +452,15 @@ class TrajectoryVisualizer:
         
         # 背景
         overlay = image.copy()
-        cv2.rectangle(overlay, (5, 5), (220, 70), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (5, 5), (180, 50), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.5, image, 0.5, 0, image)
         
         # 状态
         traj_count = len(self.latest_trajectory.points) if self.latest_trajectory else 0
-        mode_str = 'TRACK' if self.latest_trajectory and self.latest_trajectory.mode == 1 else 'STOP'
         
         cv2.putText(image, f"Frame: {self.frame_count}", (10, 25),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(image, f"Points: {traj_count}", (10, 45),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(image, f"Mode: {mode_str}", (10, 65),
+        cv2.putText(image, f"Traj Points: {traj_count}", (10, 45),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
         return image
