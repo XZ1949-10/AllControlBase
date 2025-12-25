@@ -57,7 +57,7 @@ class VisualizerNode:
         self._cmd_vel_topic = topics.get('cmd_vel_output', '/cmd_vel')
         self._mode_topic = topics.get('control_mode', '/visualizer/control_mode')
         self._estop_topic = topics.get('emergency_stop', '/controller/emergency_stop')
-        
+
         # 适配器
         joy_config = self._config.get('joystick', {})
         self._joy_adapter = JoyAdapter(joy_config)
@@ -81,6 +81,11 @@ class VisualizerNode:
         self._ros_thread: Optional[threading.Thread] = None
         self._running = False
         
+        # 发布器
+        self._cmd_vel_pub = None
+        self._mode_pub = None
+        self._estop_pub = None
+        
         # 创建订阅和发布
         self._create_subscriptions()
         self._create_publishers()
@@ -100,7 +105,7 @@ class VisualizerNode:
                 'diagnostics': '/controller/diagnostics',
                 'camera_image': '',
                 'joy': '/joy',
-                'cmd_vel_output': '/cmd_vel',
+                'cmd_vel_output': '/joy_cmd_vel',  # 发到单独话题，由 cmd_vel_adapter 选择
                 'control_mode': '/visualizer/control_mode',
                 'emergency_stop': '/controller/emergency_stop',
             },
@@ -121,82 +126,71 @@ class VisualizerNode:
                 'omega_max': 1.0,
             },
         }
-    
+
     def _create_subscriptions(self):
         """创建订阅"""
         # 里程计
-        self._odom_sub = self.create_subscription(
+        self._ros.create_subscriber(
             Odometry, self._odom_topic,
-            self._odom_callback, 10,
-            callback_group=self._cb_group
+            self._odom_callback, 10
         )
         
         # 轨迹
         try:
             from controller_ros.msg import LocalTrajectoryV4
-            self._traj_sub = self.create_subscription(
+            self._ros.create_subscriber(
                 LocalTrajectoryV4, self._traj_topic,
-                self._traj_callback, 10,
-                callback_group=self._cb_group
+                self._traj_callback, 10
             )
             self._traj_available = True
         except ImportError:
-            self.get_logger().warn("LocalTrajectoryV4 not available")
+            self._ros.log_warn("LocalTrajectoryV4 not available")
             self._traj_available = False
         
         # 控制命令
         try:
             from controller_ros.msg import UnifiedCmd
-            self._cmd_sub = self.create_subscription(
+            self._ros.create_subscriber(
                 UnifiedCmd, self._cmd_topic,
-                self._cmd_callback, 10,
-                callback_group=self._cb_group
+                self._cmd_callback, 10
             )
         except ImportError:
-            self.get_logger().warn("UnifiedCmd not available")
+            self._ros.log_warn("UnifiedCmd not available")
         
         # 诊断
         try:
             from controller_ros.msg import DiagnosticsV2
-            self._diag_sub = self.create_subscription(
+            self._ros.create_subscriber(
                 DiagnosticsV2, self._diag_topic,
-                self._diag_callback, 10,
-                callback_group=self._cb_group
+                self._diag_callback, 10
             )
         except ImportError:
-            self.get_logger().warn("DiagnosticsV2 not available")
+            self._ros.log_warn("DiagnosticsV2 not available")
         
         # 手柄
-        self._joy_sub = self.create_subscription(
+        self._ros.create_subscriber(
             Joy, self._joy_topic,
-            self._joy_callback, 10,
-            callback_group=self._cb_group
+            self._joy_callback, 10
         )
         
         # 相机 (可选)
         if self._camera_topic:
-            self._image_sub = self.create_subscription(
+            self._ros.create_subscriber(
                 Image, self._camera_topic,
-                self._image_callback, 1,
-                callback_group=self._cb_group
+                self._image_callback, 1
             )
     
     def _create_publishers(self):
         """创建发布器"""
-        # 手柄控制命令
-        self._cmd_vel_pub = self.create_publisher(Twist, self._cmd_vel_topic, 10)
-        
-        # 控制模式
-        self._mode_pub = self.create_publisher(Bool, self._mode_topic, 10)
-        
-        # 紧急停止
-        self._estop_pub = self.create_publisher(Empty, self._estop_topic, 1)
-    
+        self._cmd_vel_pub = self._ros.create_publisher(Twist, self._cmd_vel_topic, 10)
+        self._mode_pub = self._ros.create_publisher(Bool, self._mode_topic, 10)
+        self._estop_pub = self._ros.create_publisher(Empty, self._estop_topic, 1)
+
     # ==================== 订阅回调 ====================
     
     def _odom_callback(self, msg: Odometry):
         """里程计回调"""
-        timestamp = self._get_time()
+        timestamp = self._ros.get_time()
         
         position = (
             msg.pose.pose.position.x,
@@ -210,13 +204,11 @@ class VisualizerNode:
             msg.pose.pose.orientation.w,
         )
         velocity = self._velocity_adapter.from_odom(msg, timestamp)
-        
         self._data_aggregator.update_odom(position, orientation, velocity, timestamp)
     
     def _traj_callback(self, msg):
         """轨迹回调"""
-        timestamp = self._get_time()
-        
+        timestamp = self._ros.get_time()
         points = [(p.x, p.y, p.z) for p in msg.points]
         
         self._data_aggregator.update_trajectory(
@@ -230,7 +222,7 @@ class VisualizerNode:
     
     def _cmd_callback(self, msg):
         """控制命令回调"""
-        timestamp = self._get_time()
+        timestamp = self._ros.get_time()
         velocity = self._velocity_adapter.from_unified_cmd(msg, timestamp)
         self._data_aggregator.update_target_velocity(velocity)
     
@@ -266,7 +258,7 @@ class VisualizerNode:
         image = self._image_adapter.to_model(msg)
         if image is not None:
             self._data_aggregator.update_camera_image(image)
-    
+
     # ==================== 处理器回调 ====================
     
     def _on_mode_change(self, mode: ControlMode):
@@ -276,9 +268,9 @@ class VisualizerNode:
         # 发布模式
         msg = Bool()
         msg.data = (mode == ControlMode.JOYSTICK)
-        self._mode_pub.publish(msg)
+        self._ros.publish(self._mode_pub, msg)
         
-        self.get_logger().info(f"Control mode: {mode.name}")
+        self._ros.log_info(f"Control mode: {mode.name}")
     
     def _on_joystick_cmd(self, velocity: VelocityData):
         """手柄命令生成回调"""
@@ -292,12 +284,12 @@ class VisualizerNode:
         msg.linear.x = velocity.linear_x
         msg.linear.y = velocity.linear_y
         msg.angular.z = velocity.angular_z
-        self._cmd_vel_pub.publish(msg)
+        self._ros.publish(self._cmd_vel_pub, msg)
     
     def _publish_emergency_stop(self):
         """发布紧急停止"""
-        self._estop_pub.publish(Empty())
-        self.get_logger().warn("Emergency stop published!")
+        self._ros.publish(self._estop_pub, Empty())
+        self._ros.log_warn("Emergency stop published!")
     
     # ==================== GUI 管理 ====================
     
@@ -317,27 +309,28 @@ class VisualizerNode:
         self._window.show()
         
         # 启动 ROS 线程
+        self._running = True
         self._ros_thread = threading.Thread(target=self._ros_spin, daemon=True)
         self._ros_thread.start()
         
         # 运行 Qt 事件循环
-        return app.exec_()
+        exit_code = app.exec_()
+        
+        # 清理
+        self._running = False
+        self._ros.shutdown()
+        
+        return exit_code
     
     def _ros_spin(self):
         """ROS 事件循环 (在单独线程中运行)"""
-        executor = MultiThreadedExecutor()
-        executor.add_node(self)
-        
         try:
-            executor.spin()
+            while self._running and not self._ros.is_shutdown():
+                self._ros.spin_once(timeout=0.1)
         except Exception as e:
-            self.get_logger().error(f"ROS spin error: {e}")
+            logger.error(f"ROS spin error: {e}")
     
     # ==================== 工具方法 ====================
-    
-    def _get_time(self) -> float:
-        """获取当前时间 (秒)"""
-        return self.get_clock().now().nanoseconds * 1e-9
     
     @staticmethod
     def _get_state_name(state: int) -> str:
