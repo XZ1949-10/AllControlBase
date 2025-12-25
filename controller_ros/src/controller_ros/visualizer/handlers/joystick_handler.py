@@ -107,7 +107,7 @@ class JoystickHandler:
         
         # 检查紧急停止 (RB 键，上升沿触发)
         if joystick_state.estop_pressed and not self._last_estop_state:
-            logger.warn("Emergency stop triggered by joystick (RB)")
+            logger.warning("Emergency stop triggered by joystick (RB)")
             if self._on_estop:
                 self._on_estop()
         self._last_estop_state = joystick_state.estop_pressed

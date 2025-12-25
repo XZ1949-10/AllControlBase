@@ -283,6 +283,9 @@ class MPCController(ITrajectoryTracker):
             ocp.constraints.idxbx = np.array([0, 1, 2, 3, 4, 5, 6, 7])
             ocp.constraints.x0 = np.zeros(8)
             
+            # 参数初始值 (p 有 7 个元素: px_ref, py_ref, pz_ref, vx_ref, vy_ref, vz_ref, theta_ref)
+            ocp.parameter_values = np.zeros(7)
+            
             ocp.solver_options.qp_solver = self.qp_solver
             ocp.solver_options.hessian_approx = 'GAUSS_NEWTON'
             ocp.solver_options.integrator_type = self.integrator_type
