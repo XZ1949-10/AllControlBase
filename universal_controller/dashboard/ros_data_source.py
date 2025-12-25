@@ -68,6 +68,7 @@ PLATFORM_NAMES = {
 
 # 状态名称映射
 STATE_INFO = {
+    -1: ('UNKNOWN', '未知状态'),  # 未初始化或无数据
     0: ('INIT', '初始化'),
     1: ('NORMAL', '正常运行'),
     2: ('SOFT_DISABLED', 'Soft禁用'),
@@ -175,9 +176,12 @@ class ROSDashboardDataSource:
             )
             
             rospy.loginfo("[ROSDashboardDataSource] Subscribed to /controller/diagnostics and /controller/state")
+            rospy.loginfo("[ROSDashboardDataSource] Waiting for diagnostics data...")
             
         except ImportError as e:
             rospy.logwarn(f"[ROSDashboardDataSource] Failed to import ROS messages: {e}")
+            rospy.logwarn("[ROSDashboardDataSource] Make sure controller_ros package is built and sourced")
+            rospy.logwarn("[ROSDashboardDataSource] Try: source ~/turtlebot_ws/devel/setup.bash")
         except Exception as e:
             rospy.logerr(f"[ROSDashboardDataSource] Failed to create subscriptions: {e}")
 
@@ -616,14 +620,25 @@ class ROSDashboardDataSource:
 
     def _build_controller_status(self, diag: Dict) -> ControllerStatus:
         """构建控制器状态"""
-        state = diag.get('state', 0)
-        state_name, state_desc = STATE_INFO.get(state, ('UNKNOWN', '未知'))
+        # 如果没有诊断数据，使用 -1 表示未知状态
+        if not diag or not self._diagnostics_received:
+            state = -1
+        else:
+            state = diag.get('state', -1)  # 默认 -1 表示未知
+        
+        state_name, state_desc = STATE_INFO.get(state, ('UNKNOWN', f'未知({state})'))
         
         consistency = diag.get('consistency', {})
         alpha = consistency.get('alpha_soft', 0) if isinstance(consistency, dict) else 0
 
+        # 状态枚举映射：-1 和其他未知值映射到 INIT
+        try:
+            state_enum = ControllerStateEnum(state) if 0 <= state <= 6 else ControllerStateEnum.INIT
+        except ValueError:
+            state_enum = ControllerStateEnum.INIT
+
         return ControllerStatus(
-            state=ControllerStateEnum(state) if 0 <= state <= 6 else ControllerStateEnum.INIT,
+            state=state_enum,
             state_name=state_name,
             state_desc=state_desc,
             mpc_success=diag.get('mpc_success', False),

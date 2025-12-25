@@ -250,10 +250,24 @@ class TrajectoryView(QWidget):
             return
         
         # 根据模式选择投影方式
-        if self._use_camera and self._homography.is_calibrated:
-            self._draw_trajectory_on_camera(painter)
+        if self._use_camera and self._camera_image is not None:
+            if self._homography.is_calibrated:
+                self._draw_trajectory_on_camera(painter)
+            else:
+                # 相机模式但未标定，显示提示并使用俯视图
+                self._draw_trajectory_on_birdview(painter)
+                self._draw_calibration_hint(painter)
         else:
             self._draw_trajectory_on_birdview(painter)
+    
+    def _draw_calibration_hint(self, painter: QPainter):
+        """绘制标定提示"""
+        painter.setPen(QColor(255, 200, 0))
+        font = QFont()
+        font.setPointSize(10)
+        painter.setFont(font)
+        hint = "相机模式需要单应性标定\n运行: roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true"
+        painter.drawText(10, self.height() - 40, hint)
     
     def _draw_trajectory_on_birdview(self, painter: QPainter):
         """在俯视图上绘制轨迹"""
