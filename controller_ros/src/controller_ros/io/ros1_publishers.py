@@ -64,16 +64,16 @@ class ROS1PublisherManager:
         else:
             self._attitude_adapter = None
         
-        # 创建发布器
+        # 消息类型缓存 (在 _create_publishers 中设置)
+        self._DiagnosticsV2 = None
+        self._UnifiedCmd = None
+        self._AttitudeCmd = None
+        
+        # 创建发布器 (会设置消息类型缓存)
         self._create_publishers()
         
         # 诊断节流器
         self._diag_throttler = DiagnosticsThrottler(publish_rate=diag_publish_rate)
-        
-        # 消息类型缓存
-        self._DiagnosticsV2 = None
-        self._UnifiedCmd = None
-        self._AttitudeCmd = None
     
     def _create_publishers(self):
         """创建所有发布器"""
