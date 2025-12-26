@@ -380,25 +380,35 @@ class VisualizerNode:
         
         通过调用 /controller/set_state 服务，将状态设置为 NORMAL (1)
         """
+        service_name = '/controller/set_state'
+        
         try:
-            from controller_ros.srv import SetState
-            
-            # 创建服务客户端
-            service_name = '/controller/set_state'
+            from controller_ros.srv import SetControllerState
             
             if ROS_VERSION == 1:
                 import rospy
                 rospy.wait_for_service(service_name, timeout=1.0)
-                set_state = rospy.ServiceProxy(service_name, SetState)
-                response = set_state(1)  # NORMAL = 1
+                set_state = rospy.ServiceProxy(service_name, SetControllerState)
+                response = set_state(target_state=1)  # NORMAL = 1
                 if response.success:
                     self._ros.log_info("Resume control: success")
                 else:
                     self._ros.log_warn(f"Resume control failed: {response.message}")
             else:
                 # ROS2 服务调用
-                self._ros.log_warn("Resume via service not implemented for ROS2 yet")
+                from controller_ros.srv import SetControllerState
+                client = self._ros.node.create_client(SetControllerState, service_name)
+                if client.wait_for_service(timeout_sec=1.0):
+                    request = SetControllerState.Request()
+                    request.target_state = 1  # NORMAL = 1
+                    future = client.call_async(request)
+                    # 注意: 这是异步调用，不会阻塞
+                    self._ros.log_info("Resume control request sent (async)")
+                else:
+                    self._ros.log_warn(f"Service {service_name} not available")
                 
+        except ImportError as e:
+            self._ros.log_error(f"SetControllerState service not available: {e}")
         except Exception as e:
             self._ros.log_error(f"Failed to call set_state service: {e}")
     

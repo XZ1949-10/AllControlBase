@@ -86,8 +86,9 @@ class MockControllerNode:
     
     def update_trajectory(self, traj):
         """更新轨迹数据"""
-        self.node._data_manager._latest_data['trajectory'] = traj
-        self.node._data_manager._timestamps['trajectory'] = self.node._current_time
+        # 使用 DataManager 内部的键名 'traj'
+        self.node._data_manager._latest_data['traj'] = traj
+        self.node._data_manager._timestamps['traj'] = self.node._current_time
 
 
 def test_base_node_initialization():

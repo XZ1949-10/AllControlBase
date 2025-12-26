@@ -4,16 +4,25 @@
 处理数据时间戳和超时检测。
 
 键名约定:
-- 输入键名: 'odom', 'traj', 'imu' (统一使用简短形式)
+- 内部使用简短形式: 'odom', 'traj', 'imu'
+- 输入支持别名: 'trajectory' -> 'traj'
 - 输出超时键名: 'odom_timeout', 'traj_timeout', 'imu_timeout'
-
-注意: 为保持一致性，所有地方统一使用 'traj' 而非 'trajectory'
 """
 from typing import Dict, Optional, List
 
 
 # 特殊值：表示禁用超时检测
 TIMEOUT_DISABLED = -1
+
+# 键名别名映射：长名 -> 短名
+_KEY_ALIASES = {
+    'trajectory': 'traj',
+}
+
+
+def _normalize_key(key: str) -> str:
+    """将键名标准化为内部使用的短名"""
+    return _KEY_ALIASES.get(key, key)
 
 
 class TimeSync:
@@ -63,8 +72,7 @@ class TimeSync:
         检查数据新鲜度
         
         Args:
-            ages: 各数据的年龄 (秒)，键为 'odom', 'traj', 'imu'
-                  也支持 'trajectory' 作为 'traj' 的别名（向后兼容）
+            ages: 各数据的年龄 (秒)，键为 'odom', 'traj'/'trajectory', 'imu'
         
         Returns:
             各数据是否超时的字典，键为 'odom_timeout', 'traj_timeout', 'imu_timeout'
@@ -72,13 +80,8 @@ class TimeSync:
         Note:
             禁用的数据源永远不会报告超时 (返回 False)
         """
-        # 处理输入键名兼容: trajectory -> traj
-        normalized_ages = {}
-        for key, value in ages.items():
-            if key == 'trajectory':
-                normalized_ages['traj'] = value
-            else:
-                normalized_ages[key] = value
+        # 标准化输入键名
+        normalized_ages = {_normalize_key(k): v for k, v in ages.items()}
         
         timeouts = {}
         for key, max_age in self._max_ages.items():
@@ -99,7 +102,6 @@ class TimeSync:
         Args:
             ages: 各数据的年龄 (秒)
             required: 必需的数据列表，默认 ['odom', 'traj']
-                      也支持 'trajectory' 作为 'traj' 的别名
         
         Returns:
             所有必需数据都新鲜返回 True
@@ -110,27 +112,20 @@ class TimeSync:
         if required is None:
             required = ['odom', 'traj']
         
-        # 处理输入键名兼容: trajectory -> traj
-        normalized_ages = {}
-        for key, value in ages.items():
-            if key == 'trajectory':
-                normalized_ages['traj'] = value
-            else:
-                normalized_ages[key] = value
+        # 标准化输入键名
+        normalized_ages = {_normalize_key(k): v for k, v in ages.items()}
+        normalized_required = [_normalize_key(k) for k in required]
         
-        for key in required:
-            # 规范化键名
-            norm_key = 'traj' if key == 'trajectory' else key
-            
+        for key in normalized_required:
             # 如果该数据源被禁用，跳过检查
-            if self._disabled.get(norm_key, False):
+            if self._disabled.get(key, False):
                 continue
             
-            max_age = self._max_ages.get(norm_key)
+            max_age = self._max_ages.get(key)
             if max_age is None:
                 continue
             
-            age = normalized_ages.get(norm_key, float('inf'))
+            age = normalized_ages.get(key, float('inf'))
             if age > max_age:
                 return False
         return True
@@ -140,15 +135,13 @@ class TimeSync:
         检查指定数据源的超时检测是否被禁用
         
         Args:
-            key: 数据源键名 ('odom', 'traj', 'imu')
-                 也支持 'trajectory' 作为 'traj' 的别名
+            key: 数据源键名 ('odom', 'traj'/'trajectory', 'imu')
         
         Returns:
             是否被禁用
         """
-        # 规范化键名
-        norm_key = 'traj' if key == 'trajectory' else key
-        return self._disabled.get(norm_key, False)
+        normalized_key = _normalize_key(key)
+        return self._disabled.get(normalized_key, False)
     
     def get_max_ages(self) -> Dict[str, Optional[float]]:
         """

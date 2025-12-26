@@ -195,14 +195,19 @@ class ControllerDiagnostics:
         print()
         print("[5/5] 检查 universal_controller...")
         
+        # 优先从新位置导入
         try:
-            from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
-            print("  ✓ ROSDashboardDataSource 可用")
-        except ImportError as e:
-            print(f"  ✗ 无法导入 ROSDashboardDataSource: {e}")
-            print("    请确保已安装 universal_controller:")
-            print("      pip install -e /path/to/universal_controller")
-            return
+            from controller_ros.dashboard import ROSDashboardDataSource
+            print("  ✓ ROSDashboardDataSource 可用 (controller_ros.dashboard)")
+        except ImportError:
+            # 回退到旧位置（兼容性）
+            try:
+                from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
+                print("  ⚠ ROSDashboardDataSource 可用 (旧位置，建议更新导入路径)")
+            except ImportError as e:
+                print(f"  ✗ 无法导入 ROSDashboardDataSource: {e}")
+                print("    请确保已安装 controller_ros 和 universal_controller")
+                return
         
         try:
             from universal_controller.manager.controller_manager import ControllerManager

@@ -8,10 +8,15 @@ TF2 注入管理器
 
 将 TF2 注入相关的状态和逻辑从 ControllerNodeBase 中提取出来，
 提高代码可读性和可测试性。
+
+线程安全性:
+- 使用 threading.Event 管理注入状态，确保线程安全
+- inject() 和 try_reinjection_if_needed() 可以从不同线程安全调用
 """
 from typing import Any, Callable, Dict, Optional
 import time
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,11 @@ class TF2InjectionManager:
     - 管理 TF2 注入状态
     - 处理初始注入和运行时重试
     - 提供注入状态查询
+    
+    线程安全性:
+    - 使用 threading.Event 管理注入状态，确保线程安全
+    - inject() 和 try_reinjection_if_needed() 可以从不同线程安全调用
+    - is_injected 属性是线程安全的
     
     使用方法:
         manager = TF2InjectionManager(
@@ -108,30 +118,51 @@ class TF2InjectionManager:
         else:
             self._retry_interval_sec = self.DEFAULT_RETRY_INTERVAL_SEC
         
-        # 状态
-        self._injected = False
-        self._injection_attempted = False
-        self._retry_count = 0  # 已重试次数
-        self._last_retry_time: Optional[float] = None  # 上次重试时间
+        # 状态 - 使用 threading.Event 确保线程安全
+        # Event 比布尔标志更安全：
+        # 1. set()/clear()/is_set() 都是原子操作
+        # 2. 提供内存屏障，确保跨线程可见性
+        self._injected_event = threading.Event()
+        self._injection_attempted_event = threading.Event()
+        
+        # 重试计数器和时间（使用锁保护）
+        self._lock = threading.Lock()
+        self._retry_count = 0
+        self._last_retry_time: Optional[float] = None
     
     @property
     def is_injected(self) -> bool:
-        """TF2 是否已成功注入"""
-        return self._injected
+        """
+        TF2 是否已成功注入
+        
+        线程安全：使用 Event.is_set() 原子操作
+        """
+        return self._injected_event.is_set()
     
     @property
     def injection_attempted(self) -> bool:
-        """是否已尝试过注入"""
-        return self._injection_attempted
+        """
+        是否已尝试过注入
+        
+        线程安全：使用 Event.is_set() 原子操作
+        """
+        return self._injection_attempted_event.is_set()
     
     @property
     def retry_count(self) -> int:
-        """已重试次数"""
-        return self._retry_count
+        """
+        已重试次数
+        
+        线程安全：使用锁保护
+        """
+        with self._lock:
+            return self._retry_count
     
     def inject(self, blocking: bool = True) -> bool:
         """
         执行 TF2 注入
+        
+        线程安全：可以从任何线程调用
         
         Args:
             blocking: 是否阻塞等待 TF2 buffer 预热
@@ -159,16 +190,17 @@ class TF2InjectionManager:
         # 检查 TF2 buffer 是否就绪
         tf2_ready = self._wait_for_tf2_ready(blocking)
         
-        self._injection_attempted = True
+        self._injection_attempted_event.set()
         # 记录注入尝试时间，确保首次重试也遵循间隔设置
-        self._last_retry_time = self._get_time()
+        with self._lock:
+            self._last_retry_time = self._get_time()
         
         # 注入回调
         if hasattr(coord_transformer, 'set_tf2_lookup_callback'):
             lookup_func = getattr(self._tf_bridge, 'lookup_transform', None)
             if lookup_func is not None:
                 coord_transformer.set_tf2_lookup_callback(lookup_func)
-                self._injected = True
+                self._injected_event.set()
                 
                 if tf2_ready:
                     self._log_info("TF2 successfully injected to coordinate transformer")
@@ -246,15 +278,17 @@ class TF2InjectionManager:
         
         使用时间间隔而非循环计数，确保重试行为与控制频率无关。
         
+        线程安全：可以从任何线程调用
+        
         Returns:
             是否执行了重新注入尝试
         """
-        # 已经注入成功，无需重试
-        if self._injected:
+        # 已经注入成功，无需重试（原子操作）
+        if self._injected_event.is_set():
             return False
         
-        # 尚未尝试过初始注入，不进行重试
-        if not self._injection_attempted:
+        # 尚未尝试过初始注入，不进行重试（原子操作）
+        if not self._injection_attempted_event.is_set():
             return False
         
         # TF bridge 不可用
@@ -264,22 +298,22 @@ class TF2InjectionManager:
         if not getattr(self._tf_bridge, 'is_initialized', False):
             return False
         
-        # 检查是否超过最大重试次数
-        if self._max_retries >= 0 and self._retry_count >= self._max_retries:
-            return False
-        
-        # 检查是否到达重试间隔（使用时间而非计数器）
+        # 检查是否超过最大重试次数和重试间隔（需要锁保护）
         now = self._get_time()
-        if self._last_retry_time is not None:
-            elapsed = now - self._last_retry_time
-            if elapsed < self._retry_interval_sec:
+        with self._lock:
+            if self._max_retries >= 0 and self._retry_count >= self._max_retries:
                 return False
+            
+            if self._last_retry_time is not None:
+                elapsed = now - self._last_retry_time
+                if elapsed < self._retry_interval_sec:
+                    return False
+            
+            # 更新重试时间和计数
+            self._last_retry_time = now
+            self._retry_count += 1
         
-        # 更新重试时间
-        self._last_retry_time = now
-        
-        # 执行重试
-        self._retry_count += 1
+        # 执行重试（在锁外执行，避免长时间持锁）
         self.inject(blocking=False)
         return True
     
@@ -288,22 +322,29 @@ class TF2InjectionManager:
         重置注入状态
         
         在控制器重置时调用。
+        线程安全：可以从任何线程调用
         """
-        self._last_retry_time = None
-        # 注意：不重置 _injected 和 _injection_attempted，
-        # 因为 TF2 回调一旦注入就保持有效
+        with self._lock:
+            self._last_retry_time = None
+            # 注意：不重置 _injected_event 和 _injection_attempted_event，
+            # 因为 TF2 回调一旦注入就保持有效
     
     def get_status(self) -> Dict[str, Any]:
         """
         获取注入状态
         
+        线程安全：可以从任何线程调用
+        
         Returns:
             状态字典
         """
+        with self._lock:
+            retry_count = self._retry_count
+        
         return {
-            'injected': self._injected,
-            'injection_attempted': self._injection_attempted,
-            'retry_count': self._retry_count,
+            'injected': self._injected_event.is_set(),
+            'injection_attempted': self._injection_attempted_event.is_set(),
+            'retry_count': retry_count,
             'retry_interval_sec': self._retry_interval_sec,
             'source_frame': self._source_frame,
             'target_frame': self._target_frame,

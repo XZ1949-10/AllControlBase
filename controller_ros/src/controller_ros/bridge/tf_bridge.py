@@ -76,3 +76,12 @@ class TFBridge:
     def buffer(self):
         """获取 TF2 Buffer (用于高级操作)"""
         return self._tf2_compat.buffer
+
+    def shutdown(self) -> None:
+        """
+        关闭 TF 桥接，释放资源
+        """
+        if self._tf2_compat is not None:
+            self._tf2_compat.shutdown()
+            self._tf2_compat = None
+        self._node = None

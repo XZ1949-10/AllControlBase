@@ -141,15 +141,17 @@ class VelocityPlot(QWidget):
             return
         
         # 转换为相对时间 (最新时间为 0)
-        t0 = timestamps[-1] if timestamps else 0
+        t0 = timestamps[-1]
         rel_times = [t - t0 for t in timestamps]
         
-        # 更新曲线
-        if len(rel_times) == len(linear_x):
-            self._linear_curve.setData(rel_times, linear_x)
+        # 更新曲线 (使用最小长度确保数据对齐)
+        n_linear = min(len(rel_times), len(linear_x))
+        if n_linear > 0:
+            self._linear_curve.setData(rel_times[:n_linear], linear_x[:n_linear])
         
-        if len(rel_times) == len(angular_z):
-            self._angular_curve.setData(rel_times, angular_z)
+        n_angular = min(len(rel_times), len(angular_z))
+        if n_angular > 0:
+            self._angular_curve.setData(rel_times[:n_angular], angular_z[:n_angular])
         
         # 设置 X 轴范围
         self._plot_widget.setXRange(-self._history_sec, 0)

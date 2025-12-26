@@ -203,8 +203,9 @@ class TestTF2InjectionManager:
         )
         
         # 手动设置状态（模拟初始注入失败后的状态）
-        injection_manager._injection_attempted = True
-        injection_manager._injected = False
+        # 使用 Event 的正确方法
+        injection_manager._injection_attempted_event.set()
+        injection_manager._injected_event.clear()
         
         # 第一次调用应该触发重试（因为 _last_retry_time 为 None）
         result = injection_manager.try_reinjection_if_needed()
@@ -243,9 +244,9 @@ class TestTF2InjectionManager:
             get_time_func=get_mock_time,
         )
         
-        # 手动设置状态
-        injection_manager._injection_attempted = True
-        injection_manager._injected = False
+        # 手动设置状态（使用 Event）
+        injection_manager._injection_attempted_event.set()
+        injection_manager._injected_event.clear()
         
         # 前 3 次应该重试
         for i in range(3):
@@ -279,9 +280,9 @@ class TestTF2InjectionManager:
             get_time_func=get_mock_time,
         )
         
-        # 手动设置状态
-        injection_manager._injection_attempted = True
-        injection_manager._injected = False
+        # 手动设置状态（使用 Event）
+        injection_manager._injection_attempted_event.set()
+        injection_manager._injected_event.clear()
         
         # 应该一直重试（测试 10 次）
         for i in range(10):
@@ -306,17 +307,19 @@ class TestTF2InjectionManager:
             get_time_func=get_mock_time,
         )
         
-        # 模拟一些状态
-        injection_manager._injection_attempted = True
-        injection_manager._last_retry_time = 10.0
+        # 模拟一些状态（使用 Event）
+        injection_manager._injection_attempted_event.set()
+        with injection_manager._lock:
+            injection_manager._last_retry_time = 10.0
         
         # 重置
         injection_manager.reset()
         
         # 重试时间应该重置
-        assert injection_manager._last_retry_time == None
+        with injection_manager._lock:
+            assert injection_manager._last_retry_time == None
         # 注入状态不应该重置
-        assert injection_manager._injection_attempted == True
+        assert injection_manager.injection_attempted == True
     
     def test_get_status(self):
         """测试获取状态"""

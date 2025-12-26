@@ -537,6 +537,20 @@ class TF2Compat:
         
         return False
     
+    def shutdown(self) -> None:
+        """
+        关闭 TF2 兼容层，释放资源
+        
+        ROS1: TransformListener 会自动清理
+        ROS2: TransformListener 绑定到节点，节点销毁时自动清理
+        """
+        # 清理引用，让 GC 回收资源
+        self._listener = None
+        self._buffer = None
+        self._node = None
+        self._initialized = False
+        logger.debug("TF2Compat shutdown complete")
+    
     @property
     def is_initialized(self) -> bool:
         return self._initialized

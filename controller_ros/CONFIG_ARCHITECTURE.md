@@ -9,6 +9,71 @@
 4. launch 文件 <param> 标签          - 运行时覆盖
 ```
 
+## 配置分层设计
+
+### 为什么有两层配置？
+
+| 层级 | 位置 | 目的 | 内容 |
+|------|------|------|------|
+| **算法层** | `universal_controller/config/` | 保持 ROS 无关性 | MPC、EKF、安全、约束等算法参数 |
+| **ROS 层** | `controller_ros/utils/param_loader.py` | ROS 特有配置 | 话题名、TF 配置、节点配置 |
+
+这种分离确保 `universal_controller` 可以在非 ROS 环境中使用。
+
+### 配置来源
+
+```
+算法层配置 (universal_controller/config/):
+├── default_config.py      # 合并所有配置的入口
+├── system_config.py       # 系统基础配置
+├── mpc_config.py          # MPC 配置
+├── safety_config.py       # 安全和约束配置
+├── ekf_config.py          # EKF 配置
+├── attitude_config.py     # 姿态控制配置
+├── modules_config.py      # 其他模块配置 (含 TRANSFORM_CONFIG)
+└── platform_config.py     # 平台配置
+
+ROS 层配置 (controller_ros/utils/param_loader.py):
+├── TOPICS_DEFAULTS        # 话题名配置
+├── TF_DEFAULTS            # TF2 配置 (部分映射到 transform)
+└── NODE_DEFAULTS          # 节点配置 (use_sim_time)
+```
+
+## TF 配置与 Transform 配置的关系
+
+### 为什么有两个相似的配置？
+
+| 配置 | 位置 | 用途 | 特有字段 |
+|------|------|------|----------|
+| `TF_DEFAULTS` | ROS 层 | TF2InjectionManager | buffer_warmup_*, retry_*, max_retries |
+| `TRANSFORM_CONFIG` | 算法层 | RobustCoordinateTransformer | fallback_*, drift_*, recovery_* |
+
+### 共享字段（自动映射）
+
+```
+tf.source_frame      -> transform.source_frame
+tf.target_frame      -> transform.target_frame
+tf.timeout_ms        -> transform.timeout_ms
+tf.expected_source_frames -> transform.expected_source_frames
+```
+
+### 映射逻辑
+
+在 `ParamLoader.load()` 中，TF 配置会自动映射到 transform 配置：
+
+```python
+# 用户在 YAML 中配置
+tf:
+  source_frame: "base_link"
+  target_frame: "odom"
+  timeout_ms: 10
+
+# ParamLoader 自动映射到
+config['transform']['source_frame'] = "base_link"
+config['transform']['target_frame'] = "odom"
+config['transform']['timeout_ms'] = 10
+```
+
 ## 配置文件职责
 
 ### controller_params.yaml
@@ -68,10 +133,40 @@ VisualizerParamLoader.load()
 3. **统一加载**: 所有节点使用相同的 ParamLoader 接口
 4. **类型安全**: ParamLoader 自动进行类型转换
 5. **向后兼容**: TF 配置自动映射到 transform 配置
+6. **层级分离**: ROS 特有配置与算法配置分离
 
 ## 添加新配置项
 
+### 添加算法配置
 1. 在 `universal_controller/config/*.py` 中添加默认值
-2. 在 `controller_params.yaml` 中添加 ROS 层配置（如需要）
-3. 在平台配置文件中添加覆盖值（如需要）
-4. ParamLoader 会自动加载新配置项（无需修改加载代码）
+2. ParamLoader 会自动加载新配置项（无需修改加载代码）
+3. 在 `controller_params.yaml` 中添加 ROS 层配置（如需要）
+4. 在平台配置文件中添加覆盖值（如需要）
+
+### 添加 ROS 层配置
+1. 在 `param_loader.py` 的 `TOPICS_DEFAULTS`/`TF_DEFAULTS`/`NODE_DEFAULTS` 中添加
+2. 在 `controller_params.yaml` 中添加对应配置
+3. 在 `ParamLoader.get_xxx()` 方法中处理（如需要）
+
+## 平台配置最佳实践
+
+平台配置文件应该只包含与默认值不同的配置项：
+
+```yaml
+# 好的做法 - 只覆盖差异项
+system:
+  platform: "differential"
+constraints:
+  v_max: 1.5
+  omega_max: 1.0
+
+# 不好的做法 - 重复默认值
+system:
+  platform: "differential"
+mpc:
+  horizon: 20      # 与默认值相同，应删除
+  dt: 0.1          # 与默认值相同，应删除
+constraints:
+  v_max: 1.5
+  omega_max: 1.0
+```

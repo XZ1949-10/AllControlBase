@@ -21,10 +21,13 @@ import numpy as np
 from typing import Tuple
 
 # ============================================================================
-# 数值常量 (从 constants 模块导入，保持向后兼容)
+# 数值常量和基础数学函数 (从 constants 模块导入，保持向后兼容)
 # ============================================================================
 
-from .constants import EPSILON, EPSILON_SMALL, EPSILON_ANGLE
+from .constants import (
+    EPSILON, EPSILON_SMALL, EPSILON_ANGLE,
+    normalize_angle, angle_difference
+)
 
 # ============================================================================
 # ROS 检测
@@ -139,31 +142,10 @@ def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> Tuple[float,
     return (x, y, z, w)
 
 
-def normalize_angle(angle: float) -> float:
-    """
-    将角度归一化到 [-π, π] 范围
-    
-    Args:
-        angle: 输入角度 (弧度)
-    
-    Returns:
-        归一化后的角度 (弧度)，范围 [-π, π]
-    """
-    return np.arctan2(np.sin(angle), np.cos(angle))
-
-
-def angle_difference(angle1: float, angle2: float) -> float:
-    """
-    计算两个角度之间的最短差值
-    
-    Args:
-        angle1: 第一个角度 (弧度)
-        angle2: 第二个角度 (弧度)
-    
-    Returns:
-        角度差 (弧度)，范围 [-π, π]，表示从 angle2 到 angle1 的最短旋转
-    """
-    return normalize_angle(angle1 - angle2)
+# 注意: normalize_angle 和 angle_difference 已从 constants 模块导入
+# 保留以下注释说明函数来源，便于代码审查
+# normalize_angle(angle) -> float: 将角度归一化到 [-π, π]
+# angle_difference(angle1, angle2) -> float: 计算两角度的最短差值
 
 
 # ============================================================================

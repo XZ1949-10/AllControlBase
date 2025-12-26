@@ -22,44 +22,76 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VelocityHistory:
-    """速度历史记录"""
+    """
+    速度历史记录
+    
+    设计说明:
+    - actual (实际速度) 和 target (目标速度) 分别存储，各自有独立的时间戳
+    - 这是因为它们来自不同的 ROS 话题，更新频率可能不同
+    - get_recent() 返回两组数据，由调用者决定如何使用
+    """
     max_duration_sec: float = 10.0
-    timestamps: deque = field(default_factory=lambda: deque(maxlen=1000))
-    linear_x: deque = field(default_factory=lambda: deque(maxlen=1000))
-    angular_z: deque = field(default_factory=lambda: deque(maxlen=1000))
+    
+    # 实际速度历史
+    actual_timestamps: deque = field(default_factory=lambda: deque(maxlen=1000))
+    actual_linear_x: deque = field(default_factory=lambda: deque(maxlen=1000))
+    actual_angular_z: deque = field(default_factory=lambda: deque(maxlen=1000))
+    
+    # 目标速度历史
+    target_timestamps: deque = field(default_factory=lambda: deque(maxlen=1000))
     target_linear_x: deque = field(default_factory=lambda: deque(maxlen=1000))
     target_angular_z: deque = field(default_factory=lambda: deque(maxlen=1000))
     
     def add_actual(self, velocity: VelocityData):
         """添加实际速度"""
-        self.timestamps.append(velocity.timestamp)
-        self.linear_x.append(velocity.linear_x)
-        self.angular_z.append(velocity.angular_z)
+        self.actual_timestamps.append(velocity.timestamp)
+        self.actual_linear_x.append(velocity.linear_x)
+        self.actual_angular_z.append(velocity.angular_z)
     
     def add_target(self, velocity: VelocityData):
         """添加目标速度"""
+        self.target_timestamps.append(velocity.timestamp)
         self.target_linear_x.append(velocity.linear_x)
         self.target_angular_z.append(velocity.angular_z)
     
     def get_recent(self, duration_sec: float = None) -> Dict[str, List[float]]:
-        """获取最近的历史数据"""
+        """
+        获取最近的历史数据
+        
+        Returns:
+            包含以下键的字典:
+            - timestamps: 实际速度的时间戳 (用于绘图 X 轴)
+            - linear_x: 实际线速度
+            - angular_z: 实际角速度
+            - target_timestamps: 目标速度的时间戳
+            - target_linear_x: 目标线速度
+            - target_angular_z: 目标角速度
+        """
         duration = duration_sec or self.max_duration_sec
         now = time.time()
         cutoff = now - duration
         
-        # 找到截止时间点
-        start_idx = 0
-        for i, t in enumerate(self.timestamps):
+        # 过滤实际速度数据
+        actual_start_idx = 0
+        for i, t in enumerate(self.actual_timestamps):
             if t >= cutoff:
-                start_idx = i
+                actual_start_idx = i
+                break
+        
+        # 过滤目标速度数据
+        target_start_idx = 0
+        for i, t in enumerate(self.target_timestamps):
+            if t >= cutoff:
+                target_start_idx = i
                 break
         
         return {
-            'timestamps': list(self.timestamps)[start_idx:],
-            'linear_x': list(self.linear_x)[start_idx:],
-            'angular_z': list(self.angular_z)[start_idx:],
-            'target_linear_x': list(self.target_linear_x)[start_idx:],
-            'target_angular_z': list(self.target_angular_z)[start_idx:],
+            'timestamps': list(self.actual_timestamps)[actual_start_idx:],
+            'linear_x': list(self.actual_linear_x)[actual_start_idx:],
+            'angular_z': list(self.actual_angular_z)[actual_start_idx:],
+            'target_timestamps': list(self.target_timestamps)[target_start_idx:],
+            'target_linear_x': list(self.target_linear_x)[target_start_idx:],
+            'target_angular_z': list(self.target_angular_z)[target_start_idx:],
         }
 
 

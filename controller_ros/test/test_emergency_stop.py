@@ -67,8 +67,9 @@ class MockControllerNode:
         self.node._data_manager._timestamps['odom'] = self.node._current_time
     
     def update_trajectory(self, traj):
-        self.node._data_manager._latest_data['trajectory'] = traj
-        self.node._data_manager._timestamps['trajectory'] = self.node._current_time
+        # 使用 DataManager 内部的键名 'traj'
+        self.node._data_manager._latest_data['traj'] = traj
+        self.node._data_manager._timestamps['traj'] = self.node._current_time
 
 
 class TestEmergencyStop:

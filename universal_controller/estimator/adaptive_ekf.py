@@ -208,9 +208,12 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         # 对于速度-航向耦合平台，更新速度方向
         if self.velocity_heading_coupled and abs(self.x[7]) > 1e-6:
-            v_body = np.sqrt(self.x[3]**2 + self.x[4]**2)
-            self.x[3] = v_body * np.cos(self.x[6])
-            self.x[4] = v_body * np.sin(self.x[6])
+            # 使用点积计算带符号的投影速度，而不是仅计算模长
+            # 这保留了运动方向（支持倒车），同时过滤掉非完整约束不允许的横向滑移
+            v_signed = self.x[3] * np.cos(self.x[6]) + self.x[4] * np.sin(self.x[6])
+            self.x[3] = v_signed * np.cos(self.x[6])
+            self.x[4] = v_signed * np.sin(self.x[6])
+
         
         # 3. 更新协方差
         self.P = F @ self.P @ F.T + self.Q * dt

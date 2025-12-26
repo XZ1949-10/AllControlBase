@@ -231,3 +231,30 @@ class ServiceManager:
             response.message = f"Get attitude rate limits failed: {e}"
             logger.error(f"Get attitude rate limits failed: {e}")
         return response
+
+    def shutdown(self) -> None:
+        """
+        关闭服务管理器，释放资源
+        
+        清理所有服务引用和回调。在 ROS2 中，服务会在节点销毁时自动清理，
+        但显式清理可以更早释放资源并避免悬挂回调。
+        """
+        # 清理服务引用
+        self._reset_srv = None
+        self._get_diag_srv = None
+        self._set_state_srv = None
+        
+        # 清理四旋翼服务
+        if hasattr(self, '_set_hover_yaw_srv'):
+            self._set_hover_yaw_srv = None
+        if hasattr(self, '_get_attitude_limits_srv'):
+            self._get_attitude_limits_srv = None
+        
+        # 清理回调引用
+        self._reset_callback = None
+        self._get_diagnostics_callback = None
+        self._set_state_callback = None
+        self._set_hover_yaw_callback = None
+        self._get_attitude_rate_limits_callback = None
+        
+        logger.debug("ServiceManager shutdown complete")

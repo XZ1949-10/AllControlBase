@@ -146,25 +146,32 @@ class TrajectoryAdapter(IMsgConverter):
                         f"padding with zeros for stop mode"
                     )
                 else:
-                    # 跟踪模式：使用最后一个速度点填充（假设保持恒定速度）
+                    # 跟踪模式：使用衰减速度填充
+                    # 设计说明：直接复制最后一个速度点可能导致轨迹末端继续高速运动
+                    # 使用线性衰减到零，确保轨迹末端平滑减速
                     last_vel = velocities[-1, :]
                     last_vel_magnitude = np.sqrt(last_vel[0]**2 + last_vel[1]**2 + last_vel[2]**2)
                     
-                    # 如果最后一个速度很大，发出更强的警告
-                    if last_vel_magnitude > 1.0:  # 超过 1 m/s
-                        logger.warning(
+                    if last_vel_magnitude > 0.1:  # 速度较大时使用衰减填充
+                        logger.debug(
                             f"Velocity points ({num_vel_points}) < position points ({num_points}), "
-                            f"padding with last velocity (magnitude={last_vel_magnitude:.2f} m/s). "
-                            f"This may cause unexpected behavior. Please fix upstream trajectory generation."
+                            f"padding with decaying velocity (magnitude={last_vel_magnitude:.2f} m/s)"
                         )
+                        # 线性衰减到零：最后一个填充点速度为 0
+                        padding = np.zeros((padding_count, 4))
+                        for i in range(padding_count):
+                            # decay_factor: 从接近1衰减到0
+                            # i=0 -> (padding_count-1)/padding_count
+                            # i=padding_count-1 -> 0
+                            decay_factor = (padding_count - 1 - i) / padding_count
+                            padding[i, :] = last_vel * decay_factor
                     else:
-                        logger.warning(
+                        # 速度很小，直接使用零填充
+                        logger.debug(
                             f"Velocity points ({num_vel_points}) < position points ({num_points}), "
-                            f"padding with last velocity"
+                            f"padding with zeros (last velocity magnitude={last_vel_magnitude:.2f} m/s is small)"
                         )
-                    
-                    last_vel_2d = velocities[-1:, :]  # 保持 2D 形状
-                    padding = np.tile(last_vel_2d, (padding_count, 1))
+                        padding = np.zeros((padding_count, 4))
                 
                 velocities = np.vstack([velocities, padding])
         

@@ -36,6 +36,7 @@ import time
 import logging
 
 from .enums import TrajectoryMode, ControllerState
+from .constants import normalize_angle
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -72,16 +73,6 @@ class TrajectoryDefaults:
             cls.default_confidence = traj_config['default_confidence']
         if 'default_frame_id' in traj_config:
             cls.default_frame_id = traj_config['default_frame_id']
-
-
-def _normalize_angle_internal(angle: float) -> float:
-    """
-    将角度归一化到 [-π, π] 范围
-    
-    注意: 这是内部函数，用于避免循环导入。
-    外部代码应使用 ros_compat.normalize_angle()
-    """
-    return np.arctan2(np.sin(angle), np.cos(angle))
 
 
 # 模拟 ROS Header
@@ -227,7 +218,7 @@ class Trajectory:
                 heading_curr = np.arctan2(vy, vx)
                 heading_next = np.arctan2(vy_next, vx_next)
                 dheading = heading_next - heading_curr
-                dheading = _normalize_angle_internal(dheading)
+                dheading = normalize_angle(dheading)
                 wz = dheading / self.dt_sec
             else:
                 wz = 0.0
@@ -304,12 +295,21 @@ class ConsistencyResult:
     
     Attributes:
         alpha: 一致性加权平均值，用于调整 soft 轨迹的权重
+               范围 [0, 1]，值越高表示 soft 轨迹越可信
         kappa_consistency: 曲率一致性 [0, 1]
         v_dir_consistency: 速度方向一致性 [0, 1]
         temporal_smooth: 时序平滑度 [0, 1]
         should_disable_soft: 是否应该禁用 soft 模式
-        data_valid: 数据是否有效（无 NaN、无异常值）
-                   注意：数据不足不算无效，只是某些指标不参与计算
+        data_valid: 数据质量是否有效
+        
+    data_valid 语义说明:
+        - True: 数据质量正常（无 NaN、无 Inf、无异常值）
+        - False: 数据质量异常（包含 NaN、Inf 或其他异常值）
+        
+        注意：data_valid 表示"数据质量"，不表示"数据充足性"。
+        - 数据不足（如启动期间）时，data_valid 仍为 True
+        - 数据不足会导致某些指标使用中性值（1.0），但不影响 data_valid
+        - 下游模块应使用 data_valid 判断是否信任一致性结果
     """
     alpha: float
     kappa_consistency: float

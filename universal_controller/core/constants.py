@@ -1,7 +1,7 @@
 """
-通用常量定义
+通用常量和基础数学函数定义
 
-本模块定义了整个控制器系统使用的通用常量。
+本模块定义了整个控制器系统使用的通用常量和不依赖其他模块的基础数学函数。
 
 常量分类:
 =========
@@ -16,10 +16,17 @@
 3. 时间常量 (Time Constants)
    - 超时、时间戳等相关的特殊值
 
+基础数学函数:
+=============
+
+本模块包含不依赖其他模块的基础数学函数（如角度归一化），
+这些函数被放在这里以避免循环导入问题。
+
 设计原则:
 =========
 
 - 通用常量放在本模块，供多个模块共享
+- 不依赖其他模块的基础数学函数放在本模块
 - 模块专用常量保留在各自模块中，但应添加清晰的文档说明
 - 常量命名使用全大写加下划线分隔
 - 每个常量必须有详细的文档说明其用途和选择依据
@@ -29,20 +36,66 @@
 
     from universal_controller.core.constants import (
         EPSILON, EPSILON_SMALL, EPSILON_ANGLE,
-        DEFAULT_GRAVITY, NEVER_RECEIVED_TIME_MS
+        DEFAULT_GRAVITY, NEVER_RECEIVED_TIME_MS,
+        normalize_angle, angle_difference
     )
     
     # 避免除零
     if denominator > EPSILON:
         result = numerator / denominator
     
-    # 角度比较
-    if abs(angle_diff) < EPSILON_ANGLE:
-        # 认为角度相等
-        pass
+    # 角度归一化
+    theta = normalize_angle(theta + delta)
+    
+    # 角度差计算
+    error = angle_difference(target, current)
 """
 
 import numpy as np
+
+
+# =============================================================================
+# 基础数学函数 (不依赖其他模块，避免循环导入)
+# =============================================================================
+
+def normalize_angle(angle: float) -> float:
+    """
+    将角度归一化到 [-π, π] 范围
+    
+    使用 arctan2(sin, cos) 方法，数值稳定且高效。
+    
+    Args:
+        angle: 输入角度 (弧度)
+    
+    Returns:
+        归一化后的角度 (弧度)，范围 [-π, π]
+    
+    Examples:
+        >>> normalize_angle(3 * np.pi)  # 约等于 -π
+        >>> normalize_angle(-2 * np.pi)  # 约等于 0
+    """
+    return np.arctan2(np.sin(angle), np.cos(angle))
+
+
+def angle_difference(angle1: float, angle2: float) -> float:
+    """
+    计算两个角度之间的最短差值
+    
+    结果表示从 angle2 到 angle1 的最短旋转方向和角度。
+    正值表示逆时针旋转，负值表示顺时针旋转。
+    
+    Args:
+        angle1: 目标角度 (弧度)
+        angle2: 起始角度 (弧度)
+    
+    Returns:
+        角度差 (弧度)，范围 [-π, π]，表示从 angle2 到 angle1 的最短旋转
+    
+    Examples:
+        >>> angle_difference(0.1, -0.1)  # 约等于 0.2
+        >>> angle_difference(-np.pi + 0.1, np.pi - 0.1)  # 约等于 0.2 (跨越 ±π)
+    """
+    return normalize_angle(angle1 - angle2)
 
 # =============================================================================
 # 数值稳定性常量 (Numerical Stability Constants)
@@ -145,4 +198,7 @@ __all__ = [
     # 四元数验证常量
     'QUATERNION_NORM_SQ_MIN',
     'QUATERNION_NORM_SQ_MAX',
+    # 基础数学函数
+    'normalize_angle',
+    'angle_difference',
 ]

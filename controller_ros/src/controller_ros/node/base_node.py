@@ -32,7 +32,7 @@ from universal_controller.core.enums import ControllerState, PlatformType
 from ..bridge import ControllerBridge
 from ..io.data_manager import DataManager
 from ..utils import TimeSync, TF2InjectionManager
-from ..lifecycle import LifecycleMixin, LifecycleState
+from ..lifecycle import LifecycleMixin, LifecycleState, HealthChecker
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,9 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         self._tf_bridge: Any = None
         self._tf2_injection_manager: Optional[TF2InjectionManager] = None
         
+        # 健康检查器
+        self._health_checker: Optional[HealthChecker] = None
+        
         # 状态
         self._waiting_for_data = True
         self._consecutive_errors = 0
@@ -118,41 +121,58 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         实际的初始化逻辑
         
         由 LifecycleMixin.initialize() 调用。
+        
+        注意：此方法不捕获异常，让异常传播到 LifecycleMixin.initialize() 中处理，
+        这样 _last_error 会包含详细的错误信息。
         """
-        try:
-            # 1. 获取平台配置
-            self._platform_type = self._params.get('system', {}).get('platform', 'differential')
-            platform_config = PLATFORM_CONFIG.get(self._platform_type, PLATFORM_CONFIG['differential'])
-            self._default_frame_id = platform_config.get('output_frame', 'base_link')
-            
-            # 检查是否为四旋翼平台
-            self._is_quadrotor = platform_config.get('type') == PlatformType.QUADROTOR
-            
-            # 2. 创建数据管理器（带时钟跳变回调）
-            self._data_manager = DataManager(
-                get_time_func=self._get_time,
-                on_clock_jump=self._on_clock_jump
-            )
-            
-            # 3. 创建控制器桥接
-            self._controller_bridge = ControllerBridge(self._params)
-            
-            # 4. 创建时间同步
-            watchdog_config = self._params.get('watchdog', {})
-            self._time_sync = TimeSync(
-                max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 500),
-                max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 2500),
-                max_imu_age_ms=watchdog_config.get('imu_timeout_ms', -1)
-            )
-            
-            # 5. 设置诊断回调
-            self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Controller node initialization error: {e}")
-            return False
+        # 1. 获取平台配置
+        self._platform_type = self._params.get('system', {}).get('platform', 'differential')
+        platform_config = PLATFORM_CONFIG.get(self._platform_type, PLATFORM_CONFIG['differential'])
+        self._default_frame_id = platform_config.get('output_frame', 'base_link')
+        
+        # 检查是否为四旋翼平台
+        self._is_quadrotor = platform_config.get('type') == PlatformType.QUADROTOR
+        
+        # 2. 创建数据管理器（带时钟跳变回调）
+        self._data_manager = DataManager(
+            get_time_func=self._get_time,
+            on_clock_jump=self._on_clock_jump
+        )
+        
+        # 3. 创建控制器桥接
+        # ControllerBridge 在初始化失败时会抛出 RuntimeError，
+        # 异常会传播到 LifecycleMixin.initialize() 中处理
+        self._controller_bridge = ControllerBridge(self._params)
+        
+        # 4. 创建时间同步
+        watchdog_config = self._params.get('watchdog', {})
+        self._time_sync = TimeSync(
+            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 500),
+            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 2500),
+            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', -1)
+        )
+        
+        # 5. 设置诊断回调
+        self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
+        
+        # 6. 创建健康检查器并注册组件
+        self._health_checker = HealthChecker()
+        self._health_checker.register('controller_bridge', self._controller_bridge)
+        self._health_checker.register('data_manager', self._data_manager)
+        
+        # 注册 ControllerManager 内部的核心组件（使用适配器）
+        manager = self._controller_bridge.manager
+        if manager is not None:
+            if manager.state_estimator is not None:
+                self._health_checker.register('state_estimator', manager.state_estimator)
+            if manager.mpc_tracker is not None:
+                self._health_checker.register('mpc_tracker', manager.mpc_tracker)
+            if manager.backup_tracker is not None:
+                self._health_checker.register('backup_tracker', manager.backup_tracker)
+            if manager.safety_monitor is not None:
+                self._health_checker.register('safety_monitor', manager.safety_monitor)
+        
+        return True
     
     def _do_shutdown(self) -> None:
         """
@@ -174,6 +194,10 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         if self._tf2_injection_manager is not None:
             self._tf2_injection_manager.reset()
             self._tf2_injection_manager = None
+        
+        # 清理健康检查器
+        if self._health_checker is not None:
+            self._health_checker = None
         
         self._log_info('Controller node shutdown complete')
     
@@ -215,6 +239,10 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         
         if self._tf2_injection_manager is not None:
             details['tf2_injected'] = self._tf2_injection_manager.is_injected
+        
+        # 添加健康检查器摘要
+        if self._health_checker is not None:
+            details['health_summary'] = self._health_checker.get_summary()
         
         return details
     

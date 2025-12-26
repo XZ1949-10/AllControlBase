@@ -56,6 +56,11 @@ class ROSBridgeBase(ABC):
         pass
     
     @abstractmethod
+    def log_error(self, msg: str):
+        """记录错误日志"""
+        pass
+    
+    @abstractmethod
     def create_subscriber(self, msg_type, topic: str, callback: Callable, queue_size: int = 10):
         """创建订阅"""
         pass
@@ -112,6 +117,10 @@ class ROS1Bridge(ROSBridgeBase):
     def log_warn(self, msg: str):
         import rospy
         rospy.logwarn(msg)
+    
+    def log_error(self, msg: str):
+        import rospy
+        rospy.logerr(msg)
     
     def create_subscriber(self, msg_type, topic: str, callback: Callable, queue_size: int = 10):
         import rospy
@@ -174,6 +183,10 @@ class ROS2Bridge(ROSBridgeBase):
     def log_warn(self, msg: str):
         if self._node:
             self._node.get_logger().warn(msg)
+    
+    def log_error(self, msg: str):
+        if self._node:
+            self._node.get_logger().error(msg)
     
     def create_subscriber(self, msg_type, topic: str, callback: Callable, queue_size: int = 10):
         if self._node:

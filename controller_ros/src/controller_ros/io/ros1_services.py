@@ -215,3 +215,40 @@ class ROS1ServiceManager:
             response.message = f"Get attitude rate limits failed: {e}"
             rospy.logerr(f"Get attitude rate limits failed: {e}")
         return response
+
+    def shutdown(self) -> None:
+        """
+        关闭服务管理器，释放资源
+        
+        在 ROS1 中关闭服务并清理回调引用。
+        """
+        # 关闭服务
+        if hasattr(self, '_reset_srv') and self._reset_srv is not None:
+            self._reset_srv.shutdown()
+            self._reset_srv = None
+        
+        if hasattr(self, '_get_diag_srv') and self._get_diag_srv is not None:
+            self._get_diag_srv.shutdown()
+            self._get_diag_srv = None
+        
+        if hasattr(self, '_set_state_srv') and self._set_state_srv is not None:
+            self._set_state_srv.shutdown()
+            self._set_state_srv = None
+        
+        # 关闭四旋翼服务
+        if hasattr(self, '_set_hover_yaw_srv') and self._set_hover_yaw_srv is not None:
+            self._set_hover_yaw_srv.shutdown()
+            self._set_hover_yaw_srv = None
+        
+        if hasattr(self, '_get_attitude_limits_srv') and self._get_attitude_limits_srv is not None:
+            self._get_attitude_limits_srv.shutdown()
+            self._get_attitude_limits_srv = None
+        
+        # 清理回调引用
+        self._reset_callback = None
+        self._get_diagnostics_callback = None
+        self._set_state_callback = None
+        self._set_hover_yaw_callback = None
+        self._get_attitude_rate_limits_callback = None
+        
+        rospy.logdebug("ROS1ServiceManager shutdown complete")

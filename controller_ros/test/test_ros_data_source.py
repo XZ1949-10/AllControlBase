@@ -3,6 +3,8 @@
 测试 ROSDashboardDataSource
 
 验证 ROS 数据源能正确转换诊断消息为 DisplayData。
+
+v3.20 更新：ROSDashboardDataSource 已迁移到 controller_ros.dashboard
 """
 
 import pytest
@@ -11,6 +13,9 @@ import os
 
 # 添加路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# 导入新位置的 ROSDashboardDataSource
+from controller_ros.dashboard.ros_data_source import ROSDashboardDataSource
 
 
 class MockDiagnosticsV2:
@@ -83,9 +88,6 @@ class TestROSDashboardDataSource:
     
     def test_convert_diagnostics_msg(self):
         """测试诊断消息转换"""
-        # 由于 ROSDashboardDataSource 依赖 ROS，这里只测试转换逻辑
-        from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
-        
         # 创建数据源（不初始化 ROS 订阅）
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         data_source._config = {'system': {'platform': 'differential'}}
@@ -123,7 +125,6 @@ class TestROSDashboardDataSource:
 
     def test_build_controller_status(self):
         """测试控制器状态构建"""
-        from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
         from universal_controller.dashboard.models import ControllerStateEnum
         
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
@@ -148,8 +149,6 @@ class TestROSDashboardDataSource:
 
     def test_build_mpc_health(self):
         """测试 MPC 健康状态构建"""
-        from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
-        
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         
         diag = {
@@ -172,8 +171,6 @@ class TestROSDashboardDataSource:
 
     def test_build_timeout_status(self):
         """测试超时状态构建"""
-        from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
-        
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         
         diag = {
@@ -193,8 +190,6 @@ class TestROSDashboardDataSource:
 
     def test_build_platform_config(self):
         """测试平台配置构建"""
-        from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
-        
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         data_source._config = {
             'system': {
@@ -217,8 +212,6 @@ class TestROSDashboardDataSource:
 
     def test_empty_diagnostics(self):
         """测试空诊断数据处理"""
-        from universal_controller.dashboard.ros_data_source import ROSDashboardDataSource
-        
         data_source = ROSDashboardDataSource.__new__(ROSDashboardDataSource)
         data_source._config = {}
         data_source._diagnostics_received = False  # 模拟未接收诊断数据

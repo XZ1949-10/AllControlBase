@@ -3,10 +3,23 @@
 
 提供统一的健康检查接口，用于监控多个组件的状态。
 
+v3.19 重构说明：
+---------------
+统一接口后，所有组件都实现 ILifecycleComponent 接口：
+- get_health_status() 返回 Dict 表示支持健康检查
+- get_health_status() 返回 None 表示不支持（使用默认状态）
+
+不再需要适配器，HealthChecker 直接调用组件的 get_health_status() 方法。
+
 使用示例：
+    from controller_ros.lifecycle import HealthChecker
+    
     checker = HealthChecker()
+    
+    # 直接注册任何实现 ILifecycleComponent 的组件
     checker.register('controller', controller_bridge)
     checker.register('data_manager', data_manager)
+    checker.register('ekf', ekf_estimator)  # 无需适配器
     
     # 获取所有组件的健康状态
     status = checker.check_all()
@@ -16,11 +29,11 @@
         print("All components healthy")
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import logging
 import time
 
-from .interfaces import ILifecycle, LifecycleState
+from .interfaces import ILifecycleComponent, LifecycleState
 
 logger = logging.getLogger(__name__)
 
@@ -33,27 +46,39 @@ class HealthChecker:
     - 注册和管理多个组件
     - 提供统一的健康检查接口
     - 聚合健康状态报告
+    
+    支持的组件类型:
+    - 实现 ILifecycleComponent 接口的组件（推荐）
+    - 任意具有 reset() 方法的对象（向后兼容）
     """
     
     def __init__(self):
         """初始化健康检查器"""
-        self._components: Dict[str, ILifecycle] = {}
+        self._components: Dict[str, Any] = {}
         self._check_history: List[Dict[str, Any]] = []
         self._max_history = 100
     
-    def register(self, name: str, component: ILifecycle) -> None:
+    def register(self, name: str, component: Any) -> None:
         """
         注册组件
         
+        支持任何实现 ILifecycleComponent 接口的组件。
+        对于不支持健康检查的组件（get_health_status 返回 None），
+        将使用默认的健康状态。
+        
         Args:
             name: 组件名称
-            component: 实现 ILifecycle 接口的组件
+            component: 组件实例
         """
-        if not isinstance(component, ILifecycle):
+        # 检查是否实现了基本的生命周期方法
+        has_reset = hasattr(component, 'reset') and callable(getattr(component, 'reset'))
+        
+        if not has_reset:
             logger.warning(
-                f"Component '{name}' does not implement ILifecycle interface. "
+                f"Component '{name}' does not implement reset() method. "
                 f"Health checks may not work correctly."
             )
+        
         self._components[name] = component
         logger.debug(f"Registered component: {name}")
     
@@ -88,21 +113,65 @@ class HealthChecker:
             return None
         
         try:
+            # 尝试调用 get_health_status
             if hasattr(component, 'get_health_status'):
-                return component.get_health_status()
-            else:
-                # 组件没有实现 get_health_status，返回基本状态
-                return {
-                    'healthy': True,
-                    'state': 'UNKNOWN',
-                    'message': 'Component does not implement get_health_status()',
-                }
+                status = component.get_health_status()
+                if status is not None:
+                    # 确保有 component 字段
+                    if 'component' not in status:
+                        status['component'] = name
+                    return status
+            
+            # 组件不支持健康检查，返回基于状态的默认值
+            return self._get_default_health_status(name, component)
+            
         except Exception as e:
+            logger.exception(f"Health check failed for component '{name}'")
             return {
                 'healthy': False,
                 'state': 'ERROR',
+                'component': name,
                 'message': f'Health check failed: {e}',
             }
+    
+    def _get_default_health_status(self, name: str, component: Any) -> Dict[str, Any]:
+        """
+        获取默认健康状态
+        
+        对于不支持 get_health_status 的组件，基于其他信息推断状态。
+        """
+        # 检查是否有 lifecycle_state 属性
+        if hasattr(component, 'lifecycle_state'):
+            state = component.lifecycle_state
+            if isinstance(state, LifecycleState):
+                return {
+                    'healthy': state == LifecycleState.RUNNING,
+                    'state': state.name,
+                    'component': name,
+                    'message': f'Status inferred from lifecycle_state',
+                }
+        
+        # 检查是否有 get_health_metrics 方法（如 MPCController）
+        if hasattr(component, 'get_health_metrics'):
+            try:
+                metrics = component.get_health_metrics()
+                return {
+                    'healthy': True,
+                    'state': 'RUNNING',
+                    'component': name,
+                    'message': 'Component has health metrics',
+                    'details': {'metrics': metrics},
+                }
+            except Exception:
+                pass
+        
+        # 默认假设健康
+        return {
+            'healthy': True,
+            'state': 'UNKNOWN',
+            'component': name,
+            'message': 'Component does not support health check',
+        }
     
     def check_all(self) -> Dict[str, Dict[str, Any]]:
         """

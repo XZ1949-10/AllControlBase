@@ -34,14 +34,13 @@ class BasicSafetyMonitor(ISafetyMonitor):
         self.accel_filter_alpha = safety_config.get('accel_filter_alpha', 0.3)  # 低通滤波系数
         self.accel_filter_warmup_alpha = safety_config.get('accel_filter_warmup_alpha', 0.5)  # 预热系数
         self.accel_filter_warmup_period = safety_config.get('accel_filter_warmup_period', self.accel_filter_window)  # 预热期
-        self.accel_warmup_margin_multiplier = safety_config.get('accel_warmup_margin_multiplier', 2.0)  # 预热期间裕度倍数
+        self.accel_warmup_margin_multiplier = safety_config.get('accel_warmup_margin_multiplier', 1.5)  # 预热期间裕度倍数
         # 预热期间裕度倍数的上限，防止配置错误导致安全检查过于宽松
-        # 即使用户配置了更大的值，也不会超过此上限
-        self.accel_warmup_margin_max = safety_config.get('accel_warmup_margin_max', 3.0)
+        self.accel_warmup_margin_max = safety_config.get('accel_warmup_margin_max', 2.0)
         # 绝对加速度上限 - 即使在预热期间也不能超过此值
         # 这是一个硬性安全限制，防止任何情况下的危险加速度
-        # 默认为 a_max 的 3 倍，确保即使滤波器未收敛也能捕获极端情况
-        self.accel_absolute_max_multiplier = safety_config.get('accel_absolute_max_multiplier', 3.0)
+        # 默认为 a_max 的 2 倍，确保即使滤波器未收敛也能捕获极端情况
+        self.accel_absolute_max_multiplier = safety_config.get('accel_absolute_max_multiplier', 2.0)
         self.max_dt_for_accel = safety_config.get('max_dt_for_accel', 1.0)  # 加速度计算最大时间间隔
         self.min_dt_for_accel = safety_config.get('min_dt_for_accel', 0.001)  # 加速度计算最小时间间隔
         
@@ -141,7 +140,13 @@ class BasicSafetyMonitor(ISafetyMonitor):
             # 重置预热计数
             self._filter_warmup_count = 0
         
-        # 预热期间使用更大的滤波系数
+        # 预热期间使用更大的滤波系数，加速收敛
+        # 
+        # 设计说明：预热期结束时从 warmup_alpha 切换到 normal_alpha
+        # 这可能导致滤波输出的小跳变，但这是可接受的，因为：
+        # 1. 预热期间使用更宽松的安全阈值，小跳变不会触发误报
+        # 2. 两个 alpha 值通常接近（默认 0.5 vs 0.3），跳变幅度很小
+        # 3. 后续滤波会平滑掉这个小跳变
         if self._filter_warmup_count < self._filter_warmup_period:
             # 预热期间使用配置的预热系数加速收敛
             self._filtered_ax = self.accel_filter_warmup_alpha * avg_ax + (1 - self.accel_filter_warmup_alpha) * self._filtered_ax

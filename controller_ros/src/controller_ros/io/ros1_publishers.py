@@ -229,3 +229,35 @@ class ROS1PublisherManager:
     def attitude_adapter(self) -> Optional[AttitudeAdapter]:
         """获取姿态适配器"""
         return self._attitude_adapter
+
+    def shutdown(self) -> None:
+        """
+        关闭发布管理器，释放资源
+        
+        清理所有发布器引用。在 ROS1 中，发布器会在节点关闭时自动清理，
+        但显式清理可以更早释放资源。
+        """
+        # 注销发布器
+        if self._cmd_pub is not None:
+            self._cmd_pub.unregister()
+            self._cmd_pub = None
+        
+        if self._diag_pub is not None:
+            self._diag_pub.unregister()
+            self._diag_pub = None
+        
+        if self._state_pub is not None:
+            self._state_pub.unregister()
+            self._state_pub = None
+        
+        if self._path_pub is not None:
+            self._path_pub.unregister()
+            self._path_pub = None
+        
+        if self._attitude_pub is not None:
+            self._attitude_pub.unregister()
+            self._attitude_pub = None
+        
+        self._output_adapter = None
+        self._attitude_adapter = None
+        self._diag_throttler = None

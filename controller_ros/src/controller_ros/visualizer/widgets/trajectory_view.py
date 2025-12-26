@@ -49,11 +49,15 @@ class TrajectoryView(QWidget):
         # 视图参数
         self._scale = 100.0          # 像素/米
         self._view_range = 3.0       # 视野范围 (米)
-        self._use_camera = False     # 是否使用相机图像
         
         # 单应性变换 (用于相机图像模式)
         self._homography = HomographyTransform()
         self._boundary_margin = 50   # 边界容差 (像素)
+        
+        # 相机渲染参数 (在 _draw_camera_image 中更新)
+        self._camera_scale = 1.0
+        self._camera_offset = (0, 0)
+        self._camera_size = (640, 480)
         
         # 设置最小尺寸
         self.setMinimumSize(400, 300)
@@ -96,9 +100,6 @@ class TrajectoryView(QWidget):
     def set_camera_image(self, image: np.ndarray):
         """设置相机图像"""
         self._camera_image = image
-        if image is not None and not self._use_camera:
-            self._use_camera = True
-            logger.info(f"Camera mode enabled, homography calibrated: {self._homography.is_calibrated}")
         self.update()
     
     def set_view_range(self, range_m: float):
@@ -121,7 +122,6 @@ class TrajectoryView(QWidget):
             logger.info(f"Homography calibration loaded: {calib_file}")
             error = self._homography.compute_reprojection_error()
             logger.info(f"Reprojection error: {error:.2f} pixels")
-            logger.info(f"Current state: _use_camera={self._use_camera}, camera_image={'set' if self._camera_image is not None else 'None'}")
         else:
             logger.warning(f"Failed to load homography calibration: {calib_file}")
         return success
@@ -130,6 +130,11 @@ class TrajectoryView(QWidget):
     def is_homography_calibrated(self) -> bool:
         """是否已加载单应性标定"""
         return self._homography.is_calibrated
+    
+    @property
+    def is_camera_mode(self) -> bool:
+        """是否处于相机模式（有相机图像且已标定）"""
+        return self._camera_image is not None and self._homography.is_calibrated
     
     def _update_info_label(self):
         """更新信息标签"""
@@ -151,7 +156,7 @@ class TrajectoryView(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         
         # 绘制背景
-        if self._use_camera and self._camera_image is not None:
+        if self.is_camera_mode:
             self._draw_camera_image(painter)
         else:
             self._draw_grid_background(painter)
@@ -254,23 +259,14 @@ class TrajectoryView(QWidget):
         if self._trajectory is None or self._trajectory.num_points == 0:
             return
         
-        # 调试日志 (只记录一次)
-        if not hasattr(self, '_draw_mode_logged'):
-            logger.info(f"Drawing trajectory: _use_camera={self._use_camera}, "
-                       f"camera_image={'set' if self._camera_image is not None else 'None'}, "
-                       f"homography_calibrated={self._homography.is_calibrated}")
-            self._draw_mode_logged = True
-        
         # 根据模式选择投影方式
-        if self._use_camera and self._camera_image is not None:
-            if self._homography.is_calibrated:
-                self._draw_trajectory_on_camera(painter)
-            else:
-                # 相机模式但未标定，显示提示并使用俯视图
-                self._draw_trajectory_on_birdview(painter)
-                self._draw_calibration_hint(painter)
+        if self.is_camera_mode:
+            self._draw_trajectory_on_camera(painter)
         else:
             self._draw_trajectory_on_birdview(painter)
+            # 如果有相机图像但未标定，显示提示
+            if self._camera_image is not None and not self._homography.is_calibrated:
+                self._draw_calibration_hint(painter)
     
     def _draw_calibration_hint(self, painter: QPainter):
         """绘制标定提示"""
@@ -313,9 +309,6 @@ class TrajectoryView(QWidget):
     
     def _draw_trajectory_on_camera(self, painter: QPainter):
         """在相机图像上绘制轨迹 (使用单应性变换)"""
-        if not hasattr(self, '_camera_scale'):
-            return
-        
         points = self._trajectory.points
         scale = self._camera_scale
         offset_x, offset_y = self._camera_offset

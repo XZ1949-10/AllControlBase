@@ -149,7 +149,10 @@ class ControllerManager:
         self._last_traj_notify_time: Optional[float] = None
         self._notify_warning_logged: bool = False  # 避免重复警告
         self._notify_check_interval: float = config.get('watchdog', {}).get(
-            'notify_check_interval', 5.0)  # 检查间隔（秒）
+            'notify_check_interval', 2.0)  # 检查间隔（秒），从 5.0 减少到 2.0
+        self._update_count_without_notify: int = 0  # 无 notify 的 update 调用计数
+        self._notify_update_count_thresh: int = config.get('watchdog', {}).get(
+            'notify_update_count_thresh', 50)  # 触发警告的 update 次数阈值
         
         # 诊断发布器（职责分离）
         diagnostics_config = config.get('diagnostics', {})
@@ -473,33 +476,55 @@ class ControllerManager:
             这里只调用 check() 检查超时状态。
         """
         # 检查 notify_xxx_received() 是否被正确调用
-        # 如果 update() 被调用但长时间没有收到 notify 调用，发出警告
+        # 使用两种检测机制：
+        # 1. 时间检测：启动后一段时间内未收到 notify 调用
+        # 2. 计数检测：连续多次 update 调用但未收到 notify 调用
         current_time = get_monotonic_time()
+        
         if not self._notify_warning_logged:
+            # 计数检测：更快速地检测问题
+            self._update_count_without_notify += 1
+            
+            # 如果收到了 notify 调用，重置计数
+            if self._last_odom_notify_time is not None and self._last_traj_notify_time is not None:
+                self._update_count_without_notify = 0
+            elif self._update_count_without_notify >= self._notify_update_count_thresh:
+                # 连续多次 update 但未收到 notify，发出警告
+                if self._last_odom_notify_time is None:
+                    logger.warning(
+                        "notify_odom_received() has not been called after %d update() calls. "
+                        "Timeout detection may not work correctly. "
+                        "Please ensure notify_odom_received() is called in your odom callback.",
+                        self._update_count_without_notify
+                    )
+                    self._notify_warning_logged = True
+                elif self._last_traj_notify_time is None:
+                    logger.warning(
+                        "notify_trajectory_received() has not been called after %d update() calls. "
+                        "Timeout detection may not work correctly. "
+                        "Please ensure notify_trajectory_received() is called in your trajectory callback.",
+                        self._update_count_without_notify
+                    )
+                    self._notify_warning_logged = True
+            
+            # 时间检测：作为备用检测机制
             # 只在启动后一段时间检查，避免启动期间的误报
-            # 这个延迟是必要的，因为：
-            # 1. 系统启动时可能还没有收到第一条消息
-            # 2. startup_grace_ms 期间超时检测本身就是禁用的
-            if self._last_update_time is not None:
+            if self._last_update_time is not None and not self._notify_warning_logged:
                 time_since_start = current_time - (self._last_update_time - self.dt)
                 if time_since_start > self._notify_check_interval:
-                    # 检查 odom notify
                     if self._last_odom_notify_time is None:
                         logger.warning(
                             "notify_odom_received() has not been called after %.1fs. "
                             "Timeout detection may not work correctly. "
-                            "Please ensure notify_odom_received() is called in your odom callback. "
-                            "Example: self._controller.notify_odom_received() in odom_callback()",
+                            "Please ensure notify_odom_received() is called in your odom callback.",
                             time_since_start
                         )
                         self._notify_warning_logged = True
-                    # 检查 trajectory notify
                     elif self._last_traj_notify_time is None:
                         logger.warning(
                             "notify_trajectory_received() has not been called after %.1fs. "
                             "Timeout detection may not work correctly. "
-                            "Please ensure notify_trajectory_received() is called in your trajectory callback. "
-                            "Example: self._controller.notify_trajectory_received() in trajectory_callback()",
+                            "Please ensure notify_trajectory_received() is called in your trajectory callback.",
                             time_since_start
                         )
                         self._notify_warning_logged = True
@@ -806,6 +831,7 @@ class ControllerManager:
         self._last_odom_notify_time = None  # 重置 notify 跟踪
         self._last_traj_notify_time = None
         self._notify_warning_logged = False
+        self._update_count_without_notify = 0  # 重置 notify 计数
         self._current_horizon = self.horizon_normal
         if self.mpc_tracker:
             self.mpc_tracker.set_horizon(self.horizon_normal)

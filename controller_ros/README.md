@@ -292,6 +292,33 @@ ROS 参数与 `universal_controller` 配置的映射关系：
 
 本包支持启动 Dashboard 可视化监控界面，实时显示控制器状态。
 
+### 架构说明 (v3.20 更新)
+
+Dashboard 数据源已重构为清晰的分层架构：
+
+```
+universal_controller/dashboard/     # ROS 无关的 Dashboard 核心
+├── models.py                       # 数据模型定义
+├── data_source.py                  # DashboardDataSource (直接访问 ControllerManager)
+├── main_window.py                  # UI 实现
+└── ros_data_source.py              # 兼容性包装器 (已弃用)
+
+controller_ros/dashboard/           # ROS 数据源适配器 (v3.20 新增)
+└── ros_data_source.py              # ROSDashboardDataSource (订阅 ROS 话题)
+```
+
+**迁移原因**: `ROSDashboardDataSource` 依赖 `controller_ros.msg.DiagnosticsV2`，
+将其放在 `universal_controller` 中违反了分层架构原则。
+
+**迁移指南**:
+```python
+# 旧代码 (已弃用，会发出警告)
+from universal_controller.dashboard import ROSDashboardDataSource
+
+# 新代码 (推荐)
+from controller_ros.dashboard import ROSDashboardDataSource
+```
+
 ### Dashboard vs Visualizer
 
 本项目提供两个可视化工具，面向不同使用场景：
@@ -383,7 +410,10 @@ controller_ros/
 │   │   ├── output_adapter.py
 │   │   └── attitude_adapter.py  # 姿态适配器 (四旋翼)
 │   ├── bridge/              # 控制器和 TF2 桥接
+│   ├── dashboard/           # ROS Dashboard 数据源 (v3.20 新增)
+│   │   └── ros_data_source.py  # ROSDashboardDataSource
 │   ├── io/                  # 订阅/发布管理
+│   ├── lifecycle/           # 生命周期管理
 │   ├── node/                # 节点基类和 ROS2 节点
 │   └── utils/               # 工具函数和 ROS 兼容层
 └── test/

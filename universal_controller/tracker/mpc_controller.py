@@ -194,26 +194,33 @@ class MPCController(ITrajectoryTracker):
                 # 状态: [px, py, pz, vx_world, vy_world, vz, theta, omega]
                 # 控制: [a_body, ay(unused), az, alpha]
                 # 
-                # 差速车约束: 速度方向与航向一致
-                # vx_world = v_body * cos(theta)
-                # vy_world = v_body * sin(theta)
+                # 差速车非完整约束: 速度方向与航向一致（无侧向滑移）
+                # vx_world = v_forward * cos(theta)
+                # vy_world = v_forward * sin(theta)
+                # 其中 v_forward 是沿车辆前进方向的速度（可正可负，支持倒车）
+                # 
+                # 由于非完整约束，世界坐标系下的速度模长等于前向速度的绝对值:
+                # |v_world| = sqrt(vx_world² + vy_world²) = |v_forward|
                 # 
                 # 动力学方程 (考虑向心加速度):
-                # dvx_world/dt = a_body * cos(theta) - v_body * omega * sin(theta)
-                # dvy_world/dt = a_body * sin(theta) + v_body * omega * cos(theta)
+                # dvx_world/dt = a_forward * cos(theta) - v_forward * omega * sin(theta)
+                # dvy_world/dt = a_forward * sin(theta) + v_forward * omega * cos(theta)
                 # 
-                # 其中 a_body 是沿车辆前进方向的加速度 (控制输入 ax)
+                # 其中 a_forward 是沿车辆前进方向的加速度 (控制输入 ax)
                 # 第二项是由于旋转产生的向心加速度
-                v_body = ca.sqrt(vx**2 + vy**2 + 1e-6)  # 添加小量避免除零
+                # 
+                # 注意: 这里使用 sqrt(vx² + vy²) 计算速度模长，对于差速车这等于 |v_forward|
+                # 添加小量 1e-6 避免除零，不影响物理正确性
+                v_forward_magnitude = ca.sqrt(vx**2 + vy**2 + 1e-6)
                 xdot = ca.vertcat(
-                    v_body * ca.cos(theta),                                    # dpx/dt
-                    v_body * ca.sin(theta),                                    # dpy/dt
-                    vz,                                                        # dpz/dt
-                    ax * ca.cos(theta) - v_body * omega * ca.sin(theta),       # dvx_world/dt
-                    ax * ca.sin(theta) + v_body * omega * ca.cos(theta),       # dvy_world/dt
-                    az,                                                        # dvz/dt
-                    omega,                                                     # dtheta/dt
-                    alpha                                                      # domega/dt
+                    v_forward_magnitude * ca.cos(theta),                                    # dpx/dt
+                    v_forward_magnitude * ca.sin(theta),                                    # dpy/dt
+                    vz,                                                                     # dpz/dt
+                    ax * ca.cos(theta) - v_forward_magnitude * omega * ca.sin(theta),       # dvx_world/dt
+                    ax * ca.sin(theta) + v_forward_magnitude * omega * ca.cos(theta),       # dvy_world/dt
+                    az,                                                                     # dvz/dt
+                    omega,                                                                  # dtheta/dt
+                    alpha                                                                   # domega/dt
                 )
             
             model.x = x
@@ -701,6 +708,10 @@ class MPCController(ITrajectoryTracker):
         self.horizon = horizon
         self._last_horizon_change_time = current_time
         logger.info(f"MPC horizon changed from {old_horizon} to {horizon}")
+        
+        # 重置速度历史，避免旧 horizon 下的速度影响新 horizon 的平滑计算
+        # 这确保了 horizon 变化后的第一次计算不会受到旧状态的影响
+        self._last_cmd = None
         
         if was_initialized:
             logger.info("Reinitializing ACADOS solver with new horizon...")

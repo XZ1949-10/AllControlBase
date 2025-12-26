@@ -126,7 +126,8 @@ class DataManager(LifecycleMixin):
         self._data_invalidated: bool = False
         
         # 统计信息
-        self._update_counts: Dict[str, int] = {'odom': 0, 'imu': 0, 'trajectory': 0}
+        # 注意：键名统一使用简短形式 'odom', 'imu', 'traj'
+        self._update_counts: Dict[str, int] = {'odom': 0, 'imu': 0, 'traj': 0}
         
         # 自动初始化
         self.initialize()
@@ -162,10 +163,16 @@ class DataManager(LifecycleMixin):
             如果检测到跳变，返回 ClockJumpEvent；否则返回 None
         
         Note:
-            此方法应在持有锁的情况下调用
+            此方法应在持有锁的情况下调用。
+            调用者负责在检测到跳变后更新 _last_time。
         """
-        if self._last_time == 0.0:
-            # 首次调用，不检测
+        # 忽略无效时间（仿真时间未启动时可能为 0 或负数）
+        if now <= 0:
+            return None
+        
+        if self._last_time <= 0:
+            # 首次收到有效时间，初始化 _last_time 但不检测跳变
+            self._last_time = now
             return None
         
         delta = now - self._last_time
@@ -216,16 +223,27 @@ class DataManager(LifecycleMixin):
         
         return None
     
-    def _on_new_data(self, data_type: str) -> None:
+    def _on_new_data(self, data_type: str, now: float) -> Optional[ClockJumpEvent]:
         """
         新数据到来时的处理
         
         Args:
             data_type: 数据类型 ('odom', 'imu', 'trajectory')
+            now: 当前时间（秒）
+        
+        Returns:
+            如果检测到时钟跳变，返回 ClockJumpEvent；否则返回 None
         
         Note:
             此方法应在持有锁的情况下调用
         """
+        # 在数据更新时也检测时钟跳变
+        # 这确保即使在等待数据阶段也能检测到时钟跳变
+        event = self._check_clock_jump(now)
+        if event is not None:
+            # 更新 _last_time 以避免重复检测
+            self._last_time = now
+        
         # 如果数据被标记为无效，新数据到来后恢复有效性
         if self._data_invalidated:
             # 只有当所有必需数据都更新后才恢复
@@ -233,6 +251,8 @@ class DataManager(LifecycleMixin):
             # 因为新数据的时间戳是在当前时钟下设置的
             self._data_invalidated = False
             logger.info(f"Data validity restored after receiving new {data_type} data")
+        
+        return event
     
     def update_odom(self, ros_msg: Any) -> Odometry:
         """
@@ -245,11 +265,22 @@ class DataManager(LifecycleMixin):
             转换后的 UC Odometry 数据
         """
         uc_odom = self._odom_adapter.to_uc(ros_msg)
+        callback_event = None
+        
         with self._lock:
+            now = self._get_time_func()
             self._latest_data['odom'] = uc_odom
-            self._timestamps['odom'] = self._get_time_func()
+            self._timestamps['odom'] = now
             self._update_counts['odom'] += 1
-            self._on_new_data('odom')
+            callback_event = self._on_new_data('odom', now)
+        
+        # 在锁外调用回调，避免死锁
+        if callback_event is not None and self._on_clock_jump is not None:
+            try:
+                self._on_clock_jump(callback_event)
+            except Exception as e:
+                logger.error(f"Clock jump callback failed: {e}")
+        
         return uc_odom
     
     def update_imu(self, ros_msg: Any) -> Imu:
@@ -263,11 +294,22 @@ class DataManager(LifecycleMixin):
             转换后的 UC Imu 数据
         """
         uc_imu = self._imu_adapter.to_uc(ros_msg)
+        callback_event = None
+        
         with self._lock:
+            now = self._get_time_func()
             self._latest_data['imu'] = uc_imu
-            self._timestamps['imu'] = self._get_time_func()
+            self._timestamps['imu'] = now
             self._update_counts['imu'] += 1
-            self._on_new_data('imu')
+            callback_event = self._on_new_data('imu', now)
+        
+        # 在锁外调用回调，避免死锁
+        if callback_event is not None and self._on_clock_jump is not None:
+            try:
+                self._on_clock_jump(callback_event)
+            except Exception as e:
+                logger.error(f"Clock jump callback failed: {e}")
+        
         return uc_imu
     
     def update_trajectory(self, ros_msg: Any) -> Trajectory:
@@ -281,11 +323,22 @@ class DataManager(LifecycleMixin):
             转换后的 UC Trajectory 数据
         """
         uc_traj = self._traj_adapter.to_uc(ros_msg)
+        callback_event = None
+        
         with self._lock:
-            self._latest_data['trajectory'] = uc_traj
-            self._timestamps['trajectory'] = self._get_time_func()
-            self._update_counts['trajectory'] += 1
-            self._on_new_data('trajectory')
+            now = self._get_time_func()
+            self._latest_data['traj'] = uc_traj
+            self._timestamps['traj'] = now
+            self._update_counts['traj'] += 1
+            callback_event = self._on_new_data('traj', now)
+        
+        # 在锁外调用回调，避免死锁
+        if callback_event is not None and self._on_clock_jump is not None:
+            try:
+                self._on_clock_jump(callback_event)
+            except Exception as e:
+                logger.error(f"Clock jump callback failed: {e}")
+        
         return uc_traj
     
     def get_latest_odom(self) -> Optional[Odometry]:
@@ -301,20 +354,20 @@ class DataManager(LifecycleMixin):
     def get_latest_trajectory(self) -> Optional[Trajectory]:
         """获取最新轨迹数据"""
         with self._lock:
-            return self._latest_data.get('trajectory')
+            return self._latest_data.get('traj')
     
     def get_all_latest(self) -> Dict[str, Any]:
         """
         获取所有最新数据
         
         Returns:
-            包含 'odom', 'imu', 'trajectory' 键的字典
+            包含 'odom', 'imu', 'traj' 键的字典
         """
         with self._lock:
             return {
                 'odom': self._latest_data.get('odom'),
                 'imu': self._latest_data.get('imu'),
-                'trajectory': self._latest_data.get('trajectory'),
+                'traj': self._latest_data.get('traj'),
             }
     
     def get_data_ages(self) -> Dict[str, float]:
@@ -330,7 +383,7 @@ class DataManager(LifecycleMixin):
               表示数据已过时，需要等待新数据。
             - 时钟跳变（回退或大幅前跳）会触发回调通知上层。
             - 新数据到来后会自动恢复正常。
-            - 内部使用 'trajectory' 存储，但返回 'traj' 以保持键名一致性
+            - 键名统一使用简短形式: 'odom', 'imu', 'traj'
         """
         now = self._get_time_func()
         callback_event = None
@@ -345,17 +398,16 @@ class DataManager(LifecycleMixin):
             self._last_time = now
             
             ages = {}
-            # 键名映射: 内部 'trajectory' -> 外部 'traj'
-            key_mapping = {'odom': 'odom', 'imu': 'imu', 'trajectory': 'traj'}
-            for internal_key, external_key in key_mapping.items():
+            # 统一使用简短键名: odom, imu, traj
+            for key in ('odom', 'imu', 'traj'):
                 if self._data_invalidated:
                     # 数据被标记为无效，返回 inf
-                    ages[external_key] = float('inf')
-                elif internal_key in self._timestamps:
+                    ages[key] = float('inf')
+                elif key in self._timestamps:
                     # 正常计算年龄，防止负值
-                    ages[external_key] = max(0.0, now - self._timestamps[internal_key])
+                    ages[key] = max(0.0, now - self._timestamps[key])
                 else:
-                    ages[external_key] = float('inf')
+                    ages[key] = float('inf')
         
         # 在锁外调用回调，避免死锁
         # 设计说明：
@@ -398,9 +450,9 @@ class DataManager(LifecycleMixin):
         return True
     
     def has_required_data(self) -> bool:
-        """检查是否有必需的数据（odom 和 trajectory）"""
+        """检查是否有必需的数据（odom 和 traj）"""
         with self._lock:
-            return 'odom' in self._latest_data and 'trajectory' in self._latest_data
+            return 'odom' in self._latest_data and 'traj' in self._latest_data
     
     def clear(self):
         """
@@ -453,7 +505,7 @@ class DataManager(LifecycleMixin):
             return {
                 'has_odom': 'odom' in self._latest_data,
                 'has_imu': 'imu' in self._latest_data,
-                'has_trajectory': 'trajectory' in self._latest_data,
+                'has_traj': 'traj' in self._latest_data,
                 'data_valid': not self._data_invalidated,
                 'clock_jumped_back': self._clock_jumped_back,
                 'odom_age_ms': ages.get('odom', float('inf')) * 1000,

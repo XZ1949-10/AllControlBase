@@ -9,6 +9,8 @@ controller_ros - ROS 胶水层
 - bridge/: 桥接层 (控制器封装)
 - io/: IO 层 (订阅/发布)
 - utils/: 工具层
+- lifecycle/: 生命周期管理
+- dashboard/: ROS Dashboard 数据源 (v3.20 新增)
 """
 
 __version__ = "1.0.0"

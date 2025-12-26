@@ -5,10 +5,22 @@ from ..core.data_types import MPCHealthStatus
 
 
 class MPCHealthMonitor:
-    """MPC 求解器健康监控，支持预测性降级"""
+    """MPC 求解器健康监控，支持预测性降级
+    
+    配置路径: mpc.health_monitor.*
+    
+    配置示例:
+        mpc:
+          health_monitor:
+            time_warning_thresh_ms: 8
+            time_critical_thresh_ms: 15
+            ...
+    """
     
     def __init__(self, config: Dict[str, Any]):
-        health_config = config.get('mpc', {}).get('health_monitor', config)
+        # 配置读取: mpc.health_monitor.* 或直接从顶层读取（向后兼容）
+        mpc_config = config.get('mpc', {})
+        health_config = mpc_config.get('health_monitor', {})
         
         self.time_warning_thresh = health_config.get('time_warning_thresh_ms', 8)
         self.time_critical_thresh = health_config.get('time_critical_thresh_ms', 15)

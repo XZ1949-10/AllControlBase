@@ -34,17 +34,27 @@ class ControllerBridge(LifecycleMixin):
     
     生命周期:
     - 实现 ILifecycle 接口（通过 LifecycleMixin）
-    - initialize(): 创建并初始化 ControllerManager（自动在构造时调用）
+    - initialize(): 创建并初始化 ControllerManager（默认在构造时自动调用）
     - reset(): 重置控制器状态
     - shutdown(): 关闭控制器，释放资源
+    
+    初始化行为:
+    - 默认 auto_initialize=True，构造时自动初始化，失败时抛出 RuntimeError
+    - 设置 auto_initialize=False 可延迟初始化，调用者需手动调用 initialize()
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], auto_initialize: bool = True):
         """
         初始化控制器桥接
         
         Args:
             config: 控制器配置字典，将传递给 ControllerManager
+            auto_initialize: 是否自动初始化（默认 True）
+                - True: 构造时自动初始化，失败时抛出 RuntimeError
+                - False: 延迟初始化，调用者需手动调用 initialize()
+        
+        Raises:
+            RuntimeError: 当 auto_initialize=True 且初始化失败时
         """
         # 初始化 LifecycleMixin
         super().__init__()
@@ -53,8 +63,14 @@ class ControllerBridge(LifecycleMixin):
         self._manager: Optional[ControllerManager] = None
         
         # 自动初始化
-        if not self.initialize():
-            raise RuntimeError("Controller bridge initialization failed")
+        if auto_initialize:
+            if not self.initialize():
+                # 获取更详细的错误信息
+                error_msg = self._last_error if self._last_error else "Unknown error"
+                raise RuntimeError(
+                    f"Controller bridge initialization failed: {error_msg}. "
+                    f"Check configuration and ensure all dependencies are available."
+                )
     
     # ==================== LifecycleMixin 实现 ====================
     

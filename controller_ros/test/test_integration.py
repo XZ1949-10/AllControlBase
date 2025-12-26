@@ -156,7 +156,13 @@ def test_platform_specific_output():
 
 
 def test_velocity_padding_integration():
-    """测试速度填充在完整管道中的行为"""
+    """测试速度填充在完整管道中的行为
+    
+    设计说明：
+    - 当速度点少于位置点时，使用线性衰减填充
+    - 衰减从最后一个速度点开始，线性衰减到零
+    - 这确保轨迹末端平滑减速，避免高速运动到轨迹末端
+    """
     from controller_ros.adapters import TrajectoryAdapter
     import numpy as np
     
@@ -180,10 +186,20 @@ def test_velocity_padding_integration():
     assert uc_traj.velocities[0, 0] == 1.0
     assert uc_traj.velocities[4, 0] == 3.0
     
-    # 后 15 个应该用最后一个速度点填充
-    for i in range(5, 20):
-        assert uc_traj.velocities[i, 0] == 3.0, f"Point {i} should be 3.0"
-        assert uc_traj.velocities[i, 1] == 0.3, f"Point {i} vy should be 0.3"
+    # 后 15 个应该线性衰减到零
+    # 最后一个速度点是 [3.0, 0.3, 0.0, 0.03]
+    # 填充 15 个点，衰减因子: (15-1-i)/15 = (14-i)/15
+    padding_count = 15
+    last_vel = np.array([3.0, 0.3, 0.0, 0.03])
+    for i in range(padding_count):
+        expected_decay = (padding_count - 1 - i) / padding_count
+        expected_vel = last_vel * expected_decay
+        actual_vel = uc_traj.velocities[5 + i]
+        assert np.allclose(actual_vel, expected_vel, atol=0.001), \
+            f"Point {5+i} should have decayed velocity {expected_vel}, got {actual_vel}"
+    
+    # 最后一个填充点应该接近零
+    assert np.allclose(uc_traj.velocities[19], [0, 0, 0, 0], atol=0.001)
 
 
 def test_empty_frame_id_handling():

@@ -11,6 +11,7 @@ from .data_types import (
 )
 from .diagnostics_input import DiagnosticsInput
 from .interfaces import (
+    ILifecycleComponent, LifecycleState,
     IStateEstimator, ITrajectoryTracker, IConsistencyChecker,
     ISafetyMonitor, ISmoothTransition, ICoordinateTransformer, IAttitudeController
 )
@@ -27,6 +28,7 @@ from .constants import (
     MIN_DENOMINATOR, MIN_SEGMENT_LENGTH, MIN_RELATIVE_CROSS,
     DEFAULT_GRAVITY, NEVER_RECEIVED_TIME_MS,
     QUATERNION_NORM_SQ_MIN, QUATERNION_NORM_SQ_MAX,
+    normalize_angle, angle_difference,
 )
 from .exceptions import (
     ControllerError, ConfigurationError, ConfigValidationError,

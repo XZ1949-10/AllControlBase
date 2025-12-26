@@ -1,7 +1,13 @@
 """
 生命周期管理 Mixin
 
-提供 ILifecycle 接口的默认实现，简化组件的生命周期管理。
+提供 ILifecycleComponent 接口的完整实现，简化组件的生命周期管理。
+
+v3.19 重构说明：
+---------------
+- LifecycleMixin 现在实现统一的 ILifecycleComponent 接口
+- 提供完整的状态跟踪、错误处理、线程安全保护
+- 子类只需实现 _do_xxx() 方法
 
 使用方法：
 ---------
@@ -48,7 +54,7 @@ class LifecycleMixin(ILifecycle):
     生命周期管理 Mixin
     
     提供 ILifecycle 接口的默认实现，包括：
-    - 状态跟踪
+    - 状态跟踪 (lifecycle_state 属性)
     - 错误处理
     - 运行时间统计
     - 线程安全的状态转换
@@ -70,7 +76,7 @@ class LifecycleMixin(ILifecycle):
         self._last_error: Optional[str] = None
         self._component_name = self.__class__.__name__
     
-    # ==================== ILifecycle 实现 ====================
+    # ==================== ILifecycleComponent 实现 ====================
     
     def initialize(self) -> bool:
         """
@@ -192,6 +198,15 @@ class LifecycleMixin(ILifecycle):
         """获取当前生命周期状态"""
         with self._lifecycle_lock:
             return self._lifecycle_state
+    
+    @property
+    def is_running(self) -> bool:
+        """
+        组件是否正在运行
+        
+        便捷属性，等价于 lifecycle_state == LifecycleState.RUNNING
+        """
+        return self.lifecycle_state == LifecycleState.RUNNING
     
     # ==================== 子类需要实现的方法 ====================
     

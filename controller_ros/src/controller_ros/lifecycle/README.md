@@ -4,47 +4,102 @@
 
 本模块提供统一的生命周期管理接口，用于协调 `controller_ros` 中各组件的初始化、运行、重置和关闭。
 
-## 设计原则
+## v3.19 重构
 
-1. **统一接口**：所有需要生命周期管理的组件实现 `ILifecycle` 接口
-2. **分离关注**：`reset()` 重置状态，`shutdown()` 释放资源
-3. **健康检查**：统一的健康状态查询接口
-4. **非侵入式**：现有组件可以逐步迁移，不强制要求
+### 统一接口设计
 
-## 核心组件
+之前的设计有两套接口：
+- `ILifecycleComponent` (universal_controller): 轻量级，只有 reset/shutdown
+- `ILifecycle` (controller_ros): 完整版，包含 initialize/get_health_status
 
-### ILifecycle 接口
-
-定义了生命周期管理的标准方法：
+重构后统一为一套接口 `ILifecycleComponent`：
 
 ```python
-class ILifecycle(ABC):
-    @abstractmethod
-    def initialize(self) -> bool:
-        """初始化组件，分配资源"""
-        pass
-    
-    @abstractmethod
-    def shutdown(self) -> None:
-        """关闭组件，释放所有资源"""
-        pass
-    
+class ILifecycleComponent(ABC):
     @abstractmethod
     def reset(self) -> None:
-        """重置组件状态，保留资源"""
+        """必须实现：重置内部状态"""
         pass
     
-    @abstractmethod
-    def get_health_status(self) -> Dict[str, Any]:
-        """获取组件健康状态"""
+    def shutdown(self) -> None:
+        """可选：释放资源（默认空实现）"""
         pass
     
-    @property
-    @abstractmethod
-    def lifecycle_state(self) -> LifecycleState:
-        """获取当前生命周期状态"""
-        pass
+    def initialize(self) -> bool:
+        """可选：初始化（默认返回 True）"""
+        return True
+    
+    def get_health_status(self) -> Optional[Dict[str, Any]]:
+        """可选：健康检查（默认返回 None）"""
+        return None
 ```
+
+### 优势
+
+1. **消除适配器** - 不再需要 `LifecycleComponentAdapter`
+2. **简化代码** - 算法层组件只需实现 `reset()`
+3. **灵活扩展** - ROS 层组件可覆盖其他方法获得完整监控能力
+4. **向后兼容** - 现有代码无需修改
+
+## 使用示例
+
+### 简单算法组件
+
+```python
+from universal_controller.core.interfaces import ILifecycleComponent
+
+class SimpleEstimator(ILifecycleComponent):
+    def __init__(self):
+        self._state = np.zeros(6)
+    
+    def reset(self) -> None:
+        self._state = np.zeros(6)
+```
+
+### 完整监控组件
+
+```python
+from controller_ros.lifecycle import LifecycleMixin
+
+class MonitoredController(LifecycleMixin):
+    def __init__(self):
+        super().__init__()
+        self._resource = None
+    
+    def _do_initialize(self) -> bool:
+        self._resource = create_resource()
+        return self._resource is not None
+    
+    def _do_shutdown(self) -> None:
+        if self._resource:
+            self._resource.close()
+    
+    def _do_reset(self) -> None:
+        if self._resource:
+            self._resource.reset()
+    
+    def _get_health_details(self) -> Dict[str, Any]:
+        return {'resource_active': self._resource is not None}
+```
+
+### 健康检查
+
+```python
+from controller_ros.lifecycle import HealthChecker
+
+checker = HealthChecker()
+
+# 直接注册任何实现 ILifecycleComponent 的组件
+checker.register('ekf', ekf_estimator)
+checker.register('mpc', mpc_controller)
+checker.register('bridge', controller_bridge)
+
+# 获取健康状态
+summary = checker.get_summary()
+print(f"All healthy: {summary['all_healthy']}")
+```
+
+## 核心组件
 
 ### LifecycleState 枚举
 
@@ -58,51 +113,18 @@ class LifecycleState(Enum):
 
 ### LifecycleMixin
 
-提供 `ILifecycle` 接口的默认实现，简化组件开发：
-
-```python
-class MyComponent(LifecycleMixin):
-    def __init__(self):
-        super().__init__()
-        self._resource = None
-    
-    def _do_initialize(self) -> bool:
-        self._resource = create_resource()
-        return self._resource is not None
-    
-    def _do_shutdown(self) -> None:
-        if self._resource:
-            self._resource.close()
-            self._resource = None
-    
-    def _do_reset(self) -> None:
-        if self._resource:
-            self._resource.reset()
-    
-    def _get_health_details(self) -> Dict[str, Any]:
-        return {'resource_active': self._resource is not None}
-```
+提供 `ILifecycleComponent` 接口的完整实现：
+- 状态跟踪
+- 错误处理
+- 运行时间统计
+- 线程安全的状态转换
 
 ### HealthChecker
 
 统一的健康检查工具：
-
-```python
-checker = HealthChecker()
-checker.register('controller', controller_bridge)
-checker.register('data_manager', data_manager)
-
-# 获取所有组件的健康状态
-status = checker.check_all()
-
-# 获取摘要
-summary = checker.get_summary()
-# {'total': 2, 'healthy': 2, 'unhealthy': 0, 'all_healthy': True, ...}
-
-# 检查是否所有组件都健康
-if checker.is_all_healthy():
-    print("All components healthy")
-```
+- 注册和管理多个组件
+- 提供统一的健康检查接口
+- 聚合健康状态报告
 
 ## 状态转换图
 
@@ -120,77 +142,30 @@ if checker.is_all_healthy():
                                   SHUTDOWN
 ```
 
-## 已实现生命周期管理的组件
+## 迁移指南
 
-| 组件 | 类 | 说明 |
-|------|-----|------|
-| 控制器桥接 | `ControllerBridge` | 封装 ControllerManager，提供统一的控制接口 |
-| 数据管理器 | `DataManager` | 管理传感器数据缓存，支持时钟跳变检测 |
+### 从旧版本迁移
 
-## 使用 HealthChecker 进行统一监控
-
+旧代码（使用适配器）：
 ```python
-from controller_ros.lifecycle import HealthChecker
-from controller_ros.bridge import ControllerBridge
-from controller_ros.io import DataManager
-
-# 创建组件
-bridge = ControllerBridge(config)
-data_manager = DataManager(get_time_func=get_time_sec)
-
-# 注册到健康检查器
-checker = HealthChecker()
-checker.register('controller', bridge)
-checker.register('data_manager', data_manager)
-
-# 定期检查健康状态
-if not checker.is_all_healthy():
-    unhealthy = checker.get_unhealthy_components()
-    print(f"Unhealthy components: {unhealthy}")
+from controller_ros.lifecycle import LifecycleComponentAdapter
+checker.register('ekf', LifecycleComponentAdapter(ekf, 'ekf'))
 ```
 
-## reset() vs shutdown() 的区别
-
-| 方法 | 目的 | 资源 | 后续操作 |
-|------|------|------|----------|
-| `reset()` | 重置状态 | 保留 | 可以继续使用 |
-| `shutdown()` | 释放资源 | 释放 | 不再可用 |
-
-### 使用场景
-
-- **reset()**：
-  - 用户请求重置控制器
-  - 从错误状态恢复
-  - 开始新的控制周期
-
-- **shutdown()**：
-  - 节点关闭
-  - 程序退出
-  - 资源需要释放
-
-## 健康状态字典格式
-
+新代码（直接注册）：
 ```python
-{
-    'healthy': bool,           # 组件是否健康
-    'state': str,              # 生命周期状态名称
-    'component': str,          # 组件名称
-    'message': str,            # 状态描述
-    'last_error': str,         # 最后一次错误（可选）
-    'uptime_sec': float,       # 运行时间（可选）
-    'details': Dict[str, Any], # 详细信息（可选）
-}
+checker.register('ekf', ekf)  # 无需适配器
 ```
 
-## 线程安全性
+### 向后兼容
 
-- `LifecycleMixin` 的生命周期方法是线程安全的
-- 使用 `threading.RLock` 保护状态转换
-- 建议在单线程中调用生命周期方法
+- `ILifecycle` 作为 `ILifecycleComponent` 的别名保留
+- `LifecycleComponentAdapter` 仍可使用，但会发出废弃警告
+- 现有代码无需修改即可运行
 
 ## 最佳实践
 
-1. **幂等性**：`initialize()` 和 `shutdown()` 应该是幂等的
-2. **错误处理**：生命周期方法不应抛出异常
-3. **快速返回**：`get_health_status()` 应该快速返回
-4. **资源清理**：`shutdown()` 应该优雅地处理部分初始化的情况
+1. **幂等性** - `initialize()` 和 `shutdown()` 应该是幂等的
+2. **错误处理** - 生命周期方法不应抛出异常
+3. **快速返回** - `get_health_status()` 应该快速返回
+4. **资源清理** - `shutdown()` 应该优雅地处理部分初始化的情况

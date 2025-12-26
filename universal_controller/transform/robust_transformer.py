@@ -88,6 +88,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         # 状态变量
         self.fallback_start_time: Optional[float] = None
         self.accumulated_drift = 0.0
+        self._drift_estimate_reliable: bool = True  # 漂移估计是否可靠
         self.state_estimator: Optional[IStateEstimator] = None
         
         # TF2 缓存
@@ -320,6 +321,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                     self._apply_recovery_correction(position, yaw)
                 self.fallback_start_time = None
                 self.accumulated_drift = 0.0
+                self._drift_estimate_reliable = True  # 重置漂移估计可靠性标志
                 # 重置漂移估计时间跟踪
                 self._last_fallback_update_time = None
                 logger.info("TF2 recovered, drift corrected")
@@ -458,16 +460,20 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                 effective_drift_rate = self.drift_rate * (1.0 + velocity * self.drift_velocity_factor)
             
             # 累积漂移，但不超过上限
-            # 超过上限后停止累积，因为估计已不可靠
-            if self.accumulated_drift < self.max_accumulated_drift:
+            # 超过上限后停止累积，并标记漂移估计为不可靠
+            if self._drift_estimate_reliable:
                 new_drift = self.accumulated_drift + effective_drift_rate * dt
-                self.accumulated_drift = min(new_drift, self.max_accumulated_drift)
-                if self.accumulated_drift >= self.max_accumulated_drift:
+                if new_drift >= self.max_accumulated_drift:
+                    self.accumulated_drift = self.max_accumulated_drift
+                    self._drift_estimate_reliable = False
                     logger.warning(
                         f"Accumulated drift reached maximum ({self.max_accumulated_drift}m). "
                         f"Drift estimation is no longer reliable. "
+                        f"Recovery correction will only use TF2 position if available. "
                         f"Consider checking TF2 availability."
                     )
+                else:
+                    self.accumulated_drift = new_drift
             
             self._last_fallback_update_time = current_time
         
@@ -617,21 +623,30 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                       f"dx={-drift_x:.4f}, dy={-drift_y:.4f}, dtheta={-drift_theta:.4f}")
         else:
             # 没有真实 TF2 位置，无法计算精确漂移
-            # 使用保守策略：不做位置校正，只记录警告
+            # 
+            # 设计说明：
+            # - 如果漂移估计可靠（未达到上限），记录警告但不做校正
+            # - 如果漂移估计不可靠（已达到上限），记录更严重的警告
             # 
             # 原因：漂移方向是未知的，盲目猜测可能使情况更糟
             # 例如：如果漂移实际上与运动方向相同，反向校正会加倍误差
-            # 
-            # 如果需要启用估计校正，应该：
-            # 1. 使用更复杂的漂移模型（如基于历史数据的统计模型）
-            # 2. 或者使用外部定位系统（如 GPS、UWB）提供真实位置
             drift_magnitude = self.accumulated_drift
             
-            # 使用配置的漂移校正阈值判断是否记录警告
-            if drift_magnitude > self.drift_correction_thresh:
-                logger.warning(f"Accumulated drift estimate: {drift_magnitude:.4f}m, "
-                      f"but no TF2 position available for precise correction. "
-                      f"Consider enabling external localization for drift correction.")
+            if not self._drift_estimate_reliable:
+                # 漂移估计不可靠，记录更严重的警告
+                logger.warning(
+                    f"Drift estimate unreliable (reached max {self.max_accumulated_drift}m). "
+                    f"No TF2 position available for correction. "
+                    f"State estimator may have significant drift. "
+                    f"Consider checking TF2 availability or using external localization."
+                )
+            elif drift_magnitude > self.drift_correction_thresh:
+                # 漂移估计可靠但没有 TF2 位置
+                logger.warning(
+                    f"Accumulated drift estimate: {drift_magnitude:.4f}m, "
+                    f"but no TF2 position available for precise correction. "
+                    f"Consider enabling external localization for drift correction."
+                )
         
         # 清理状态
         self._fallback_start_tf2_position = None
@@ -656,6 +671,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             'tf2_injected': tf2_injected,
             'fallback_duration_ms': fallback_duration_ms,
             'accumulated_drift': self.accumulated_drift,
+            'drift_estimate_reliable': self._drift_estimate_reliable,
             'is_critical': self._last_status.is_critical(),
             'status': self._last_status.name,
             'tf2_initialized': self._tf2_initialized,
@@ -666,6 +682,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         """重置变换器状态"""
         self.fallback_start_time = None
         self.accumulated_drift = 0.0
+        self._drift_estimate_reliable = True  # 重置漂移估计可靠性标志
         self._last_tf2_position = None
         self._last_tf2_yaw = 0.0
         self._fallback_start_tf2_position = None

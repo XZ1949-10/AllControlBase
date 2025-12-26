@@ -114,10 +114,10 @@ def test_data_manager_get_all_latest():
     
     assert 'odom' in all_data
     assert 'imu' in all_data
-    assert 'trajectory' in all_data
+    assert 'traj' in all_data
     assert all_data['odom'] is not None
     assert all_data['imu'] is not None
-    assert all_data['trajectory'] is not None
+    assert all_data['traj'] is not None
 
 
 def test_data_manager_data_ages():
