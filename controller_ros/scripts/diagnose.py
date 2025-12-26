@@ -177,7 +177,7 @@ class ControllerDiagnostics:
                     print(f"    里程计超时: {msg.timeout_odom}")
                     print(f"    轨迹超时: {msg.timeout_traj}")
                     print(f"    紧急停止: {msg.emergency_stop}")
-                    print(f"    Alpha: {msg.alpha:.3f}")
+                    print(f"    Alpha: {msg.consistency_alpha_soft:.3f}")
             else:
                 print("  ✗ 未收到诊断数据")
                 self._print_no_data_suggestions()

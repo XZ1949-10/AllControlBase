@@ -264,9 +264,14 @@ class TrajectoryAnalyzer(TopicMonitor):
     """Analyze trajectory characteristics"""
     
     def __init__(self, topic):
-        # Use AnyMsg for flexibility
-        from rospy.msg import AnyMsg
-        super().__init__(topic, AnyMsg)
+        # Use LocalTrajectoryV4 if available for proper message parsing
+        if HAS_CUSTOM_MSG:
+            super().__init__(topic, LocalTrajectoryV4)
+        else:
+            # Fallback to AnyMsg (won't parse fields properly)
+            from rospy.msg import AnyMsg
+            super().__init__(topic, AnyMsg)
+            rospy.logwarn("LocalTrajectoryV4 not available, trajectory analysis will be limited")
         self.traj_info = {
             'num_points': 0,
             'dt_sec': 0.1,
@@ -290,8 +295,8 @@ class TrajectoryAnalyzer(TopicMonitor):
             if hasattr(msg, 'dt_sec'):
                 self.traj_info['dt_sec'] = msg.dt_sec
                 self.dt_values.append(msg.dt_sec)
-            if hasattr(msg, 'velocities'):
-                self.traj_info['has_velocities'] = len(msg.velocities) > 0
+            if hasattr(msg, 'velocities_flat'):
+                self.traj_info['has_velocities'] = len(msg.velocities_flat) > 0
             if hasattr(msg, 'confidence'):
                 self.traj_info['confidence'] = msg.confidence
             if hasattr(msg, 'header'):
