@@ -9,41 +9,25 @@ cmd_vel 适配器 - 将 UnifiedCmd 转换为 TurtleBot 的 cmd_vel
 - 订阅 /visualizer/control_mode (std_msgs/Bool) - 控制模式切换
 - 发布 /cmd_vel (geometry_msgs/Twist)
 - 应用速度限制保护机器人
-- 可选的速度变化率限制（平滑处理）
+- 以固定频率发布命令，确保底盘不会因超时停止
+
+架构说明:
+- 本节点是平台适配器，负责命令的最终处理和发布
+- 以固定频率 (publish_rate) 发布命令，解决底盘 cmd_vel 超时问题
+- 手柄命令超时检测在本节点完成，确保手柄断开时机器人停止
 
 控制模式:
 - control_mode = False: 使用控制器输出 (/cmd_unified)
 - control_mode = True:  使用手柄输出 (/joy_cmd_vel)
-
-生命周期:
-- 实现统一的生命周期管理
-- shutdown(): 停止定时器，发布零速度
-- reset(): 重置内部状态
-
-使用方法:
-    rosrun controller_ros cmd_vel_adapter.py
-    
-    或通过 launch 文件启动:
-    roslaunch controller_ros turtlebot1.launch
 
 参数:
     ~max_linear: 最大线速度 (m/s), 默认 0.5
     ~max_angular: 最大角速度 (rad/s), 默认 1.0
     ~max_linear_accel: 最大线加速度 (m/s²), 默认 0 (禁用)
     ~max_angular_accel: 最大角加速度 (rad/s²), 默认 0 (禁用)
-    ~input_topic: 控制器输入话题, 默认 /cmd_unified
-    ~joy_topic: 手柄输入话题, 默认 /joy_cmd_vel
-    ~mode_topic: 模式切换话题, 默认 /visualizer/control_mode
-    ~output_topic: 输出话题, 默认 /cmd_vel
-
-注意:
-    速度变化率限制（max_linear_accel, max_angular_accel）默认禁用，
-    因为平滑控制应该由上游 MPC 控制器负责。
-    仅在特殊情况下（如 MPC 输出不平滑）才需要启用。
+    ~publish_rate: 发布频率 (Hz), 默认 20
+    ~joy_timeout: 手柄命令超时 (秒), 默认 0.5
 """
-
-# 注意：不要在这里修改 sys.path！
-# PYTHONPATH 已经由 source devel/setup.bash 正确设置
 
 import rospy
 import math
@@ -62,10 +46,11 @@ class CmdVelAdapter:
     """
     cmd_vel 适配器类
     
-    生命周期:
-    - __init__(): 初始化节点和订阅/发布
-    - shutdown(): 停止并发布零速度
-    - reset(): 重置内部状态
+    职责:
+    - 根据控制模式选择命令源 (控制器/手柄)
+    - 应用速度限制保护机器人
+    - 以固定频率发布 cmd_vel 到底盘
+    - 处理手柄命令超时
     """
     
     def __init__(self):
@@ -74,35 +59,48 @@ class CmdVelAdapter:
         # 关闭标志
         self._shutting_down = False
         
-        # 获取参数
-        self.max_linear = rospy.get_param('~max_linear', 0.5)
-        self.max_angular = rospy.get_param('~max_angular', 1.0)
+        # 从配置文件读取参数 (支持 cmd_vel_adapter 命名空间和私有参数)
+        # 优先级: 私有参数 > cmd_vel_adapter 命名空间 > 默认值
+        def get_param(name, default):
+            # 先尝试私有参数
+            value = rospy.get_param(f'~{name}', None)
+            if value is not None:
+                return value
+            # 再尝试 cmd_vel_adapter 命名空间
+            value = rospy.get_param(f'cmd_vel_adapter/{name}', None)
+            if value is not None:
+                return value
+            return default
         
-        # 可选的速度变化率限制（0 表示禁用）
-        self.max_linear_accel = rospy.get_param('~max_linear_accel', 0.0)
-        self.max_angular_accel = rospy.get_param('~max_angular_accel', 0.0)
+        self.max_linear = get_param('max_linear', 0.5)
+        self.max_angular = get_param('max_angular', 1.0)
+        self.max_linear_accel = get_param('max_linear_accel', 0.0)
+        self.max_angular_accel = get_param('max_angular_accel', 0.0)
+        self.publish_rate = get_param('publish_rate', 20.0)
+        self.joy_timeout = get_param('joy_timeout', 0.5)
         
-        input_topic = rospy.get_param('~input_topic', '/cmd_unified')
-        joy_topic = rospy.get_param('~joy_topic', '/joy_cmd_vel')
-        mode_topic = rospy.get_param('~mode_topic', '/visualizer/control_mode')
-        output_topic = rospy.get_param('~output_topic', '/cmd_vel')
+        input_topic = get_param('input_topic', '/cmd_unified')
+        joy_topic = get_param('joy_topic', '/joy_cmd_vel')
+        mode_topic = get_param('mode_topic', '/visualizer/control_mode')
+        output_topic = get_param('output_topic', '/cmd_vel')
         
         # 控制模式: False=控制器, True=手柄
         self.joystick_mode = False
         
-        # 最新的手柄命令
+        # 最新的命令
+        self.latest_controller_cmd = Twist()
         self.latest_joy_cmd = Twist()
+        self.controller_cmd_time: Optional[rospy.Time] = None
         self.joy_cmd_time: Optional[rospy.Time] = None
-        self.joy_timeout = 0.5  # 手柄命令超时时间 (秒)
         
         # 订阅控制器输出
-        self.sub = rospy.Subscriber(input_topic, UnifiedCmd, self.callback, queue_size=1)
+        self.sub = rospy.Subscriber(input_topic, UnifiedCmd, self._controller_callback, queue_size=1)
         
         # 订阅手柄输出
-        self.joy_sub = rospy.Subscriber(joy_topic, Twist, self.joy_callback, queue_size=1)
+        self.joy_sub = rospy.Subscriber(joy_topic, Twist, self._joy_callback, queue_size=1)
         
         # 订阅模式切换
-        self.mode_sub = rospy.Subscriber(mode_topic, Bool, self.mode_callback, queue_size=1)
+        self.mode_sub = rospy.Subscriber(mode_topic, Bool, self._mode_callback, queue_size=1)
         
         # 发布 cmd_vel
         self.pub = rospy.Publisher(output_topic, Twist, queue_size=1)
@@ -120,8 +118,7 @@ class CmdVelAdapter:
         # 注册关闭回调
         rospy.on_shutdown(self.shutdown)
         
-        # 定时器：在手柄模式下持续发布命令（解决 cmd_vel 超时问题）
-        self.publish_rate = rospy.get_param('~publish_rate', 20.0)  # 20Hz
+        # 定时器：以固定频率发布命令
         self.timer = rospy.Timer(rospy.Duration(1.0 / self.publish_rate), self._timer_callback)
         
         rospy.loginfo(f"CmdVelAdapter 已启动:")
@@ -129,9 +126,10 @@ class CmdVelAdapter:
         rospy.loginfo(f"  手柄输入话题: {joy_topic}")
         rospy.loginfo(f"  模式切换话题: {mode_topic}")
         rospy.loginfo(f"  输出话题: {output_topic}")
+        rospy.loginfo(f"  发布频率: {self.publish_rate} Hz")
+        rospy.loginfo(f"  手柄超时: {self.joy_timeout} s")
         rospy.loginfo(f"  最大线速度: {self.max_linear} m/s")
         rospy.loginfo(f"  最大角速度: {self.max_angular} rad/s")
-        rospy.loginfo(f"  手柄模式发布频率: {self.publish_rate} Hz")
         if self.max_linear_accel > 0:
             rospy.loginfo(f"  最大线加速度: {self.max_linear_accel} m/s² (启用)")
         if self.max_angular_accel > 0:
@@ -162,111 +160,95 @@ class CmdVelAdapter:
         self.last_angular_z = 0.0
         self.last_time = None
         self.joystick_mode = False
+        self.latest_controller_cmd = Twist()
+        self.latest_joy_cmd = Twist()
+        self.controller_cmd_time = None
+        self.joy_cmd_time = None
         self.msg_count = 0
         self.clamp_count = 0
         self.rate_limit_count = 0
         rospy.loginfo("CmdVelAdapter 状态已重置")
-        if self.max_angular_accel > 0:
-            rospy.loginfo(f"  最大角加速度: {self.max_angular_accel} rad/s² (启用)")
     
-    def mode_callback(self, msg: Bool):
+    def _mode_callback(self, msg: Bool):
         """模式切换回调"""
         if msg.data != self.joystick_mode:
             self.joystick_mode = msg.data
             mode_name = "手柄控制" if self.joystick_mode else "网络轨迹控制"
             rospy.loginfo(f"控制模式切换: {mode_name}")
     
-    def joy_callback(self, msg: Twist):
+    def _joy_callback(self, msg: Twist):
         """手柄命令回调"""
         self.latest_joy_cmd = msg
         self.joy_cmd_time = rospy.Time.now()
-        
-        # 注意：不在这里立即发布，由定时器统一发布
-        # 这样可以保证稳定的发布频率
+    
+    def _controller_callback(self, msg: UnifiedCmd):
+        """控制器命令回调"""
+        twist = Twist()
+        twist.linear.x = msg.vx
+        twist.angular.z = msg.omega
+        self.latest_controller_cmd = twist
+        self.controller_cmd_time = rospy.Time.now()
     
     def _timer_callback(self, event):
         """
-        定时器回调：在手柄模式下持续发布命令
+        定时器回调：以固定频率发布命令
         
         解决问题：TurtleBot 底盘有 cmd_vel 超时保护，
         如果一段时间没收到命令就会停止。
-        通过定时发布可以保证命令流的连续性。
         """
         if self._shutting_down:
             return
         
-        if not self.joystick_mode:
-            return
+        linear_x = 0.0
+        angular_z = 0.0
         
-        # 检查手柄命令是否超时
-        if self.joy_cmd_time is None:
-            return
-        
-        time_since_joy = (rospy.Time.now() - self.joy_cmd_time).to_sec()
-        if time_since_joy > self.joy_timeout:
-            # 手柄命令超时，发布零速度
-            self._publish_twist(0.0, 0.0)
-            return
-        
-        # 发布最新的手柄命令
-        self._publish_twist(self.latest_joy_cmd.linear.x, self.latest_joy_cmd.angular.z)
-
-    def callback(self, msg: UnifiedCmd):
-        """
-        处理 UnifiedCmd 消息，转换为 Twist 并发布
-        
-        Args:
-            msg: UnifiedCmd 消息，包含 vx, vy, vz, omega 等字段
-        """
-        # 如果在手柄模式，忽略控制器输出
         if self.joystick_mode:
-            return
+            # 手柄模式：检查手柄命令是否超时
+            if self.joy_cmd_time is not None:
+                time_since_joy = (rospy.Time.now() - self.joy_cmd_time).to_sec()
+                if time_since_joy <= self.joy_timeout:
+                    linear_x = self.latest_joy_cmd.linear.x
+                    angular_z = self.latest_joy_cmd.angular.z
+                # 超时则保持零速度
+        else:
+            # 控制器模式：使用最新的控制器命令
+            linear_x = self.latest_controller_cmd.linear.x
+            angular_z = self.latest_controller_cmd.angular.z
         
-        self._publish_twist(msg.vx, msg.omega)
+        self._publish_twist(linear_x, angular_z)
     
     def _publish_twist(self, linear_x: float, angular_z: float):
-        """
-        发布 Twist 消息
-        
-        Args:
-            linear_x: 线速度
-            angular_z: 角速度
-        """
-        # 检查关闭标志
+        """发布 Twist 消息"""
         if self._shutting_down:
             return
         
         twist = Twist()
-        
-        # 保存原始值用于日志
         original_linear_x = linear_x
         original_angular_z = angular_z
         
-        # 0. 数据有效性检查 - 检测 NaN 和 Inf
+        # 数据有效性检查
         if not (math.isfinite(linear_x) and math.isfinite(angular_z)):
             rospy.logwarn_throttle(1.0, 
                 f"收到无效速度命令: vx={linear_x}, omega={angular_z}，发布零速度")
-            # 发布零速度作为安全措施
             twist.linear.x = 0.0
             twist.angular.z = 0.0
             self.pub.publish(twist)
-            # 重置状态，避免下次使用无效的 last 值
             self.last_linear_x = 0.0
             self.last_angular_z = 0.0
             return
         
-        # 1. 应用速度变化率限制（如果启用）
+        # 应用速度变化率限制
         if self.max_linear_accel > 0 or self.max_angular_accel > 0:
             linear_x, angular_z = self._apply_rate_limit(linear_x, angular_z)
         
-        # 2. 应用速度限制（安全边界）
+        # 应用速度限制
         linear_x_clamped = self._clamp(linear_x, -self.max_linear, self.max_linear)
         angular_z_clamped = self._clamp(angular_z, -self.max_angular, self.max_angular)
         
-        # 检查是否被限制 (与原始输入值比较，而非变化率限制后的值)
+        # 检查是否被限制
         if abs(linear_x_clamped - original_linear_x) > 0.001 or abs(angular_z_clamped - original_angular_z) > 0.001:
             self.clamp_count += 1
-            if self.clamp_count % 100 == 1:  # 每 100 次打印一次警告
+            if self.clamp_count % 100 == 1:
                 rospy.logwarn(f"速度被限制: vx {original_linear_x:.2f}->{linear_x_clamped:.2f}, "
                              f"omega {original_angular_z:.2f}->{angular_z_clamped:.2f}")
         
@@ -274,35 +256,17 @@ class CmdVelAdapter:
         self.last_linear_x = linear_x_clamped
         self.last_angular_z = angular_z_clamped
         
-        # 设置 Twist 消息
+        # 设置并发布
         twist.linear.x = linear_x_clamped
-        twist.linear.y = 0.0  # 差速车不支持横向移动
-        twist.linear.z = 0.0
-        
-        twist.angular.x = 0.0
-        twist.angular.y = 0.0
         twist.angular.z = angular_z_clamped
-        
-        # 发布
         self.pub.publish(twist)
         
         self.msg_count += 1
-        if self.msg_count % 200 == 0:  # 每 200 条消息打印一次状态
-            rospy.logdebug(f"已处理 {self.msg_count} 条消息, "
-                          f"限制次数: {self.clamp_count}, "
-                          f"变化率限制次数: {self.rate_limit_count}")
+        if self.msg_count % 200 == 0:
+            rospy.logdebug(f"已处理 {self.msg_count} 条消息")
     
     def _apply_rate_limit(self, linear_x: float, angular_z: float) -> tuple:
-        """
-        应用速度变化率限制
-        
-        Args:
-            linear_x: 目标线速度
-            angular_z: 目标角速度
-        
-        Returns:
-            (limited_linear_x, limited_angular_z): 限制后的速度
-        """
+        """应用速度变化率限制"""
         now = rospy.Time.now()
         
         if self.last_time is None:
@@ -317,7 +281,6 @@ class CmdVelAdapter:
         
         rate_limited = False
         
-        # 线速度变化率限制
         if self.max_linear_accel > 0:
             max_delta_linear = self.max_linear_accel * dt
             delta_linear = linear_x - self.last_linear_x
@@ -325,7 +288,6 @@ class CmdVelAdapter:
                 linear_x = self.last_linear_x + max_delta_linear * (1 if delta_linear > 0 else -1)
                 rate_limited = True
         
-        # 角速度变化率限制
         if self.max_angular_accel > 0:
             max_delta_angular = self.max_angular_accel * dt
             delta_angular = angular_z - self.last_angular_z

@@ -8,6 +8,11 @@
 - initialize(): 创建订阅和发布（在构造时自动调用）
 - shutdown(): 停止 ROS 线程，关闭 GUI
 - reset(): 重置数据聚合器状态
+
+手柄控制架构：
+- 本节点负责：订阅 /joy，处理手柄输入，发布 /joy_cmd_vel 和 /visualizer/control_mode
+- cmd_vel_adapter 负责：根据模式选择命令源，应用速度限制，以固定频率发布到底盘
+- 本节点只在收到 joy 消息时发布命令，持续发布由 cmd_vel_adapter 负责
 """
 from typing import Dict, Any, Optional
 import threading

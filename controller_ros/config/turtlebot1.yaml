@@ -269,3 +269,31 @@ ekf:
 # 配置文件: config/visualizer_params.yaml
 # 注意: visualizer 节点从 visualizer_params.yaml 读取配置，
 #       而不是从本文件的 visualizer 配置块读取。
+
+# =============================================================================
+# cmd_vel 适配器配置
+# =============================================================================
+# cmd_vel_adapter 负责将 /cmd_unified 或 /joy_cmd_vel 转换为底盘命令
+# 
+# 架构说明:
+# - 以固定频率发布命令，解决底盘 cmd_vel 超时问题
+# - 手柄命令超时检测，确保手柄断开时机器人停止
+# =============================================================================
+cmd_vel_adapter:
+  # 发布配置
+  publish_rate: 20.0              # 命令发布频率 (Hz) - 需要高于底盘超时频率
+  joy_timeout: 0.5                # 手柄命令超时 (秒) - 超时后发布零速度
+  
+  # 速度限制 (与 constraints 保持一致)
+  max_linear: 0.5                 # 最大线速度 (m/s)
+  max_angular: 1.0                # 最大角速度 (rad/s)
+  
+  # 速度变化率限制 (0 = 禁用，由 MPC 负责平滑)
+  max_linear_accel: 0.0           # 最大线加速度 (m/s²)
+  max_angular_accel: 0.0          # 最大角加速度 (rad/s²)
+  
+  # 话题配置
+  input_topic: "/cmd_unified"               # 控制器输入
+  joy_topic: "/joy_cmd_vel"                 # 手柄输入
+  mode_topic: "/visualizer/control_mode"    # 模式切换
+  output_topic: "/mobile_base/commands/velocity"  # TurtleBot1 底盘话题

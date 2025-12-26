@@ -59,17 +59,20 @@
 
   <!-- ========== cmd_vel 适配器 ========== -->
   <node pkg="controller_ros" type="cmd_vel_adapter.py" name="cmd_vel_adapter" output="screen">
-    <param name="max_linear" value="$(arg max_linear)"/>
-    <param name="max_angular" value="$(arg max_angular)"/>
-    <param name="output_topic" value="/mobile_base/commands/velocity"/>
     <!-- 
     适配器说明:
-    - 订阅 /cmd_unified (UnifiedCmd)
-    - 发布 /mobile_base/commands/velocity (geometry_msgs/Twist)
+    - 订阅 /cmd_unified (UnifiedCmd) 和 /joy_cmd_vel (Twist)
+    - 发布到底盘话题 (配置在 turtlebot1.yaml 的 cmd_vel_adapter 块)
+    - 以固定频率发布命令，解决底盘超时问题
     - 应用速度限制保护 TurtleBot1
     
-    注意: TurtleBot 使用 /mobile_base/commands/velocity 而不是 /cmd_vel
+    配置来源: config/turtlebot1.yaml -> cmd_vel_adapter
+    可通过 launch 参数覆盖:
+      <param name="max_linear" value="0.3"/>
     -->
+    <!-- 允许通过 launch 参数覆盖速度限制 -->
+    <param name="max_linear" value="$(arg max_linear)"/>
+    <param name="max_angular" value="$(arg max_angular)"/>
   </node>
   
   <!-- ========== Dashboard 节点 (可选) ========== -->
