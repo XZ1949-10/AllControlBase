@@ -22,6 +22,11 @@ try:
 except ImportError:
     ACADOS_AVAILABLE = False
 
+# ACADOS 约束边界常量
+# JSON 标准不支持 Infinity，使用足够大的有限值代替无约束
+# 1e9 对于位置/角度约束来说实际等同于无约束
+ACADOS_INF = 1e9
+
 
 class MPCController(ITrajectoryTracker):
     """MPC 轨迹跟踪控制器
@@ -281,12 +286,13 @@ class MPCController(ITrajectoryTracker):
             ocp.constraints.ubu = np.array([self.a_max, self.a_max, self.a_max, self.alpha_max])
             ocp.constraints.idxbu = np.array([0, 1, 2, 3])
             
-            ocp.constraints.lbx = np.array([-np.inf, -np.inf, -np.inf, 
+            # 状态约束 (x, y, z 位置无约束，速度和角速度有约束)
+            ocp.constraints.lbx = np.array([-ACADOS_INF, -ACADOS_INF, -ACADOS_INF, 
                                            -self.v_max, -self.v_max, -self.vz_max,
-                                           -np.inf, -self.omega_max])
-            ocp.constraints.ubx = np.array([np.inf, np.inf, np.inf,
+                                           -ACADOS_INF, -self.omega_max])
+            ocp.constraints.ubx = np.array([ACADOS_INF, ACADOS_INF, ACADOS_INF,
                                            self.v_max, self.v_max, self.vz_max,
-                                           np.inf, self.omega_max])
+                                           ACADOS_INF, self.omega_max])
             ocp.constraints.idxbx = np.array([0, 1, 2, 3, 4, 5, 6, 7])
             ocp.constraints.x0 = np.zeros(8)
             
