@@ -405,10 +405,16 @@ class FullDiagnosticNode:
                 'state': msg.state,
                 'mpc_success': msg.mpc_success,
                 'backup_active': msg.backup_active,
-                'solve_time_ms': msg.solve_time_ms,
-                'kkt_residual': msg.kkt_residual if hasattr(msg, 'kkt_residual') else 0,
-                'alpha': msg.alpha if hasattr(msg, 'alpha') else 1.0,
-                'tf2_status': msg.tf2_status if hasattr(msg, 'tf2_status') else 0,
+                'solve_time_ms': msg.mpc_solve_time_ms,
+                'kkt_residual': msg.mpc_health_kkt_residual,
+                'alpha': msg.consistency_alpha_soft,
+                'tf2_available': msg.transform_tf2_available,
+                'tf2_injected': msg.transform_tf2_injected,
+                'cmd_vx': msg.cmd_vx,
+                'cmd_omega': msg.cmd_omega,
+                'timeout_traj': msg.timeout_traj,
+                'tracking_lateral_error': msg.tracking_lateral_error,
+                'tracking_heading_error': msg.tracking_heading_error,
             }
     
     def cmd_callback(self, msg):
@@ -526,18 +532,22 @@ class FullDiagnosticNode:
             return
         
         d = self.last_diag
-        state_names = {0: 'INIT', 1: 'NORMAL', 2: 'STOPPING', 3: 'STOPPED', 4: 'ERROR'}
+        state_names = {
+            0: 'INIT', 1: 'NORMAL', 2: 'SOFT_DISABLED', 3: 'MPC_DEGRADED',
+            4: 'BACKUP_ACTIVE', 5: 'STOPPING', 6: 'STOPPED'
+        }
         state_name = state_names.get(d['state'], f"UNKNOWN({d['state']})")
         
         print(f"  状态: {state_name}")
         print(f"  MPC成功: {d['mpc_success']}  |  备用激活: {d['backup_active']}")
         print(f"  求解时间: {d['solve_time_ms']:.2f}ms  |  KKT残差: {d['kkt_residual']:.6f}")
-        print(f"  Alpha(soft/hard混合): {d['alpha']:.3f}")
+        print(f"  Alpha(soft权重): {d['alpha']:.3f}")
+        print(f"  TF2: 可用={d['tf2_available']} 已注入={d['tf2_injected']}")
+        print(f"  诊断中的cmd: vx={d['cmd_vx']:.3f} omega={d['cmd_omega']:.4f}")
+        print(f"  跟踪误差: 横向={d['tracking_lateral_error']:.3f}m 航向={np.degrees(d['tracking_heading_error']):.1f}°")
         
-        tf_status_names = {0: 'OK', 1: 'FALLBACK', 2: 'CRITICAL'}
-        tf_name = tf_status_names.get(d['tf2_status'], f"UNKNOWN({d['tf2_status']})")
-        print(f"  TF2状态: {tf_name}")
-        
+        if d['timeout_traj']:
+            print("  ⚠️ 轨迹超时!")
         if not d['mpc_success']:
             print("  ⚠️ MPC求解失败，使用备用控制器")
         if d['backup_active']:
@@ -549,14 +559,23 @@ class FullDiagnosticNode:
         """打印坐标变换分析"""
         print("\n【4. 坐标变换分析】")
         
-        # 尝试获取TF
+        # 从诊断获取TF状态
+        if self.last_diag:
+            d = self.last_diag
+            print(f"  TF2可用: {d['tf2_available']}  |  已注入: {d['tf2_injected']}")
+            if not d['tf2_available']:
+                print("  ⚠️ TF2不可用，可能使用fallback模式")
+            if not d['tf2_injected']:
+                print("  ⚠️ TF2未注入到控制器")
+        
+        # 尝试直接获取TF
         tf_result = self.get_transform('odom', 'base_link')
         if tf_result and tf_result.tf2_available:
-            print(f"  TF2可用: base_link → odom")
+            print(f"  直接查询: base_link → odom 成功")
             print(f"  位置: ({tf_result.position[0]:.3f}, {tf_result.position[1]:.3f})")
             print(f"  航向: {np.degrees(tf_result.yaw):.1f}°")
         else:
-            print("  ⚠️ TF2不可用或查询失败")
+            print("  直接查询TF失败")
         
         # 检查轨迹坐标系
         if self.last_traj:
