@@ -53,6 +53,7 @@ DiagnosticsV2 字段覆盖:
 版本: 2.1 (统一诊断工具，替代 diagnose_trajectory.py 和 full_diagnostics.py)
 """
 import sys
+import os
 import time
 import threading
 import argparse
@@ -62,6 +63,16 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
+
+# 修复Windows终端编码问题
+if sys.platform == 'win32':
+    # 设置标准输出为UTF-8
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+    # 设置环境变量
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # ROS 导入
 try:
@@ -239,6 +250,26 @@ def format_duration(seconds: float) -> str:
         return f"{seconds:.1f}s"
     else:
         return f"{seconds/60:.1f}min"
+
+
+def safe_print(text: str):
+    """
+    安全打印函数，处理编码错误
+    
+    在Windows系统上，如果终端不支持UTF-8，会尝试使用系统默认编码
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # 如果UTF-8失败，尝试使用系统默认编码
+        try:
+            # 移除ANSI颜色代码
+            import re
+            text_no_color = re.sub(r'\033\[[0-9;]+m', '', text)
+            print(text_no_color.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding))
+        except:
+            # 最后的fallback：只打印ASCII字符
+            print(text.encode('ascii', errors='replace').decode('ascii'))
 
 
 # ============================================================================
@@ -708,7 +739,12 @@ class ChassisTestRunner:
         
     def test_max_velocity(self, target_v: float = 1.0, duration: float = 3.0) -> float:
         """测试最大速度"""
-        print(f"  测试最大速度 (目标: {target_v} m/s)...")
+        safe_print(f"  测试最大速度 (目标: {target_v} m/s)...")
+        # 清空历史数据，只统计本次测试（线程安全）
+        with self.odom.lock:
+            self.odom.velocities.clear()
+        time.sleep(0.2)  # 等待新数据
+        
         cmd = Twist()
         cmd.linear.x = target_v
         start = time.time()
@@ -726,27 +762,54 @@ class ChassisTestRunner:
     
     def test_acceleration(self, target_v: float = 0.5) -> float:
         """测试加速能力"""
-        print(f"  测试加速度 (目标: {target_v} m/s)...")
+        safe_print(f"  测试加速度 (目标: {target_v} m/s)...")
+        # 停止机器人
         self.cmd_pub.publish(Twist())
         time.sleep(1.0)
-        self.odom.accelerations.clear()
+        
+        # 清空所有历史数据（线程安全）
+        with self.odom.lock:
+            self.odom.velocities.clear()
+            self.odom.accelerations.clear()
+            self.odom.last_vel = None
+            self.odom.last_time = None
+        
+        # 等待新数据开始收集
+        time.sleep(0.2)
+        
+        # 开始加速测试
         cmd = Twist()
         cmd.linear.x = target_v
         start = time.time()
+        max_ax = 0
+        
         while time.time() - start < 2.0:
             self.cmd_pub.publish(cmd)
+            stats = self.odom.get_chassis_stats()
+            if stats and 'max_ax' in stats:
+                max_ax = max(max_ax, stats['max_ax'])
             time.sleep(0.02)
+        
+        # 停止机器人
         self.cmd_pub.publish(Twist())
         time.sleep(0.5)
+        
+        # 最终检查
         stats = self.odom.get_chassis_stats()
         if stats and 'max_ax' in stats:
-            self.results['max_acceleration'] = stats['max_ax']
-            return stats['max_ax']
-        return 0
+            max_ax = max(max_ax, stats['max_ax'])
+        
+        self.results['max_acceleration'] = max_ax
+        return max_ax
     
     def test_angular_velocity(self, target_w: float = 1.0, duration: float = 2.0) -> float:
         """测试最大角速度"""
-        print(f"  测试角速度 (目标: {target_w} rad/s)...")
+        safe_print(f"  测试角速度 (目标: {target_w} rad/s)...")
+        # 清空历史数据，只统计本次测试（线程安全）
+        with self.odom.lock:
+            self.odom.velocities.clear()
+        time.sleep(0.2)  # 等待新数据
+        
         cmd = Twist()
         cmd.angular.z = target_w
         start = time.time()
@@ -764,9 +827,15 @@ class ChassisTestRunner:
     
     def test_response_time(self, step_v: float = 0.3) -> Optional[float]:
         """测试响应时间"""
-        print(f"  测试响应时间...")
+        safe_print(f"  测试响应时间...")
         self.cmd_pub.publish(Twist())
         time.sleep(1.0)
+        
+        # 清空历史数据（线程安全）
+        with self.odom.lock:
+            self.odom.velocities.clear()
+        time.sleep(0.2)  # 等待新数据
+        
         start_time = time.time()
         threshold = step_v * 0.63  # 63% 时间常数
         cmd = Twist()
@@ -889,11 +958,16 @@ class UnifiedDiagnostics:
                 self.log_handle = None
     
     def _log(self, text: str):
-        """输出到控制台和日志文件"""
-        print(text)
+        """输出到控制台和日志文件（处理编码问题）"""
+        safe_print(text)
         if self.log_handle:
-            self.log_handle.write(text + '\n')
-            self.log_handle.flush()
+            try:
+                self.log_handle.write(text + '\n')
+                self.log_handle.flush()
+            except UnicodeEncodeError:
+                # 如果写入失败，尝试只写入ASCII
+                self.log_handle.write(text.encode('ascii', errors='replace').decode('ascii') + '\n')
+                self.log_handle.flush()
     
     # ==================== TF查询 ====================
     
@@ -1410,15 +1484,37 @@ class UnifiedDiagnostics:
         """阶段2: 底盘能力测试"""
         self._log(f"\n{Colors.BLUE}阶段2: 底盘能力测试{Colors.NC}\n")
         self._log(f"  {Colors.YELLOW}警告: 机器人会移动! 确保周围空间安全。{Colors.NC}")
-        input("  按 Enter 开始测试 (Ctrl+C 跳过)...")
         
-        tester = ChassisTestRunner(self.topics['cmd_vel'], self.monitors['odom'])
-        tester.setup()
-        tester.test_max_velocity(target_v=0.5)
-        tester.test_acceleration(target_v=0.3)
-        tester.test_angular_velocity(target_w=1.0)
-        tester.test_response_time(step_v=0.3)
-        self.results['chassis_tests'] = tester.results
+        try:
+            input("  按 Enter 开始测试 (Ctrl+C 跳过)...")
+        except KeyboardInterrupt:
+            self._log("\n  跳过底盘测试")
+            return
+        
+        # 重新启动里程计监控器（阶段1已经停止）
+        odom_monitor = OdometryAnalyzer(self.topics['odom'])
+        
+        try:
+            if odom_monitor.start():
+                self._log(f"  {Colors.GREEN}[OK]{Colors.NC} 重新订阅 {self.topics['odom']}")
+            else:
+                self._log(f"  {Colors.RED}[FAIL]{Colors.NC} 无法订阅里程计，跳过底盘测试")
+                return
+            
+            # 等待里程计数据稳定
+            self._log("  等待里程计数据...")
+            time.sleep(1.0)
+            
+            tester = ChassisTestRunner(self.topics['cmd_vel'], odom_monitor)
+            tester.setup()
+            tester.test_max_velocity(target_v=0.5)
+            tester.test_acceleration(target_v=0.3)
+            tester.test_angular_velocity(target_w=1.0)
+            tester.test_response_time(step_v=0.3)
+            self.results['chassis_tests'] = tester.results
+        finally:
+            # 确保监控器被停止
+            odom_monitor.stop()
     
     def _run_controller_diagnostics(self):
         """阶段3: 控制器运行时诊断"""
@@ -1471,15 +1567,33 @@ class UnifiedDiagnostics:
         elif odom_rate >= 50: ctrl_freq = 40
         elif odom_rate >= 20: ctrl_freq = 20
         else: ctrl_freq = max(10, int(odom_rate / 2))
+        
+        # 安全检查：确保 ctrl_freq 不为0
+        if ctrl_freq <= 0:
+            self._log(f"  {Colors.RED}[ERROR]{Colors.NC} 控制频率计算错误，使用默认值 20 Hz")
+            ctrl_freq = 20
+        
         ctrl_period_ms = 1000 / ctrl_freq
         
         # 底盘参数
-        max_v = chassis_tests.get('max_velocity_achieved', chassis.get('max_speed', 0.5))
-        max_a = chassis_tests.get('max_acceleration', chassis.get('max_ax', 0.5))
-        max_w = chassis_tests.get('max_angular_velocity', chassis.get('max_wz', 1.0))
-        max_alpha = chassis.get('max_alpha', 1.0)
-        response_time = chassis_tests.get('response_time', 0.2)
+        # 优先使用测试结果，其次使用阶段1的里程计数据，最后使用默认值
+        max_v = chassis_tests.get('max_velocity_achieved') or chassis.get('max_speed') or 0.5
+        max_a = chassis_tests.get('max_acceleration') or chassis.get('max_ax') or 0.5
+        max_w = chassis_tests.get('max_angular_velocity') or chassis.get('max_wz') or 1.0
+        max_alpha = chassis.get('max_alpha') or 1.0
+        response_time = chassis_tests.get('response_time') or 0.2
         safety_margin = 0.8
+        
+        # 验证底盘参数的合理性
+        if max_v <= 0:
+            self._log(f"  {Colors.YELLOW}[WARN]{Colors.NC} 未检测到有效速度数据，使用默认值 0.5 m/s")
+            max_v = 0.5
+        if max_a <= 0:
+            self._log(f"  {Colors.YELLOW}[WARN]{Colors.NC} 未检测到有效加速度数据，使用默认值 0.5 m/s^2")
+            max_a = 0.5
+        if max_w <= 0:
+            self._log(f"  {Colors.YELLOW}[WARN]{Colors.NC} 未检测到有效角速度数据，使用默认值 1.0 rad/s")
+            max_w = 1.0
         
         # 轨迹参数
         num_points = traj_info.get('num_points', 8)
@@ -1930,11 +2044,15 @@ class UnifiedDiagnostics:
 
 """
         
-        with open(output_file, 'w') as f:
-            f.write(header)
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(header)
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            self._log(f"  {Colors.GREEN}[OK]{Colors.NC} 配置已保存到: {output_file}")
+        except Exception as e:
+            self._log(f"  {Colors.RED}[ERROR]{Colors.NC} 保存配置文件失败: {e}")
+            return
         
-        self._log(f"  {Colors.GREEN}[OK]{Colors.NC} 配置已保存到: {output_file}")
         self._log(f"\n{Colors.CYAN}使用方法:{Colors.NC}")
         self._log(f"  roslaunch controller_ros controller.launch config:=$(pwd)/{output_file}")
 
@@ -2033,19 +2151,26 @@ class UnifiedDiagnostics:
         # ===== 第一阶段: 系统调优 =====
         print(f"{Colors.MAGENTA}=== 第一阶段: 系统调优诊断 ==={Colors.NC}\n")
         
-        self._run_topic_monitoring()
+        self._init_log()  # Initialize log for tuning phase
         
-        if self.args.test_chassis:
-            self._run_chassis_tests()
-        
-        if self.args.runtime_tuning:
-            self._run_controller_diagnostics()
-        
-        self._calculate_recommendations()
-        self._show_tuning_results()
-        
-        if self.args.output:
-            self._generate_config(self.args.output)
+        try:
+            self._run_topic_monitoring()
+            
+            if self.args.test_chassis:
+                self._run_chassis_tests()
+            
+            if self.args.runtime_tuning:
+                self._run_controller_diagnostics()
+            
+            self._calculate_recommendations()
+            self._show_tuning_results()
+            
+            if self.args.output:
+                self._generate_config(self.args.output)
+        finally:
+            self._close_log()  # Close log after tuning phase
+            if self.log_file:
+                print(f"\n第一阶段日志已保存到: {self.log_file}")
         
         # ===== 第二阶段: 实时监控 =====
         print(f"\n{Colors.MAGENTA}=== 第二阶段: 实时监控 ==={Colors.NC}")
@@ -2057,7 +2182,7 @@ class UnifiedDiagnostics:
             return
         
         self._init_tf2()
-        self._init_log()
+        self._init_log()  # Reinitialize log for realtime phase
         
         if CUSTOM_MSG_AVAILABLE:
             rospy.Subscriber(self.topics['trajectory'], LocalTrajectoryV4, self._traj_callback, queue_size=10)
@@ -2108,6 +2233,15 @@ class UnifiedDiagnostics:
 # ============================================================================
 
 def main():
+    # 在Windows上设置控制台编码
+    if sys.platform == 'win32':
+        try:
+            # 尝试设置控制台代码页为UTF-8
+            import subprocess
+            subprocess.call('chcp 65001', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            pass
+    
     parser = argparse.ArgumentParser(
         description='统一诊断工具 v2.1 - 完整合并实时监控与系统调优',
         formatter_class=argparse.RawDescriptionHelpFormatter,
