@@ -2164,9 +2164,14 @@ def main():
     
     args = parser.parse_args()
     
-    # 默认日志文件
-    if args.log_file is None and args.mode in ['realtime', 'full']:
-        args.log_file = '/tmp/unified_diag.log'
+    # 默认日志文件 - 所有模式都支持日志
+    if args.log_file is None:
+        if args.mode == 'realtime':
+            args.log_file = '/tmp/unified_diag_realtime.log'
+        elif args.mode == 'tuning':
+            args.log_file = '/tmp/unified_diag_tuning.log'
+        elif args.mode == 'full':
+            args.log_file = '/tmp/unified_diag_full.log'
     
     try:
         diag = UnifiedDiagnostics(args)
