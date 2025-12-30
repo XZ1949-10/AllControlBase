@@ -132,8 +132,8 @@ def test_trajectory_adapter_soft_mode_partial_truncate():
     
     设计说明：
     - 当速度点少于位置点时，使用线性衰减填充
-    - 衰减从最后一个速度点开始，线性衰减到零
-    - 这确保轨迹末端平滑减速，避免高速运动到轨迹末端
+    - 衰减公式: decay_factor = (padding_count - i) / (padding_count + 1)
+    - 这确保从最后一个速度点平滑过渡到接近零（但不为零）
     """
     from controller_ros.adapters.trajectory_adapter import TrajectoryAdapter
     
@@ -150,19 +150,20 @@ def test_trajectory_adapter_soft_mode_partial_truncate():
     assert uc_traj.velocities.shape == (10, 4)
     assert uc_traj.velocities[0, 0] == 1.0
     
-    # 填充的点应该线性衰减到零
-    # 填充 9 个点，衰减因子: (9-1-i)/9 = (8-i)/9
-    # i=0 (index 1): 8/9 ≈ 0.889
-    # i=8 (index 9): 0/9 = 0
+    # 填充的点应该线性衰减
+    # 填充 9 个点，衰减因子: (padding_count - i) / (padding_count + 1)
+    # i=0 (index 1): 9/10 = 0.9
+    # i=8 (index 9): 1/10 = 0.1 (接近零但不为零)
     padding_count = 9
     for i in range(padding_count):
-        expected_decay = (padding_count - 1 - i) / padding_count
+        expected_decay = (padding_count - i) / (padding_count + 1)
         expected_vx = 1.0 * expected_decay
         assert abs(uc_traj.velocities[1 + i, 0] - expected_vx) < 0.001, \
             f"Point {1+i} should have decayed velocity {expected_vx}, got {uc_traj.velocities[1+i, 0]}"
     
-    # 最后一个填充点应该接近零
-    assert abs(uc_traj.velocities[9, 0]) < 0.001
+    # 最后一个填充点应该接近零（但不完全为零）
+    expected_last = 1.0 * (1 / (padding_count + 1))
+    assert abs(uc_traj.velocities[9, 0] - expected_last) < 0.001
 
 
 def test_trajectory_adapter_velocity_points_mismatch():
@@ -189,8 +190,8 @@ def test_trajectory_adapter_velocity_padding():
     
     设计说明：
     - 当速度点少于位置点时，使用线性衰减填充
-    - 衰减从最后一个速度点开始，线性衰减到零
-    - 这确保轨迹末端平滑减速，避免高速运动到轨迹末端
+    - 衰减公式: decay_factor = (padding_count - i) / (padding_count + 1)
+    - 这确保从最后一个速度点平滑过渡到接近零（但不为零）
     """
     from controller_ros.adapters.trajectory_adapter import TrajectoryAdapter
     
@@ -216,20 +217,21 @@ def test_trajectory_adapter_velocity_padding():
     assert uc_traj.velocities[1, 0] == 2.0
     assert uc_traj.velocities[2, 0] == 3.0
     
-    # 后 7 个点应该线性衰减到零
+    # 后 7 个点应该线性衰减
     # 最后一个速度点是 [3.0, 0.3, 0.0, 0.03]
-    # 填充 7 个点，衰减因子: (7-1-i)/7 = (6-i)/7
+    # 填充 7 个点，衰减因子: (padding_count - i) / (padding_count + 1)
     padding_count = 7
     last_vel = np.array([3.0, 0.3, 0.0, 0.03])
     for i in range(padding_count):
-        expected_decay = (padding_count - 1 - i) / padding_count
+        expected_decay = (padding_count - i) / (padding_count + 1)
         expected_vel = last_vel * expected_decay
         actual_vel = uc_traj.velocities[3 + i]
         assert np.allclose(actual_vel, expected_vel, atol=0.001), \
             f"Point {3+i} should have decayed velocity {expected_vel}, got {actual_vel}"
     
-    # 最后一个填充点应该接近零
-    assert np.allclose(uc_traj.velocities[9], [0, 0, 0, 0], atol=0.001)
+    # 最后一个填充点应该接近零（但不完全为零）
+    expected_last = last_vel * (1 / (padding_count + 1))
+    assert np.allclose(uc_traj.velocities[9], expected_last, atol=0.001)
 
 
 def test_output_adapter_to_ros():

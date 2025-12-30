@@ -8,6 +8,11 @@
 - DiagnosticsPublisher: 构建诊断数据并通过回调机制传递
 - ROS 消息发布由 controller_ros/io/publishers.py 中的 PublisherManager 负责
 - 这种设计使 universal_controller 保持 ROS 无关性
+
+注意：
+- 话题名称 (diagnostics_topic, cmd_topic) 是 ROS 层特有配置
+- 核心库不应该知道 ROS 话题的存在
+- 这些参数仅用于日志记录，实际发布由 ROS 层处理
 """
 from typing import Dict, Any, Optional, Callable, List
 import numpy as np
@@ -44,18 +49,12 @@ class DiagnosticsPublisher:
         publisher.publish(...)
     """
     
-    def __init__(self, diagnostics_topic: str = '/controller/diagnostics',
-                 cmd_topic: str = '/cmd_unified'):
+    def __init__(self):
         """
         初始化诊断发布器
         
-        Args:
-            diagnostics_topic: 诊断话题名称（用于日志和状态查询）
-            cmd_topic: 控制命令话题名称（用于日志和状态查询）
+        注意: 话题名称配置已移至 ROS 层，核心库不再处理话题相关配置
         """
-        self._diagnostics_topic = diagnostics_topic
-        self._cmd_topic = cmd_topic
-        
         # 回调函数（线程安全）
         self._callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._callbacks_lock = threading.Lock()
@@ -66,16 +65,6 @@ class DiagnosticsPublisher:
         
         # 发布历史
         self._last_published: Optional[Dict[str, Any]] = None
-    
-    @property
-    def cmd_topic(self) -> str:
-        """获取控制命令话题名称"""
-        return self._cmd_topic
-    
-    @property
-    def diagnostics_topic(self) -> str:
-        """获取诊断话题名称"""
-        return self._diagnostics_topic
     
     def add_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """
@@ -118,7 +107,8 @@ class DiagnosticsPublisher:
                 transition_progress: float,
                 tf2_critical: bool,
                 safety_check_passed: bool = True,
-                emergency_stop: bool = False) -> None:
+                emergency_stop: bool = False,
+                tracking_quality: Optional[Dict[str, Any]] = None) -> None:
         """
         发布诊断数据
         
@@ -136,12 +126,13 @@ class DiagnosticsPublisher:
             tf2_critical: TF2 是否临界
             safety_check_passed: 安全检查是否通过
             emergency_stop: 是否处于紧急停止状态
+            tracking_quality: 跟踪质量评估结果
         """
         diag = self._build_diagnostics(
             current_time, state, cmd, state_output, consistency,
             mpc_health, timeout_status, transform_status,
             tracking_error, transition_progress, tf2_critical,
-            safety_check_passed, emergency_stop
+            safety_check_passed, emergency_stop, tracking_quality
         )
         
         diag_dict = diag.to_ros_msg()
@@ -202,7 +193,8 @@ class DiagnosticsPublisher:
                           transition_progress: float,
                           tf2_critical: bool,
                           safety_check_passed: bool = True,
-                          emergency_stop: bool = False) -> DiagnosticsV2:
+                          emergency_stop: bool = False,
+                          tracking_quality: Optional[Dict[str, Any]] = None) -> DiagnosticsV2:
         """构建 DiagnosticsV2 消息"""
         return DiagnosticsV2(
             header=Header(stamp=current_time, frame_id=''),
@@ -239,11 +231,18 @@ class DiagnosticsPublisher:
             tracking_heading_error=tracking_error.get('heading_error', 0.0) if tracking_error else 0.0,
             tracking_prediction_error=tracking_error.get('prediction_error', 0.0) if tracking_error else 0.0,
             
+            # 跟踪质量
+            tracking_quality_score=tracking_quality.get('overall_score', 0.0) if tracking_quality else 0.0,
+            tracking_quality_rating=tracking_quality.get('rating', 'unknown') if tracking_quality else 'unknown',
+            
             # 坐标变换状态
             transform_tf2_available=not tf2_critical,
             transform_tf2_injected=transform_status.get('tf2_injected', False),
             transform_fallback_duration_ms=transform_status.get('fallback_duration_ms', 0.0),
             transform_accumulated_drift=transform_status.get('accumulated_drift', 0.0),
+            transform_source_frame=transform_status.get('source_frame', ''),
+            transform_target_frame=transform_status.get('target_frame', ''),
+            transform_error_message=transform_status.get('error_message', ''),
             
             # 超时状态
             timeout_odom=timeout_status.odom_timeout,

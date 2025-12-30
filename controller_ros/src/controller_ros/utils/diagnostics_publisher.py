@@ -221,6 +221,9 @@ def fill_diagnostics_msg(msg: Any, diag: Dict[str, Any],
     msg.transform_tf2_injected = bool(transform.get('tf2_injected', False))
     msg.transform_fallback_duration_ms = safe_float(transform.get('fallback_duration_ms', 0.0))
     msg.transform_accumulated_drift = safe_float(transform.get('accumulated_drift', 0.0))
+    msg.transform_source_frame = str(transform.get('source_frame', ''))
+    msg.transform_target_frame = str(transform.get('target_frame', ''))
+    msg.transform_error_message = str(transform.get('error_message', ''))
     
     # 超时状态
     timeout = diag.get('timeout', {})

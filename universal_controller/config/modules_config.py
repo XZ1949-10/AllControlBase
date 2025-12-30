@@ -62,6 +62,7 @@ TRANSFORM_CONFIG = {
     'timeout_ms': 10,                 # TF2 查询超时 (ms)，与 YAML tf.timeout_ms 保持一致
     'drift_estimation_enabled': False,    # 漂移估计开关
     'recovery_correction_enabled': True, # 恢复校正开关
+    'max_accumulated_drift': 1.0,     # 漂移累积上限 (米) - 超过后停止累积
     'drift_rate': 0.01,               # 漂移率 (米/秒)
     'drift_velocity_factor': 0.1,     # 速度漂移因子 (每 1 m/s 增加的漂移率比例)
     'max_drift_dt': 0.5,              # 漂移估计最大时间间隔 (秒)
@@ -125,10 +126,7 @@ BACKUP_CONFIG = {
     'kp_z': 1.0,                      # Z 方向增益 (3D 平台用)
     'kp_heading': 1.5,                # 航向增益
     
-    # 时间步长
-    # 注意: 这是 Pure Pursuit 的控制周期，通常与系统控制频率相关
-    # 而不是与轨迹时间步长相关
-    'dt': 0.02,                       # 时间步长 (秒) - 对应 50Hz 控制频率
+    # 注意: 时间步长统一使用 system.ctrl_freq 计算 (dt = 1/ctrl_freq)
     
     # 航向模式
     'heading_mode': 'follow_velocity',  # 航向模式: follow_velocity, fixed, target_point, manual

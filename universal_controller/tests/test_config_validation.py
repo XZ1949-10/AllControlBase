@@ -113,5 +113,39 @@ def test_get_config_value_from_default():
     assert value == 20  # 从 DEFAULT_CONFIG 获取
 
 
+def test_validate_config_alpha_max_constraint():
+    """测试角加速度约束验证 - alpha_max 必须大于 0"""
+    config = DEFAULT_CONFIG.copy()
+    config['constraints'] = DEFAULT_CONFIG['constraints'].copy()
+    config['constraints']['alpha_max'] = 0  # 无效值
+    
+    errors = validate_config(config, raise_on_error=False)
+    assert len(errors) > 0
+    assert any('alpha_max' in key for key, _ in errors)
+    
+    # 测试负值
+    config['constraints']['alpha_max'] = -1.0
+    errors = validate_config(config, raise_on_error=False)
+    assert len(errors) > 0
+    assert any('alpha_max' in key for key, _ in errors)
+
+
+def test_validate_config_az_max_constraint():
+    """测试垂直加速度约束验证 - az_max 必须大于 0"""
+    config = DEFAULT_CONFIG.copy()
+    config['constraints'] = DEFAULT_CONFIG['constraints'].copy()
+    config['constraints']['az_max'] = 0  # 无效值
+    
+    errors = validate_config(config, raise_on_error=False)
+    assert len(errors) > 0
+    assert any('az_max' in key for key, _ in errors)
+    
+    # 测试负值
+    config['constraints']['az_max'] = -5.0
+    errors = validate_config(config, raise_on_error=False)
+    assert len(errors) > 0
+    assert any('az_max' in key for key, _ in errors)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

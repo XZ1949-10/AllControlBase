@@ -6,7 +6,7 @@ import logging
 
 from ..core.interfaces import IConsistencyChecker
 from ..core.data_types import Trajectory, ConsistencyResult, Point3D
-from ..core.constants import MIN_SEGMENT_LENGTH, MIN_DENOMINATOR, MIN_RELATIVE_CROSS
+from ..core.constants import EPSILON, MIN_SEGMENT_LENGTH, MIN_DENOMINATOR, MIN_RELATIVE_CROSS
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         total_effective_weight = effective_w_kappa + effective_w_velocity + effective_w_temporal
         
         # 如果没有任何有效数据，返回保守的 alpha 值
-        if total_effective_weight < 1e-6:
+        if total_effective_weight < EPSILON:
             return ConsistencyResult(
                 alpha=self.invalid_data_confidence * confidence,  # 保守估计
                 kappa_consistency=kappa_consistency,
@@ -165,7 +165,7 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         v_soft = v_soft[:min_len, :2]
         dot_product = np.sum(v_hard * v_soft, axis=1)
         norms = np.linalg.norm(v_hard, axis=1) * np.linalg.norm(v_soft, axis=1)
-        valid_mask = norms > 1e-6
+        valid_mask = norms > EPSILON
         
         if not np.any(valid_mask):
             return 0.5, False

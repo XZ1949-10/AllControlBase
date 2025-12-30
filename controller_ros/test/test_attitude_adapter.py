@@ -88,49 +88,8 @@ class TestAttitudeAdapter:
 # 新版 ParamLoader 使用 copy.deepcopy 和 _load_recursive
 # 相关测试已移至 test_param_loader.py
 
-
-class TestTimeSync:
-    """测试 TimeSync 类"""
-    
-    def test_check_freshness(self):
-        """测试数据新鲜度检查"""
-        from controller_ros.utils import TimeSync
-        
-        sync = TimeSync(
-            max_odom_age_ms=100,
-            max_traj_age_ms=200,
-            max_imu_age_ms=50
-        )
-        
-        # 所有数据新鲜
-        ages = {'odom': 0.05, 'trajectory': 0.1, 'imu': 0.02}
-        timeouts = sync.check_freshness(ages)
-        
-        assert timeouts['odom_timeout'] == False
-        assert timeouts['traj_timeout'] == False
-        assert timeouts['imu_timeout'] == False
-        
-        # odom 超时
-        ages = {'odom': 0.15, 'trajectory': 0.1, 'imu': 0.02}
-        timeouts = sync.check_freshness(ages)
-        
-        assert timeouts['odom_timeout'] == True
-        assert timeouts['traj_timeout'] == False
-        assert timeouts['imu_timeout'] == False
-    
-    def test_is_all_fresh(self):
-        """测试所有数据新鲜度检查"""
-        from controller_ros.utils import TimeSync
-        
-        sync = TimeSync(max_odom_age_ms=100, max_traj_age_ms=200)
-        
-        # 所有必需数据新鲜
-        ages = {'odom': 0.05, 'trajectory': 0.1}
-        assert sync.is_all_fresh(ages) == True
-        
-        # odom 超时
-        ages = {'odom': 0.15, 'trajectory': 0.1}
-        assert sync.is_all_fresh(ages) == False
+# 注意: TestTimeSync 测试类已移除
+# TimeSync 已被删除，超时监控统一使用 universal_controller 的 TimeoutMonitor
 
 
 class TestAttitudeAdapterToRos:

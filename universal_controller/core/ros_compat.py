@@ -91,7 +91,7 @@ def euler_from_quaternion(q: Tuple[float, float, float, float]) -> Tuple[float, 
     if norm_sq < 1e-10:
         # 无效四元数，返回零欧拉角
         return (0.0, 0.0, 0.0)
-    if abs(norm_sq - 1.0) > 1e-6:
+    if abs(norm_sq - 1.0) > EPSILON:
         # 需要归一化
         norm = np.sqrt(norm_sq)
         x, y, z, w = x/norm, y/norm, z/norm, w/norm

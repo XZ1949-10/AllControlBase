@@ -4,9 +4,9 @@
 轨迹发布器 - 订阅 /waypoint 话题并转换为 LocalTrajectoryV4 消息
 
 功能:
-- 订阅 /waypoint (std_msgs/Float32MultiArray)，包含 8 个点的 [x, y] 坐标
+- 订阅 /waypoint (std_msgs/Float32MultiArray)，包含 N 个点的 [x, y] 坐标
 - 转换为 controller_ros/LocalTrajectoryV4 格式
-- 发布到 /nn/local_trajectory 话题
+- 发布到 /controller/input/trajectory 话题
 
 使用方法:
     rosrun controller_ros trajectory_publisher.py
@@ -14,8 +14,8 @@
 
 话题:
     订阅: /waypoint (std_msgs/Float32MultiArray)
-           data 格式: [x0, y0, x1, y1, x2, y2, ..., x7, y7] (16 个 float)
-    发布: /nn/local_trajectory (controller_ros/LocalTrajectoryV4)
+           data 格式: [x0, y0, x1, y1, x2, y2, ..., xN, yN]
+    发布: /controller/input/trajectory (controller_ros/LocalTrajectoryV4)
 
 重要:
     - 输入轨迹坐标系假设为 base_link (机器人当前位置为原点，X轴朝前)
@@ -80,7 +80,7 @@ class TrajectoryPublisher:
             self.frame_id = rospy.get_param('transform/source_frame', 'base_footprint')
         
         input_topic = rospy.get_param('~input_topic', '/waypoint')
-        output_topic = rospy.get_param('~output_topic', '/nn/local_trajectory')
+        output_topic = rospy.get_param('~output_topic', '/controller/input/trajectory')
         
         # 发布器
         self.pub = rospy.Publisher(output_topic, LocalTrajectoryV4, queue_size=1)
@@ -234,7 +234,7 @@ class StopTrajectoryPublisher:
     
     def __init__(self):
         rospy.init_node('stop_trajectory_publisher', anonymous=True)
-        output_topic = rospy.get_param('~output_topic', '/nn/local_trajectory')
+        output_topic = rospy.get_param('~output_topic', '/controller/input/trajectory')
         
         # 坐标系配置 - 使用统一的参数加载器
         private_frame = rospy.get_param('~frame_id', None)

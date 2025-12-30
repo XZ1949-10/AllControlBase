@@ -30,26 +30,21 @@ SAFETY_CONFIG = {
     'vz_stop_thresh': 0.1,      # 垂直停车速度阈值 (m/s)
     'stopping_timeout': 5.0,    # 停车超时时间 (秒)
     'emergency_decel': 3.0,     # 紧急减速度 (m/s²)
-    'velocity_margin': 1.1,     # 速度限制裕度 (已废弃，使用 margins.velocity)
-    'accel_margin': 1.5,        # 加速度限制裕度 (已废弃，使用 margins.acceleration)
+    'velocity_margin': 1.1,     # 速度限制裕度 (安全检查时的速度上限倍数)
+    'accel_margin': 1.5,        # 加速度限制裕度 (安全检查时的加速度上限倍数)
     
-    # 低速保护配置 (Dashboard 显示用)
-    'low_speed': {
-        'threshold': 0.1,       # 低速阈值 (m/s)
-        'omega_limit': 1.0,     # 低速角速度限制 (rad/s)
-    },
-    
-    # 安全裕度配置 (Dashboard 显示用)
-    'margins': {
-        'velocity': 1.1,        # 速度裕度 (110%)
-        'acceleration': 1.5,    # 加速度裕度 (150%)
-    },
+    # 注意: 低速保护参数统一在 CONSTRAINTS_CONFIG 中定义:
+    # - omega_max_low: 低速时最大角速度
+    # - v_low_thresh: 低速阈值
     
     # 加速度滤波参数
     'accel_filter_window': 3,        # 滑动窗口大小
     'accel_filter_alpha': 0.3,       # 低通滤波系数
     'accel_filter_warmup_alpha': 0.5,  # 滤波器预热期间的系数
     'accel_filter_warmup_period': 3,   # 滤波器预热期长度
+    'accel_warmup_margin_multiplier': 1.5,  # 预热期间裕度倍数
+    'accel_warmup_margin_max': 2.0,    # 预热期间裕度上限 (防止配置错误)
+    'accel_absolute_max_multiplier': 2.0,   # 绝对加速度上限倍数 (硬性安全限制)
     'min_dt_for_accel': 0.001,       # 加速度计算的最小时间间隔 (秒)
     'max_dt_for_accel': 1.0,         # 加速度计算的最大时间间隔 (秒)
     
@@ -127,6 +122,9 @@ SAFETY_VALIDATION_RULES = {
     'safety.accel_filter_window': (1, 20, '加速度滤波窗口大小'),
     'safety.accel_filter_alpha': (0.0, 1.0, '加速度滤波系数'),
     'safety.accel_filter_warmup_period': (1, 20, '滤波器预热期长度'),
+    'safety.accel_warmup_margin_multiplier': (1.0, 5.0, '预热期间裕度倍数'),
+    'safety.accel_warmup_margin_max': (1.0, 5.0, '预热期间裕度上限'),
+    'safety.accel_absolute_max_multiplier': (1.0, 10.0, '绝对加速度上限倍数'),
     # 状态机配置
     'safety.state_machine.alpha_recovery_thresh': (1, 100, 'α 恢复计数阈值'),
     'safety.state_machine.alpha_recovery_value': (0.0, 1.0, 'α 恢复值'),

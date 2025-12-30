@@ -85,7 +85,10 @@ def ros_msg_to_dict(msg) -> Dict[str, Any]:
             'tf2_available': msg.transform_tf2_available,
             'tf2_injected': msg.transform_tf2_injected,
             'fallback_duration_ms': msg.transform_fallback_duration_ms,
-            'accumulated_drift': msg.transform_accumulated_drift
+            'accumulated_drift': msg.transform_accumulated_drift,
+            'source_frame': getattr(msg, 'transform_source_frame', ''),
+            'target_frame': getattr(msg, 'transform_target_frame', ''),
+            'error_message': getattr(msg, 'transform_error_message', '')
         },
         'timeout': {
             'odom_timeout': msg.timeout_odom,

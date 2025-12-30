@@ -52,27 +52,65 @@ class TrajectoryDefaults:
     default_confidence: float = 0.9
     default_frame_id: str = 'base_link'
     
+    # 置信度范围 (用于 clip)
+    min_confidence: float = 0.0
+    max_confidence: float = 1.0
+    
+    # 验证参数
+    min_dt_sec: float = 0.01
+    max_dt_sec: float = 1.0
+    min_points: int = 2
+    max_points: int = 100
+    max_point_distance: float = 10.0
+    
+    # 验证开关
+    validate_enabled: bool = True
+    
     @classmethod
     def configure(cls, config: Dict[str, Any]) -> None:
         """
         从配置字典更新默认值
         
         Args:
-            config: 配置字典，应包含 'trajectory' 键
+            config: 配置字典，应包含 'trajectory' 和 'transform' 键
         
         Example:
             >>> from universal_controller.config import DEFAULT_CONFIG
             >>> TrajectoryDefaults.configure(DEFAULT_CONFIG)
         """
         traj_config = config.get('trajectory', {})
+        transform_config = config.get('transform', {})
+        
+        # 基本参数
         if 'default_dt_sec' in traj_config:
             cls.dt_sec = traj_config['default_dt_sec']
         if 'low_speed_thresh' in traj_config:
             cls.low_speed_thresh = traj_config['low_speed_thresh']
         if 'default_confidence' in traj_config:
             cls.default_confidence = traj_config['default_confidence']
-        if 'default_frame_id' in traj_config:
-            cls.default_frame_id = traj_config['default_frame_id']
+        
+        # 置信度范围参数
+        if 'min_confidence' in traj_config:
+            cls.min_confidence = traj_config['min_confidence']
+        if 'max_confidence' in traj_config:
+            cls.max_confidence = traj_config['max_confidence']
+        
+        # 坐标系配置: 统一从 transform 读取
+        # 轨迹的默认坐标系应与 transform.source_frame 一致
+        if 'source_frame' in transform_config:
+            cls.default_frame_id = transform_config['source_frame']
+        
+        # 验证参数
+        if 'min_dt_sec' in traj_config:
+            cls.min_dt_sec = traj_config['min_dt_sec']
+        if 'max_dt_sec' in traj_config:
+            cls.max_dt_sec = traj_config['max_dt_sec']
+        if 'min_points' in traj_config:
+            cls.min_points = traj_config['min_points']
+        if 'max_points' in traj_config:
+            cls.max_points = traj_config['max_points']
+        if 'max_point_distance' in traj_config:
+            cls.max_point_distance = traj_config['max_point_distance']
 
 
 # 模拟 ROS Header
@@ -117,6 +155,12 @@ class Trajectory:
     
     Note:
         默认值从 TrajectoryDefaults 获取，可通过 TrajectoryDefaults.configure() 修改
+        
+    缓存机制:
+        get_hard_velocities() 使用内部缓存，避免重复计算。
+        缓存在以下情况下失效：
+        - 首次调用
+        - points 或 dt_sec 发生变化（通过 _cache_key 检测）
     """
     header: Header
     points: List[Point3D]
@@ -126,6 +170,10 @@ class Trajectory:
     mode: TrajectoryMode = TrajectoryMode.MODE_TRACK
     soft_enabled: bool = False
     low_speed_thresh: float = field(default=None, repr=False, compare=False)
+    
+    # 缓存字段（不参与比较和 repr）
+    _hard_velocities_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
+    _cache_key: Optional[tuple] = field(default=None, repr=False, compare=False, init=False)
     
     def __post_init__(self):
         # 使用 TrajectoryDefaults 填充默认值
@@ -142,12 +190,21 @@ class Trajectory:
             logger.warning(f"Trajectory confidence={self.confidence} invalid (NaN/Inf), using default {TrajectoryDefaults.default_confidence}")
             self.confidence = TrajectoryDefaults.default_confidence
         else:
-            self.confidence = np.clip(self.confidence, 0.0, 1.0)
+            # 使用配置的 min_confidence 和 max_confidence 进行 clip
+            self.confidence = np.clip(
+                self.confidence, 
+                TrajectoryDefaults.min_confidence, 
+                TrajectoryDefaults.max_confidence
+            )
         
         # 验证 dt_sec: 必须是正的有限数值
         if not np.isfinite(self.dt_sec) or self.dt_sec <= 0:
             logger.warning(f"Trajectory dt_sec={self.dt_sec} invalid, using default {TrajectoryDefaults.dt_sec}")
             self.dt_sec = TrajectoryDefaults.dt_sec
+        
+        # 轨迹验证 (使用配置的验证参数)
+        if TrajectoryDefaults.validate_enabled:
+            self._validate_trajectory()
         
         # 验证 velocities 维度与 points 匹配
         # 这是一个警告而非错误，因为某些情况下维度不匹配是可接受的
@@ -159,8 +216,73 @@ class Trajectory:
                     f"This may cause issues in velocity-based control."
                 )
     
+    def _validate_trajectory(self) -> None:
+        """
+        验证轨迹数据的有效性
+        
+        验证内容:
+        1. dt_sec 在 [min_dt_sec, max_dt_sec] 范围内
+        2. 轨迹点数在 [min_points, max_points] 范围内
+        3. 相邻点距离不超过 max_point_distance
+        
+        验证失败时记录警告，不会抛出异常
+        """
+        # 验证 dt_sec 范围
+        if self.dt_sec < TrajectoryDefaults.min_dt_sec:
+            logger.warning(
+                f"Trajectory dt_sec={self.dt_sec:.4f}s < min_dt_sec={TrajectoryDefaults.min_dt_sec:.4f}s, "
+                f"clamping to min value"
+            )
+            self.dt_sec = TrajectoryDefaults.min_dt_sec
+        elif self.dt_sec > TrajectoryDefaults.max_dt_sec:
+            logger.warning(
+                f"Trajectory dt_sec={self.dt_sec:.4f}s > max_dt_sec={TrajectoryDefaults.max_dt_sec:.4f}s, "
+                f"clamping to max value"
+            )
+            self.dt_sec = TrajectoryDefaults.max_dt_sec
+        
+        # 验证轨迹点数
+        num_points = len(self.points)
+        if num_points < TrajectoryDefaults.min_points:
+            logger.warning(
+                f"Trajectory has {num_points} points < min_points={TrajectoryDefaults.min_points}, "
+                f"control quality may be degraded"
+            )
+        elif num_points > TrajectoryDefaults.max_points:
+            logger.warning(
+                f"Trajectory has {num_points} points > max_points={TrajectoryDefaults.max_points}, "
+                f"consider truncating for performance"
+            )
+        
+        # 验证相邻点距离
+        if len(self.points) >= 2:
+            max_dist = TrajectoryDefaults.max_point_distance
+            for i in range(len(self.points) - 1):
+                p0, p1 = self.points[i], self.points[i + 1]
+                dist = np.sqrt((p1.x - p0.x)**2 + (p1.y - p0.y)**2 + (p1.z - p0.z)**2)
+                if dist > max_dist:
+                    logger.warning(
+                        f"Trajectory point distance {dist:.2f}m at index {i} > max_point_distance={max_dist:.2f}m, "
+                        f"trajectory may be discontinuous"
+                    )
+                    break  # 只报告第一个异常，避免日志刷屏
+    
     def __len__(self) -> int:
         return len(self.points)
+    
+    def _compute_cache_key(self) -> tuple:
+        """计算缓存键，用于检测 points 或 dt_sec 是否变化"""
+        # 使用 points 的长度和首尾点坐标作为快速检测
+        # 这是一个权衡：完整比较所有点太慢，但只比较长度可能漏检
+        # 首尾点 + 长度 + dt_sec 的组合在实际使用中足够可靠
+        if len(self.points) == 0:
+            return (0, self.dt_sec)
+        elif len(self.points) == 1:
+            p = self.points[0]
+            return (1, p.x, p.y, p.z, self.dt_sec)
+        else:
+            p0, p_last = self.points[0], self.points[-1]
+            return (len(self.points), p0.x, p0.y, p0.z, p_last.x, p_last.y, p_last.z, self.dt_sec)
     
     def copy(self) -> 'Trajectory':
         """
@@ -184,9 +306,21 @@ class Trajectory:
         )
     
     def get_hard_velocities(self) -> np.ndarray:
-        """从 Hard 轨迹点计算隐含速度"""
+        """从 Hard 轨迹点计算隐含速度
+        
+        使用缓存机制避免重复计算。缓存在 points 或 dt_sec 变化时自动失效。
+        """
+        # 检查缓存是否有效
+        current_key = self._compute_cache_key()
+        if self._hard_velocities_cache is not None and self._cache_key == current_key:
+            return self._hard_velocities_cache
+        
+        # 计算速度
         if len(self.points) < 2:
-            return np.zeros((1, 4))
+            result = np.zeros((1, 4))
+            self._hard_velocities_cache = result
+            self._cache_key = current_key
+            return result
         
         velocities = []
         n = len(self.points)
@@ -226,7 +360,13 @@ class Trajectory:
             velocities.append([vx, vy, vz, wz])
         
         velocities.append(velocities[-1])
-        return np.array(velocities)
+        result = np.array(velocities)
+        
+        # 更新缓存
+        self._hard_velocities_cache = result
+        self._cache_key = current_key
+        
+        return result
     
     def get_velocities(self) -> np.ndarray:
         """获取速度数组（统一接口）"""
@@ -236,6 +376,65 @@ class Trajectory:
     
     def has_valid_soft_velocities(self) -> bool:
         return self.soft_enabled and self.velocities is not None and len(self.velocities) > 0
+    
+    def get_blended_velocity(self, index: int, alpha: float) -> np.ndarray:
+        """
+        获取混合后的速度向量
+        
+        使用公式: final_vel = alpha * soft_vel + (1 - alpha) * hard_vel
+        
+        Args:
+            index: 轨迹点索引
+            alpha: 一致性系数 [0, 1]，alpha=1 表示完全使用 soft，alpha=0 表示完全使用 hard
+        
+        Returns:
+            混合后的速度向量 [vx, vy, vz, wz]
+        
+        Note:
+            - 当 soft_enabled=False 时，返回 hard velocities
+            - 当 soft velocities 不可用时，返回 hard velocities
+            - 索引超出范围时，使用最后一个有效索引
+        """
+        hard_velocities = self.get_hard_velocities()
+        
+        # 确保索引有效
+        hard_idx = min(index, len(hard_velocities) - 1) if len(hard_velocities) > 0 else 0
+        
+        if len(hard_velocities) == 0:
+            return np.zeros(4)
+        
+        hard_vel = hard_velocities[hard_idx]
+        
+        # 如果 soft 不可用，直接返回 hard
+        if not self.has_valid_soft_velocities():
+            return hard_vel.copy()
+        
+        # 确保 soft 索引有效
+        soft_idx = min(index, len(self.velocities) - 1)
+        soft_vel = self.velocities[soft_idx]
+        
+        # 确保 soft_vel 是 4 维
+        if len(soft_vel) < 4:
+            soft_vel_4d = np.zeros(4)
+            soft_vel_4d[:len(soft_vel)] = soft_vel
+            soft_vel = soft_vel_4d
+        
+        # 混合: alpha * soft + (1 - alpha) * hard
+        return alpha * soft_vel + (1 - alpha) * hard_vel
+    
+    def get_blended_speed(self, index: int, alpha: float) -> float:
+        """
+        获取混合后的水平速度大小
+        
+        Args:
+            index: 轨迹点索引
+            alpha: 一致性系数 [0, 1]
+        
+        Returns:
+            混合后的水平速度大小 (m/s)
+        """
+        vel = self.get_blended_velocity(index, alpha)
+        return np.sqrt(vel[0]**2 + vel[1]**2)
 
 
 @dataclass
@@ -372,66 +571,78 @@ class AttitudeCommand:
 
 @dataclass
 class DiagnosticsV2:
-    """诊断消息数据类"""
-    header: Header
-    state: int
-    mpc_success: bool
-    mpc_solve_time_ms: float
-    backup_active: bool
+    """诊断消息数据类
+    
+    所有字段都有默认值，便于部分初始化和测试。
+    字段按功能分组，保持逻辑清晰。
+    """
+    # 基础信息
+    header: Header = field(default_factory=Header)
+    state: int = 0
+    mpc_success: bool = False
+    mpc_solve_time_ms: float = 0.0
+    backup_active: bool = False
     
     # MPC 健康状态
-    mpc_health_kkt_residual: float
-    mpc_health_condition_number: float
-    mpc_health_consecutive_near_timeout: int
-    mpc_health_degradation_warning: bool
-    mpc_health_can_recover: bool
+    mpc_health_kkt_residual: float = 0.0
+    mpc_health_condition_number: float = 0.0
+    mpc_health_consecutive_near_timeout: int = 0
+    mpc_health_degradation_warning: bool = False
+    mpc_health_can_recover: bool = True
     
     # 一致性指标
-    consistency_curvature: float
-    consistency_velocity_dir: float
-    consistency_temporal: float
-    consistency_alpha_soft: float
-    consistency_data_valid: bool
+    consistency_curvature: float = 1.0
+    consistency_velocity_dir: float = 1.0
+    consistency_temporal: float = 1.0
+    consistency_alpha_soft: float = 1.0
+    consistency_data_valid: bool = True
     
     # 状态估计器健康
-    estimator_covariance_norm: float
-    estimator_innovation_norm: float
-    estimator_slip_probability: float
-    estimator_imu_drift_detected: bool
-    estimator_imu_bias: np.ndarray
-    estimator_imu_available: bool
+    estimator_covariance_norm: float = 0.0
+    estimator_innovation_norm: float = 0.0
+    estimator_slip_probability: float = 0.0
+    estimator_imu_drift_detected: bool = False
+    estimator_imu_bias: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    estimator_imu_available: bool = True
     
     # 跟踪误差 (所有误差均为绝对值，用于诊断和质量评估)
-    tracking_lateral_error: float      # 横向误差绝对值 (m)
-    tracking_longitudinal_error: float # 纵向误差绝对值 (m)
-    tracking_heading_error: float      # 航向误差绝对值 (rad)
-    tracking_prediction_error: float   # 预测误差 (m)，NaN 表示无数据
+    tracking_lateral_error: float = 0.0       # 横向误差绝对值 (m)
+    tracking_longitudinal_error: float = 0.0  # 纵向误差绝对值 (m)
+    tracking_heading_error: float = 0.0       # 航向误差绝对值 (rad)
+    tracking_prediction_error: float = float('nan')  # 预测误差 (m)，NaN 表示无数据
+    
+    # 跟踪质量评估 (基于 tracking 配置的阈值和权重计算)
+    tracking_quality_score: float = 0.0       # 加权总分 (0-100)
+    tracking_quality_rating: str = 'unknown'  # 质量等级 ('excellent', 'good', 'fair', 'poor')
     
     # 坐标变换状态
-    transform_tf2_available: bool
-    transform_tf2_injected: bool
-    transform_fallback_duration_ms: float
-    transform_accumulated_drift: float
+    transform_tf2_available: bool = True
+    transform_tf2_injected: bool = False
+    transform_fallback_duration_ms: float = 0.0
+    transform_accumulated_drift: float = 0.0
+    transform_source_frame: str = ''
+    transform_target_frame: str = ''
+    transform_error_message: str = ''
     
     # 超时状态
-    timeout_odom: bool
-    timeout_traj: bool
-    timeout_traj_grace_exceeded: bool
-    timeout_imu: bool
-    timeout_last_odom_age_ms: float
-    timeout_last_traj_age_ms: float
-    timeout_last_imu_age_ms: float
-    timeout_in_startup_grace: bool
+    timeout_odom: bool = False
+    timeout_traj: bool = False
+    timeout_traj_grace_exceeded: bool = False
+    timeout_imu: bool = False
+    timeout_last_odom_age_ms: float = 0.0
+    timeout_last_traj_age_ms: float = 0.0
+    timeout_last_imu_age_ms: float = 0.0
+    timeout_in_startup_grace: bool = False
     
     # 控制命令
-    cmd_vx: float
-    cmd_vy: float
-    cmd_vz: float
-    cmd_omega: float
-    cmd_frame_id: str
+    cmd_vx: float = 0.0
+    cmd_vy: float = 0.0
+    cmd_vz: float = 0.0
+    cmd_omega: float = 0.0
+    cmd_frame_id: str = ''
     
     # 过渡进度
-    transition_progress: float
+    transition_progress: float = 0.0
     
     # 安全状态
     safety_check_passed: bool = True
@@ -471,13 +682,18 @@ class DiagnosticsV2:
                 'lateral_error': self.tracking_lateral_error,
                 'longitudinal_error': self.tracking_longitudinal_error,
                 'heading_error': self.tracking_heading_error,
-                'prediction_error': self.tracking_prediction_error
+                'prediction_error': self.tracking_prediction_error,
+                'quality_score': self.tracking_quality_score,
+                'quality_rating': self.tracking_quality_rating,
             },
             'transform': {
                 'tf2_available': self.transform_tf2_available,
                 'tf2_injected': self.transform_tf2_injected,
                 'fallback_duration_ms': self.transform_fallback_duration_ms,
-                'accumulated_drift': self.transform_accumulated_drift
+                'accumulated_drift': self.transform_accumulated_drift,
+                'source_frame': self.transform_source_frame,
+                'target_frame': self.transform_target_frame,
+                'error_message': self.transform_error_message
             },
             'timeout': {
                 'odom_timeout': self.timeout_odom,

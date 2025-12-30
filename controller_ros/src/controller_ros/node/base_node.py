@@ -25,13 +25,13 @@ import numpy as np
 
 from universal_controller.config.default_config import DEFAULT_CONFIG, PLATFORM_CONFIG
 from universal_controller.core.data_types import (
-    Odometry, Imu, Trajectory, ControlOutput, AttitudeCommand
+    Odometry, Imu, Trajectory, ControlOutput, AttitudeCommand, TimeoutStatus
 )
 from universal_controller.core.enums import ControllerState, PlatformType
 
 from ..bridge import ControllerBridge
 from ..io.data_manager import DataManager
-from ..utils import TimeSync, TF2InjectionManager
+from ..utils import TF2InjectionManager
 from ..lifecycle import LifecycleMixin, LifecycleState, HealthChecker
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,10 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 初始化 LifecycleMixin
         LifecycleMixin.__init__(self)
         
+        # 关闭状态标志 - 防止关闭过程中发布到已关闭的话题
+        # 必须在最前面初始化，确保任何回调都能检查此标志
+        self._shutting_down: bool = False
+        
         # 配置属性（由子类在调用 _initialize() 前设置）
         self._params: Dict[str, Any] = {}
         self._topics: Dict[str, str] = {}
@@ -80,7 +84,6 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 核心组件（由 _initialize() 创建）
         self._controller_bridge: Optional[ControllerBridge] = None
         self._data_manager: Optional[DataManager] = None
-        self._time_sync: Optional[TimeSync] = None
         self._tf_bridge: Any = None
         self._tf2_injection_manager: Optional[TF2InjectionManager] = None
         
@@ -144,18 +147,10 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 异常会传播到 LifecycleMixin.initialize() 中处理
         self._controller_bridge = ControllerBridge(self._params)
         
-        # 4. 创建时间同步
-        watchdog_config = self._params.get('watchdog', {})
-        self._time_sync = TimeSync(
-            max_odom_age_ms=watchdog_config.get('odom_timeout_ms', 500),
-            max_traj_age_ms=watchdog_config.get('traj_timeout_ms', 2500),
-            max_imu_age_ms=watchdog_config.get('imu_timeout_ms', -1)
-        )
-        
-        # 5. 设置诊断回调
+        # 4. 设置诊断回调
         self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
         
-        # 6. 创建健康检查器并注册组件
+        # 5. 创建健康检查器并注册组件
         self._health_checker = HealthChecker()
         self._health_checker.register('controller_bridge', self._controller_bridge)
         self._health_checker.register('data_manager', self._data_manager)
@@ -321,11 +316,18 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         处理紧急停止请求
         
         当收到紧急停止信号时调用此方法。
+        立即发送停止命令，然后请求控制器进入停止状态。
         """
         if not self._emergency_stop_requested:
             self._emergency_stop_requested = True
             self._emergency_stop_time = self._get_time()
-            self._log_warn("Emergency stop requested!")
+            self._log_warn("Emergency stop requested! Sending immediate stop command.")
+            
+            # 立即发送停止命令 (不等待下一个控制周期)
+            try:
+                self._publish_stop_cmd()
+            except Exception as e:
+                self._log_error(f"Failed to publish emergency stop command: {e}")
             
             # 请求控制器进入停止状态
             if self._controller_bridge is not None:
@@ -496,12 +498,16 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         Returns:
             控制输出，如果无法执行控制则返回 None
         """
-        # 0. 检查紧急停止
+        # 0. 检查关闭状态 - 防止在关闭过程中继续执行
+        if self._shutting_down:
+            return None
+        
+        # 0.1 检查紧急停止
         if self._emergency_stop_requested:
             self._publish_stop_cmd()
             return None
         
-        # 0.1 检查轨迹消息类型是否可用
+        # 0.2 检查轨迹消息类型是否可用
         if not self._traj_msg_available:
             self._log_warn_throttle(
                 10.0, 
@@ -511,7 +517,7 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             self._publish_stop_cmd()
             return None
         
-        # 0.2 尝试 TF2 重新注入（由 TF2InjectionManager 管理）
+        # 0.3 尝试 TF2 重新注入（由 TF2InjectionManager 管理）
         self._try_tf2_reinjection()
         
         # 1. 获取最新数据
@@ -529,31 +535,14 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             self._log_info("Data received, starting control")
             self._waiting_for_data = False
         
-        # 3. 检查数据新鲜度
-        ages = self._data_manager.get_data_ages()
-        timeouts = self._time_sync.check_freshness(ages)
-        
-        # 3.1 处理里程计超时
-        if timeouts.get('odom_timeout', False):
-            self._log_warn_throttle(
-                1.0, 
-                f"Odom timeout: age={ages.get('odom', 0)*1000:.1f}ms"
-            )
-        
-        # 3.2 处理轨迹超时 - 这是安全关键的，需要特别处理
-        if timeouts.get('traj_timeout', False):
-            self._log_warn_throttle(
-                1.0, 
-                f"Trajectory timeout: age={ages.get('traj', 0)*1000:.1f}ms, "
-                f"controller will use stale trajectory (safety handled by ControllerManager)"
-            )
-            # 注意：不在这里发布停止命令，因为 ControllerManager 内部的
-            # TimeoutMonitor 会处理超时逻辑，包括宽限期和安全停止
-        
-        # 4. 执行控制更新
+        # 3. 执行控制更新
+        # 超时检测由 ControllerManager 内部的 TimeoutMonitor 统一处理
         try:
             cmd = self._controller_bridge.update(odom, trajectory, imu)
             self._consecutive_errors = 0
+            
+            # 4. 记录超时警告（从 ControllerManager 获取统一的超时状态）
+            self._log_timeout_warnings()
             
             # 5. 四旋翼平台：计算并发布姿态命令
             if self._is_quadrotor and self._controller_bridge.manager is not None:
@@ -564,10 +553,39 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             
             return cmd
         except Exception as e:
-            self._handle_control_error(e, timeouts)
+            self._handle_control_error(e)
             return None
     
-    def _handle_control_error(self, error: Exception, timeouts: Dict[str, bool]):
+    def _log_timeout_warnings(self) -> None:
+        """
+        记录超时警告
+        
+        从 ControllerManager 获取统一的超时状态，避免重复检测逻辑
+        """
+        if self._controller_bridge is None or self._controller_bridge.manager is None:
+            return
+        
+        timeout_status = self._controller_bridge.manager.get_timeout_status()
+        
+        if timeout_status.odom_timeout:
+            self._log_warn_throttle(
+                1.0, 
+                f"Odom timeout: age={timeout_status.last_odom_age_ms:.1f}ms"
+            )
+        
+        if timeout_status.traj_timeout:
+            if timeout_status.traj_grace_exceeded:
+                self._log_warn_throttle(
+                    1.0, 
+                    f"Trajectory timeout (grace exceeded): age={timeout_status.last_traj_age_ms:.1f}ms"
+                )
+            else:
+                self._log_warn_throttle(
+                    2.0, 
+                    f"Trajectory timeout (in grace period): age={timeout_status.last_traj_age_ms:.1f}ms"
+                )
+    
+    def _handle_control_error(self, error: Exception):
         """处理控制更新错误"""
         self._consecutive_errors += 1
         
@@ -586,13 +604,23 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         
         self._publish_stop_cmd()
         
-        error_diag = self._create_error_diagnostics(error, timeouts)
+        error_diag = self._create_error_diagnostics(error)
         self._publish_diagnostics(error_diag, force=True)
     
-    def _create_error_diagnostics(self, error: Exception, 
-                                   timeouts: Dict[str, bool]) -> Dict[str, Any]:
+    def _create_error_diagnostics(self, error: Exception) -> Dict[str, Any]:
         """创建错误诊断信息"""
-        ages = self._data_manager.get_data_ages()
+        # 从 ControllerManager 获取统一的超时状态
+        timeout_status = None
+        if self._controller_bridge is not None and self._controller_bridge.manager is not None:
+            timeout_status = self._controller_bridge.manager.get_timeout_status()
+        
+        # 如果无法获取超时状态，使用默认值
+        if timeout_status is None:
+            timeout_status = TimeoutStatus(
+                odom_timeout=False, traj_timeout=False, traj_grace_exceeded=False,
+                imu_timeout=False, last_odom_age_ms=0.0, last_traj_age_ms=0.0,
+                last_imu_age_ms=0.0, in_startup_grace=False
+            )
         
         return {
             'state': 0,
@@ -601,12 +629,14 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             'error_message': str(error),
             'consecutive_errors': self._consecutive_errors,
             'timeout': {
-                'odom_timeout': timeouts.get('odom_timeout', False),
-                'traj_timeout': timeouts.get('traj_timeout', False),
-                'imu_timeout': timeouts.get('imu_timeout', False),
-                'last_odom_age_ms': ages.get('odom', float('inf')) * 1000,
-                'last_traj_age_ms': ages.get('traj', float('inf')) * 1000,
-                'last_imu_age_ms': ages.get('imu', float('inf')) * 1000,
+                'odom_timeout': timeout_status.odom_timeout,
+                'traj_timeout': timeout_status.traj_timeout,
+                'traj_grace_exceeded': timeout_status.traj_grace_exceeded,
+                'imu_timeout': timeout_status.imu_timeout,
+                'last_odom_age_ms': timeout_status.last_odom_age_ms,
+                'last_traj_age_ms': timeout_status.last_traj_age_ms,
+                'last_imu_age_ms': timeout_status.last_imu_age_ms,
+                'in_startup_grace': timeout_status.in_startup_grace,
             },
             'cmd': {'vx': 0.0, 'vy': 0.0, 'vz': 0.0, 'omega': 0.0},
             'transform': {
@@ -691,8 +721,12 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         """
         关闭控制器
         
-        调用 LifecycleMixin.shutdown() 执行实际关闭逻辑。
+        设置关闭标志并调用 LifecycleMixin.shutdown() 执行实际关闭逻辑。
+        关闭标志确保控制循环不会在关闭过程中继续发布消息。
         """
+        # 设置关闭标志，阻止控制循环继续执行
+        self._shutting_down = True
+        
         # 使用 LifecycleMixin 的 shutdown 方法
         LifecycleMixin.shutdown(self)
     

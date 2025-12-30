@@ -170,6 +170,64 @@ def test_ekf_drift_correction():
     print("✓ test_ekf_drift_correction passed")
 
 
+def test_ekf_drift_correction_reverse():
+    """测试倒车时的漂移校正
+    
+    验证 apply_drift_correction 在倒车场景下正确保持速度符号。
+    这是对 v_signed 修复的回归测试。
+    """
+    config = DEFAULT_CONFIG.copy()
+    ekf = AdaptiveEKFEstimator(config)
+    
+    # 设置倒车状态：theta=0，vx=-1.0（向后）
+    # 在世界坐标系中，倒车时 vx_world < 0
+    odom = create_test_odom(x=1.0, y=0.0, vx=-1.0, vy=0.0, theta=0.0)
+    ekf.update_odom(odom)
+    
+    state_before = ekf.get_state().state.copy()
+    vx_before = state_before[3]
+    vy_before = state_before[4]
+    
+    # 验证初始状态是倒车（vx < 0）
+    assert vx_before < 0, f"Initial vx should be negative (reversing), got {vx_before}"
+    
+    # 应用航向校正（模拟 SLAM 修正）
+    dtheta = 0.1  # 约 5.7 度
+    ekf.apply_drift_correction(dx=0.0, dy=0.0, dtheta=dtheta)
+    
+    state_after = ekf.get_state().state
+    vx_after = state_after[3]
+    vy_after = state_after[4]
+    
+    # 计算校正后的速度模长
+    v_magnitude_before = np.sqrt(vx_before**2 + vy_before**2)
+    v_magnitude_after = np.sqrt(vx_after**2 + vy_after**2)
+    
+    # 验证速度模长保持不变
+    assert abs(v_magnitude_after - v_magnitude_before) < 0.01, \
+        f"Velocity magnitude should be preserved: before={v_magnitude_before}, after={v_magnitude_after}"
+    
+    # 关键验证：速度方向应该与新航向一致，且保持倒车方向
+    # 对于 velocity_heading_coupled 平台，v_signed = vx * cos(theta) + vy * sin(theta)
+    # 倒车时 v_signed < 0
+    new_theta = state_after[6]
+    v_signed_after = vx_after * np.cos(new_theta) + vy_after * np.sin(new_theta)
+    
+    # 验证仍然是倒车状态
+    assert v_signed_after < 0, \
+        f"After drift correction, vehicle should still be reversing (v_signed < 0), got {v_signed_after}"
+    
+    # 验证速度方向与航向一致（允许小误差）
+    expected_vx = v_signed_after * np.cos(new_theta)
+    expected_vy = v_signed_after * np.sin(new_theta)
+    assert abs(vx_after - expected_vx) < 0.01, \
+        f"vx should align with heading: expected {expected_vx}, got {vx_after}"
+    assert abs(vy_after - expected_vy) < 0.01, \
+        f"vy should align with heading: expected {expected_vy}, got {vy_after}"
+    
+    print("✓ test_ekf_drift_correction_reverse passed")
+
+
 def test_ekf_covariance_positive_definite():
     """测试协方差矩阵保持正定"""
     config = DEFAULT_CONFIG.copy()

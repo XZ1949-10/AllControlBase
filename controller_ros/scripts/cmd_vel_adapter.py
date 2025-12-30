@@ -59,30 +59,34 @@ class CmdVelAdapter:
         # 关闭标志
         self._shutting_down = False
         
-        # 从配置文件读取参数 (支持 cmd_vel_adapter 命名空间和私有参数)
-        # 优先级: 私有参数 > cmd_vel_adapter 命名空间 > 默认值
-        def get_param(name, default):
+        # 从配置文件读取参数
+        # 优先级: 私有参数 > 命名空间参数 > 默认值
+        def get_param(namespace, name, default):
+            """获取参数，支持多级命名空间回退"""
             # 先尝试私有参数
             value = rospy.get_param(f'~{name}', None)
             if value is not None:
                 return value
-            # 再尝试 cmd_vel_adapter 命名空间
-            value = rospy.get_param(f'cmd_vel_adapter/{name}', None)
+            # 再尝试指定命名空间
+            value = rospy.get_param(f'{namespace}/{name}', None)
             if value is not None:
                 return value
             return default
         
-        self.max_linear = get_param('max_linear', 0.5)
-        self.max_angular = get_param('max_angular', 1.0)
-        self.max_linear_accel = get_param('max_linear_accel', 0.0)
-        self.max_angular_accel = get_param('max_angular_accel', 0.0)
-        self.publish_rate = get_param('publish_rate', 20.0)
-        self.joy_timeout = get_param('joy_timeout', 0.5)
+        # 速度限制统一从 constraints 读取，确保与控制器一致
+        self.max_linear = get_param('constraints', 'v_max', 0.5)
+        self.max_angular = get_param('constraints', 'omega_max', 1.0)
         
-        input_topic = get_param('input_topic', '/cmd_unified')
-        joy_topic = get_param('joy_topic', '/joy_cmd_vel')
-        mode_topic = get_param('mode_topic', '/visualizer/control_mode')
-        output_topic = get_param('output_topic', '/cmd_vel')
+        # cmd_vel_adapter 特有参数
+        self.max_linear_accel = get_param('cmd_vel_adapter', 'max_linear_accel', 0.0)
+        self.max_angular_accel = get_param('cmd_vel_adapter', 'max_angular_accel', 0.0)
+        self.publish_rate = get_param('cmd_vel_adapter', 'publish_rate', 20.0)
+        self.joy_timeout = get_param('cmd_vel_adapter', 'joy_timeout', 0.5)
+        
+        input_topic = get_param('cmd_vel_adapter', 'input_topic', '/cmd_unified')
+        joy_topic = get_param('cmd_vel_adapter', 'joy_topic', '/joy_cmd_vel')
+        mode_topic = get_param('cmd_vel_adapter', 'mode_topic', '/visualizer/control_mode')
+        output_topic = get_param('cmd_vel_adapter', 'output_topic', '/cmd_vel')
         
         # 控制模式: False=控制器, True=手柄
         self.joystick_mode = False

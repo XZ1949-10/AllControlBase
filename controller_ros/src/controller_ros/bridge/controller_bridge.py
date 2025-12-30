@@ -75,22 +75,28 @@ class ControllerBridge(LifecycleMixin):
     # ==================== LifecycleMixin 实现 ====================
     
     def _do_initialize(self) -> bool:
-        """初始化控制器"""
-        try:
-            self._manager = ControllerManager(self._config)
-            self._manager.initialize_default_components()
-            logger.info("Controller bridge initialized successfully")
-            return True
-        except Exception as e:
-            logger.error(f"Controller initialization failed: {e}")
-            self._manager = None
-            return False
+        """
+        初始化控制器
+        
+        Note:
+            不捕获异常，让异常传播到 LifecycleMixin.initialize()，
+            由其统一处理并保存完整错误信息到 _last_error。
+            如果初始化失败，_manager 会在 _do_shutdown() 中被清理。
+        """
+        self._manager = ControllerManager(self._config)
+        self._manager.initialize_default_components()
+        logger.info("Controller bridge initialized successfully")
+        return True
     
     def _do_shutdown(self) -> None:
         """关闭控制器"""
         if self._manager is not None:
-            self._manager.shutdown()
-            self._manager = None
+            try:
+                self._manager.shutdown()
+            except Exception as e:
+                logger.warning(f"Error during controller shutdown: {e}")
+            finally:
+                self._manager = None
         logger.info("Controller bridge shutdown")
     
     def _do_reset(self) -> None:

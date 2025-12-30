@@ -34,6 +34,8 @@ class MPCHealthMonitor:
         # 超时计数衰减参数
         self.consecutive_good_for_decay = health_config.get('consecutive_good_for_decay', 2)
         self.timeout_decay_rate = health_config.get('timeout_decay_rate', 2)
+        # 中间区衰减率：默认为 1，比恢复区慢，提供滞后效应
+        self.middle_zone_decay_rate = health_config.get('middle_zone_decay_rate', 1)
         
         self.consecutive_near_timeout = 0
         self.consecutive_good = 0
@@ -64,8 +66,9 @@ class MPCHealthMonitor:
                 self.consecutive_near_timeout = max(0, self.consecutive_near_timeout - self.timeout_decay_rate)
         else:
             # 中间区：重置良好计数，缓慢衰减超时计数
+            # 使用配置的中间区衰减率，提供滞后效应防止边界震荡
             self.consecutive_good = 0
-            self.consecutive_near_timeout = max(0, self.consecutive_near_timeout - 1)
+            self.consecutive_near_timeout = max(0, self.consecutive_near_timeout - self.middle_zone_decay_rate)
         
         # 判断是否需要警告
         should_warn = (

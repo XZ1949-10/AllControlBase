@@ -151,6 +151,11 @@ class StateMachine:
         重置所有恢复计数器和 MPC 历史
         
         在状态转换时调用，确保新状态从干净的监控周期开始。
+        
+        设计说明:
+        - 状态转换意味着进入新的监控周期，旧历史不应影响新状态的判断
+        - 这是保守的安全设计：恢复决策基于当前表现而非历史数据
+        - 虽然可能导致恢复时间较长，但确保了恢复决策的可靠性
         """
         self.alpha_recovery_count = 0
         self.mpc_recovery_count = 0
@@ -316,10 +321,13 @@ class StateMachine:
         - 状态处理器使用包含当前帧的历史做决策
         - 状态转换时清空历史，新状态从干净的监控周期开始
         - 这意味着当前帧的 MPC 结果参与了转换决策，但不会影响新状态的历史
+        - 只在 MPC 实际运行的状态下追加历史，避免 STOPPING/STOPPED 状态污染历史
         """
-        # 统一追加 MPC 成功历史
-        # 这确保每次 update 只追加一次，避免重复
-        self._mpc_success_history.append(diagnostics.mpc_success)
+        # 只在 MPC 实际运行的状态下追加历史
+        # STOPPING 和 STOPPED 状态下 MPC 不运行，不应追加 False 到历史
+        # 这避免了从 STOPPED 恢复时历史被污染的问题
+        if self.state not in (ControllerState.STOPPING, ControllerState.STOPPED):
+            self._mpc_success_history.append(diagnostics.mpc_success)
         
         # 外部停止请求 - 最高优先级
         # 使用 is_set() 检查并在处理后 clear()

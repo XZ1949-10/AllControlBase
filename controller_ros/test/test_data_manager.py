@@ -349,3 +349,208 @@ def test_data_manager_reset_resets_clock_state():
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+def test_data_manager_separated_data_validity_tracking():
+    """测试分离的数据有效性跟踪 - 时钟回退后各数据独立恢复"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    
+    # 更新所有数据
+    dm.update_odom(MockRosOdometry())
+    dm.update_imu(MockRosImu())
+    dm.update_trajectory(MockRosTrajectory())
+    
+    # 建立基准时间
+    dm.get_data_ages()
+    
+    # 验证所有数据有效
+    assert dm.is_data_valid() == True
+    assert dm.is_data_type_valid('odom') == True
+    assert dm.is_data_type_valid('imu') == True
+    assert dm.is_data_type_valid('traj') == True
+    
+    # 时钟回退
+    mock_time[0] = 50.0
+    dm.get_data_ages()
+    
+    # 所有数据应该被标记为无效
+    assert dm.is_data_valid() == False
+    assert dm.is_data_type_valid('odom') == False
+    assert dm.is_data_type_valid('imu') == False
+    assert dm.is_data_type_valid('traj') == False
+    
+    # 只更新 odom
+    dm.update_odom(MockRosOdometry())
+    
+    # 只有 odom 恢复有效，其他仍然无效
+    assert dm.is_data_valid() == False  # 整体仍无效
+    assert dm.is_data_type_valid('odom') == True
+    assert dm.is_data_type_valid('imu') == False
+    assert dm.is_data_type_valid('traj') == False
+    
+    # 更新 imu
+    dm.update_imu(MockRosImu())
+    
+    assert dm.is_data_valid() == False  # 整体仍无效（traj 还无效）
+    assert dm.is_data_type_valid('odom') == True
+    assert dm.is_data_type_valid('imu') == True
+    assert dm.is_data_type_valid('traj') == False
+    
+    # 更新 traj
+    dm.update_trajectory(MockRosTrajectory())
+    
+    # 现在所有数据都有效
+    assert dm.is_data_valid() == True
+    assert dm.is_data_type_valid('odom') == True
+    assert dm.is_data_type_valid('imu') == True
+    assert dm.is_data_type_valid('traj') == True
+
+
+def test_data_manager_data_ages_with_separated_validity():
+    """测试分离有效性跟踪下的数据年龄计算"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    
+    # 更新所有数据
+    dm.update_odom(MockRosOdometry())
+    dm.update_imu(MockRosImu())
+    dm.update_trajectory(MockRosTrajectory())
+    
+    # 建立基准时间
+    dm.get_data_ages()
+    
+    # 时钟回退
+    mock_time[0] = 50.0
+    ages = dm.get_data_ages()
+    
+    # 所有数据年龄应该是 inf（无效）
+    assert ages['odom'] == float('inf')
+    assert ages['imu'] == float('inf')
+    assert ages['traj'] == float('inf')
+    
+    # 只更新 odom
+    dm.update_odom(MockRosOdometry())
+    
+    ages = dm.get_data_ages()
+    
+    # odom 年龄正常，其他仍是 inf
+    assert ages['odom'] == 0.0
+    assert ages['imu'] == float('inf')
+    assert ages['traj'] == float('inf')
+    
+    # 时间前进
+    mock_time[0] = 50.1
+    ages = dm.get_data_ages()
+    
+    # odom 年龄增加，其他仍是 inf
+    assert abs(ages['odom'] - 0.1) < 0.001
+    assert ages['imu'] == float('inf')
+    assert ages['traj'] == float('inf')
+
+
+def test_data_manager_clock_jump_only_invalidates_existing_data():
+    """测试时钟回退只标记已存在的数据为无效"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    
+    # 只更新 odom（不更新 imu 和 traj）
+    dm.update_odom(MockRosOdometry())
+    
+    # 建立基准时间
+    dm.get_data_ages()
+    
+    # 时钟回退
+    mock_time[0] = 50.0
+    dm.get_data_ages()
+    
+    # odom 被标记为无效（因为之前有数据）
+    assert dm.is_data_type_valid('odom') == False
+    
+    # imu 和 traj 仍然"有效"（因为从未收到过数据，无需标记）
+    # 注意：这里的"有效"是指没有被时钟回退标记为无效
+    # 但它们仍然没有数据，get_data_ages 会返回 inf
+    assert dm.is_data_type_valid('imu') == True
+    assert dm.is_data_type_valid('traj') == True
+    
+    ages = dm.get_data_ages()
+    assert ages['odom'] == float('inf')  # 无效
+    assert ages['imu'] == float('inf')   # 从未收到数据
+    assert ages['traj'] == float('inf')  # 从未收到数据
+
+
+def test_data_manager_clock_jump_callback_timing():
+    """测试时钟跳变回调被正确调用"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    callback_called = [False]
+    callback_event = [None]
+    
+    def callback(event):
+        callback_called[0] = True
+        callback_event[0] = event
+    
+    dm = DataManager(get_time_func=custom_time, on_clock_jump=callback)
+    dm.update_odom(MockRosOdometry())
+    dm.get_data_ages()  # 建立基准
+    
+    # 时钟回退触发回调
+    mock_time[0] = 50.0
+    dm.get_data_ages()
+    
+    assert callback_called[0] == True
+    assert callback_event[0] is not None
+    assert callback_event[0].is_backward == True
+    assert callback_event[0].jump_delta == -50.0
+
+
+def test_data_manager_health_details_with_separated_validity():
+    """测试健康详情包含分离的有效性信息"""
+    from controller_ros.io.data_manager import DataManager
+    
+    mock_time = [100.0]
+    def custom_time():
+        return mock_time[0]
+    
+    dm = DataManager(get_time_func=custom_time)
+    dm.update_odom(MockRosOdometry())
+    dm.update_imu(MockRosImu())
+    dm.update_trajectory(MockRosTrajectory())  # 也更新 traj
+    dm.get_data_ages()  # 建立基准
+    
+    # 时钟回退
+    mock_time[0] = 50.0
+    dm.get_data_ages()
+    
+    # 只恢复 odom
+    dm.update_odom(MockRosOdometry())
+    
+    health = dm._get_health_details()
+    
+    # 验证健康详情包含分离的有效性信息
+    assert 'data_invalidated' in health
+    assert health['data_invalidated']['odom'] == False  # 已恢复
+    assert health['data_invalidated']['imu'] == True    # 仍无效
+    assert health['data_invalidated']['traj'] == True   # 仍无效
+    
+    # data_valid 应该是 False（因为有数据无效）
+    assert health['data_valid'] == False

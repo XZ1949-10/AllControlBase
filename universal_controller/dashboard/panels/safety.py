@@ -45,17 +45,13 @@ class SafetyPanel(QGroupBox):
         # 安全配置
         safety = self._config.get('safety', {})
         
-        # 低速保护配置
-        low_speed = safety.get('low_speed', {})
-        default_low_speed = SAFETY_CONFIG.get('low_speed', {})
-        self._low_speed_thresh = low_speed.get('threshold', default_low_speed.get('threshold', 0.1))
-        self._low_speed_omega = low_speed.get('omega_limit', default_low_speed.get('omega_limit', 1.0))
+        # 低速保护配置 - 从 constraints 读取
+        self._low_speed_thresh = constraints.get('v_low_thresh', CONSTRAINTS_CONFIG.get('v_low_thresh', 0.1))
+        self._low_speed_omega = constraints.get('omega_max_low', CONSTRAINTS_CONFIG.get('omega_max_low', 1.0))
         
-        # 安全裕度配置
-        margins = safety.get('margins', {})
-        default_margins = SAFETY_CONFIG.get('margins', {})
-        self._vel_margin = margins.get('velocity', default_margins.get('velocity', 1.1))
-        self._accel_margin = margins.get('acceleration', default_margins.get('acceleration', 1.5))
+        # 安全裕度配置 - 使用扁平参数
+        self._vel_margin = safety.get('velocity_margin', SAFETY_CONFIG.get('velocity_margin', 1.1))
+        self._accel_margin = safety.get('accel_margin', SAFETY_CONFIG.get('accel_margin', 1.5))
     
     def set_config(self, config):
         """更新配置"""

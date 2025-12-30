@@ -30,34 +30,20 @@ logger = logging.getLogger(__name__)
 VELOCITY_DIMENSION = 4
 
 # ============================================================================
-# 默认值 (可通过配置覆盖，但通常不需要)
+# 默认配置值 (可通过配置覆盖)
 # ============================================================================
 
 # 默认坐标系，当 ROS 消息的 frame_id 为空时使用
 DEFAULT_TRAJECTORY_FRAME_ID = 'base_link'
 
-# 默认时间间隔，当 dt_sec 无效时使用
-DEFAULT_DT_SEC = 0.1
-
-# dt_sec 的有效范围
-MIN_DT_SEC = 0.001  # 1ms
-MAX_DT_SEC = 10.0   # 10s
-
-# ============================================================================
-# 算法参数 (内部使用，通常不需要修改)
-# ============================================================================
-
-# 速度衰减填充的阈值 (m/s)
-# 当轨迹末端速度低于此值时，直接使用零填充；否则使用线性衰减填充
-# 
-# 设计说明：
-# - 较小的值 (如 0.05)：更激进的衰减填充，适合高速场景
-# - 较大的值 (如 0.2)：更保守的零填充，适合低速场景
-# - 默认 0.1 m/s 是一个平衡值，适用于大多数机器人
-# 
-# 如果需要调整此参数，可以在创建 TrajectoryAdapter 时传入配置：
-#   adapter = TrajectoryAdapter(config={'velocity_decay_threshold': 0.15})
-VELOCITY_DECAY_THRESHOLD = 0.1
+# 轨迹验证默认配置
+DEFAULT_TRAJECTORY_CONFIG = {
+    'max_coord': 100.0,              # 最大合理坐标值 (米)
+    'velocity_decay_threshold': 0.1,  # 速度衰减填充阈值 (m/s)
+    'min_dt_sec': 0.001,             # 最小时间间隔 (秒)
+    'max_dt_sec': 10.0,              # 最大时间间隔 (秒)
+    'default_dt_sec': 0.1,           # 默认时间间隔 (秒)
+}
 
 
 class TrajectoryAdapter(IMsgConverter):
@@ -75,8 +61,12 @@ class TrajectoryAdapter(IMsgConverter):
     - 如果 ROS 消息的 frame_id 为空，使用默认值 'base_link'
     - 网络输出的轨迹通常在 base_link 坐标系下
     
-    配置参数:
-    - velocity_decay_threshold: 速度衰减填充阈值 (m/s)，默认 0.1
+    配置参数 (通过 config 字典传入):
+    - max_coord: 最大合理坐标值 (米)
+    - velocity_decay_threshold: 速度衰减填充阈值 (m/s)
+    - min_dt_sec: 最小时间间隔 (秒)
+    - max_dt_sec: 最大时间间隔 (秒)
+    - default_dt_sec: 默认时间间隔 (秒)
     """
     
     def __init__(self, config: dict = None):
@@ -84,20 +74,21 @@ class TrajectoryAdapter(IMsgConverter):
         初始化轨迹适配器
         
         Args:
-            config: 配置字典，可选。支持的配置项：
-                - velocity_decay_threshold: 速度衰减填充阈值 (m/s)
+            config: 配置字典，可选。支持的配置项见 DEFAULT_TRAJECTORY_CONFIG
         """
         super().__init__()
         
-        # 从配置中读取参数，如果没有则使用默认值
-        if config is None:
-            config = {}
+        # 合并配置
+        self._config = DEFAULT_TRAJECTORY_CONFIG.copy()
+        if config is not None:
+            self._config.update(config)
         
-        # 速度衰减阈值：可通过配置覆盖
-        self._velocity_decay_threshold = config.get(
-            'velocity_decay_threshold', 
-            VELOCITY_DECAY_THRESHOLD
-        )
+        # 缓存常用配置值
+        self._max_coord = self._config['max_coord']
+        self._velocity_decay_threshold = self._config['velocity_decay_threshold']
+        self._min_dt_sec = self._config['min_dt_sec']
+        self._max_dt_sec = self._config['max_dt_sec']
+        self._default_dt_sec = self._config['default_dt_sec']
     
     def _validate_dt_sec(self, dt_sec: float) -> float:
         """
@@ -109,18 +100,18 @@ class TrajectoryAdapter(IMsgConverter):
         Returns:
             有效的时间间隔值
         """
-        if dt_sec <= 0 or dt_sec < MIN_DT_SEC or dt_sec > MAX_DT_SEC:
+        if dt_sec <= 0 or dt_sec < self._min_dt_sec or dt_sec > self._max_dt_sec:
             if dt_sec <= 0:
                 logger.warning(
-                    f"Invalid dt_sec={dt_sec} (non-positive), using default {DEFAULT_DT_SEC}. "
+                    f"Invalid dt_sec={dt_sec} (non-positive), using default {self._default_dt_sec}. "
                     f"This may indicate upstream trajectory generation issues."
                 )
             else:
                 logger.warning(
-                    f"dt_sec={dt_sec} out of valid range [{MIN_DT_SEC}, {MAX_DT_SEC}], "
-                    f"using default {DEFAULT_DT_SEC}."
+                    f"dt_sec={dt_sec} out of valid range [{self._min_dt_sec}, {self._max_dt_sec}], "
+                    f"using default {self._default_dt_sec}."
                 )
-            return DEFAULT_DT_SEC
+            return self._default_dt_sec
         return dt_sec
     
     def _process_velocities(self, velocities_flat: list, num_points: int, 
@@ -226,6 +217,48 @@ class TrajectoryAdapter(IMsgConverter):
         
         return velocities, True
     
+    def _validate_points(self, points: list) -> Tuple[list, bool]:
+        """
+        验证轨迹点的有效性
+        
+        Args:
+            points: 轨迹点列表
+        
+        Returns:
+            (validated_points, is_valid): 验证后的点列表和是否有效
+        """
+        if not points:
+            return [], False
+        
+        validated = []
+        has_invalid = False
+        
+        for i, p in enumerate(points):
+            # 检查 NaN 和 Inf
+            if not (np.isfinite(p.x) and np.isfinite(p.y) and np.isfinite(p.z)):
+                logger.warning(f"Trajectory point {i} contains NaN/Inf: ({p.x}, {p.y}, {p.z})")
+                has_invalid = True
+                continue
+            
+            # 检查坐标范围
+            if abs(p.x) > self._max_coord or abs(p.y) > self._max_coord or abs(p.z) > self._max_coord:
+                logger.warning(
+                    f"Trajectory point {i} out of range (max={self._max_coord}m): "
+                    f"({p.x}, {p.y}, {p.z})"
+                )
+                has_invalid = True
+                continue
+            
+            validated.append(Point3D(x=p.x, y=p.y, z=p.z))
+        
+        if has_invalid:
+            logger.warning(
+                f"Trajectory validation: {len(points) - len(validated)} invalid points removed, "
+                f"{len(validated)} valid points remaining"
+            )
+        
+        return validated, len(validated) > 0
+    
     def to_uc(self, ros_msg: Any) -> UcTrajectory:
         """ROS LocalTrajectoryV4 → UC Trajectory"""
         # 处理 frame_id，空字符串使用默认值
@@ -233,11 +266,12 @@ class TrajectoryAdapter(IMsgConverter):
         if not frame_id:
             frame_id = DEFAULT_TRAJECTORY_FRAME_ID
         
-        # 转换轨迹点
-        points = [
+        # 验证并转换轨迹点
+        raw_points = [
             Point3D(x=p.x, y=p.y, z=p.z)
             for p in ros_msg.points
         ]
+        points, points_valid = self._validate_points(raw_points)
         num_points = len(points)
         
         # 处理空轨迹的边界情况

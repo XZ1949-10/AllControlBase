@@ -185,10 +185,10 @@ class TestEmergencyStop:
         
         mock.node._handle_emergency_stop()
         
-        timeouts = {'odom_timeout': False, 'traj_timeout': False, 'imu_timeout': False}
         error = Exception("Test")
         
-        diag = mock.node._create_error_diagnostics(error, timeouts)
+        # 注意：新 API 不再接受 timeouts 参数，超时状态从 ControllerManager 获取
+        diag = mock.node._create_error_diagnostics(error)
         
         assert diag['emergency_stop'] == True
 

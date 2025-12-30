@@ -12,6 +12,7 @@ MPC_CONFIG = {
     'horizon': 20,                # MPC 预测时域
     'horizon_degraded': 10,       # 降级时的预测时域
     'dt': 0.1,                    # 时间步长 (秒) - 应与 trajectory.default_dt_sec 一致
+    'horizon_change_min_interval': 1.0,  # Horizon 调整节流间隔 (秒) - 防止频繁重新初始化求解器
     
     # 代价函数权重
     'weights': {
@@ -35,15 +36,15 @@ MPC_CONFIG = {
         'consecutive_recovery_limit': 5,   # 连续恢复次数限制
         'recovery_multiplier': 2.0,        # 备选恢复条件的倍数
         'consecutive_good_for_decay': 2,   # 连续良好次数达到此值后开始衰减
-        'timeout_decay_rate': 2,           # 超时计数衰减速率
+        'timeout_decay_rate': 2,           # 恢复区超时计数衰减速率
+        'middle_zone_decay_rate': 1,       # 中间区超时计数衰减速率 (比恢复区慢，提供滞后)
     },
     
     # Fallback 求解器参数
-    # 注意: 共享参数从 backup 配置读取，确保与 Pure Pursuit 备份控制器一致
+    # 注意: heading_kp 已统一到 backup.kp_heading，确保与 Pure Pursuit 一致
     # MPC 特有参数保留在 mpc.fallback 中
     'fallback': {
         'lookahead_steps': 3,              # MPC fallback 特有: 前瞻步数
-        'heading_kp': 1.5,                 # 航向控制增益 (与 backup.kp_heading 保持一致)
         # 以下参数已移至 backup 配置，这里保留默认值用于向后兼容
         # 实际使用时应从 backup 配置读取
     },
@@ -62,11 +63,11 @@ MPC_VALIDATION_RULES = {
     'mpc.horizon': (1, 100, 'MPC 预测时域'),
     'mpc.horizon_degraded': (1, 100, 'MPC 降级预测时域'),
     'mpc.dt': (0.001, 1.0, 'MPC 时间步长 (秒)'),
+    'mpc.horizon_change_min_interval': (0.0, 60.0, 'Horizon 调整节流间隔 (秒)'),
     # Fallback 求解器参数 (MPC 特有)
     'mpc.fallback.lookahead_steps': (1, 50, 'Fallback 前瞻步数'),
-    'mpc.fallback.heading_kp': (0.1, 10.0, 'Fallback 航向控制增益'),
-    # 注意: max_curvature, min_distance_thresh, min_turn_speed, default_speed_ratio
-    # 已统一到 backup 配置，验证规则在 MODULES_VALIDATION_RULES 中
+    # 注意: heading_kp 已统一到 backup.kp_heading，验证规则在 MODULES_VALIDATION_RULES 中
+    # max_curvature, min_distance_thresh, min_turn_speed, default_speed_ratio 同理
     # MPC 权重 (必须为非负数)
     'mpc.weights.position': (0.0, None, 'MPC 位置权重'),
     'mpc.weights.velocity': (0.0, None, 'MPC 速度权重'),

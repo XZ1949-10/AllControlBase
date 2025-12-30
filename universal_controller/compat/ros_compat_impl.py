@@ -29,6 +29,8 @@ import logging
 from collections import deque
 from typing import Optional, Tuple, Any
 
+from ..core.constants import EPSILON
+
 logger = logging.getLogger(__name__)
 
 
@@ -414,7 +416,7 @@ class StandaloneTF2Buffer:
             R = np.eye(3)
         else:
             # 归一化四元数
-            if abs(norm_sq - 1.0) > 1e-6:
+            if abs(norm_sq - 1.0) > EPSILON:
                 norm = np.sqrt(norm_sq)
                 q = (q[0]/norm, q[1]/norm, q[2]/norm, q[3]/norm)
             

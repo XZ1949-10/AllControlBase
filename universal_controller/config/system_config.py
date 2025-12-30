@@ -34,9 +34,9 @@ WATCHDOG_CONFIG = {
 }
 
 # 诊断配置
+# 注意: 话题名称 (topic, cmd_topic) 是 ROS 层特有配置，
+# 在 controller_ros/config/ 中定义，不在核心库中定义
 DIAGNOSTICS_CONFIG = {
-    'topic': '/controller/diagnostics',  # 诊断话题名称
-    'cmd_topic': '/cmd_unified',         # 控制命令话题名称
     'publish_rate': 10,                  # 诊断发布降频率 (每 N 次控制循环发布一次)
 }
 

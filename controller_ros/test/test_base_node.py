@@ -98,7 +98,7 @@ def test_base_node_initialization():
     
     assert mock.node._controller_bridge is not None
     assert mock.node._data_manager is not None
-    assert mock.node._time_sync is not None
+    # TimeSync 已被删除，超时监控统一使用 ControllerManager 的 TimeoutMonitor
     assert mock.node._platform_type == 'differential'
 
 
@@ -215,11 +215,11 @@ def test_base_node_error_handling():
     mock.initialize()
     
     # 模拟错误 - _handle_control_error 内部会增加 consecutive_errors
-    timeouts = {'odom_timeout': True, 'traj_timeout': False, 'imu_timeout': False}
     error = Exception("Test error")
     
     # 调用 _handle_control_error，它会自动增加计数
-    mock.node._handle_control_error(error, timeouts)
+    # 注意：新 API 不再接受 timeouts 参数，超时状态从 ControllerManager 获取
+    mock.node._handle_control_error(error)
     
     assert mock.node._consecutive_errors == 1
     assert mock.node._stop_cmd_count == 1
@@ -235,12 +235,12 @@ def test_base_node_error_throttling():
     mock = MockControllerNode()
     mock.initialize()
     
-    timeouts = {'odom_timeout': False, 'traj_timeout': False, 'imu_timeout': False}
     error = Exception("Test error")
     
     # 连续触发多次错误 - _handle_control_error 内部会增加计数
+    # 注意：新 API 不再接受 timeouts 参数
     for i in range(15):
-        mock.node._handle_control_error(error, timeouts)
+        mock.node._handle_control_error(error)
     
     # 检查错误计数
     assert mock.node._consecutive_errors == 15
@@ -259,20 +259,21 @@ def test_base_node_create_error_diagnostics():
     mock.update_odom(odom)
     mock.set_time(0.1)  # 数据年龄 0.1 秒
     
-    timeouts = {'odom_timeout': True, 'traj_timeout': True, 'imu_timeout': False}
     error = Exception("Test error")
     mock.node._consecutive_errors = 5
     
-    diag = mock.node._create_error_diagnostics(error, timeouts)
+    # 注意：新 API 不再接受 timeouts 参数，超时状态从 ControllerManager 获取
+    diag = mock.node._create_error_diagnostics(error)
     
     assert diag['state'] == 0
     assert diag['mpc_success'] == False
     assert diag['error_message'] == "Test error"
     assert diag['consecutive_errors'] == 5
-    assert diag['timeout']['odom_timeout'] == True
-    assert diag['timeout']['traj_timeout'] == True
-    assert diag['timeout']['imu_timeout'] == False
-    assert abs(diag['timeout']['last_odom_age_ms'] - 100.0) < 1.0
+    # 超时状态现在从 ControllerManager 的 TimeoutMonitor 获取
+    assert 'timeout' in diag
+    assert 'odom_timeout' in diag['timeout']
+    assert 'traj_timeout' in diag['timeout']
+    assert 'imu_timeout' in diag['timeout']
 
 
 def test_base_node_on_diagnostics():
@@ -520,10 +521,10 @@ def test_error_diagnostics_includes_tf2_injected():
     # 注入 TF2
     mock.node._inject_tf2_to_controller(blocking=False)
     
-    timeouts = {'odom_timeout': False, 'traj_timeout': False, 'imu_timeout': False}
     error = Exception("Test error")
     
-    diag = mock.node._create_error_diagnostics(error, timeouts)
+    # 注意：新 API 不再接受 timeouts 参数
+    diag = mock.node._create_error_diagnostics(error)
     
     assert 'transform' in diag
     assert diag['transform']['tf2_available'] == True
@@ -573,3 +574,131 @@ def test_reset_clears_tf2_retry_state():
     if mock.node._tf2_injection_manager is not None:
         assert mock.node._tf2_injection_manager._last_retry_time is None
         # 注意：_retry_count 不重置，因为它是累计统计值，用于诊断
+
+
+# ==================== Shutdown 保护机制测试 ====================
+#
+# 这些测试验证 _shutting_down 标志在 ROS1/ROS2 节点中的统一实现。
+# 该标志防止在关闭过程中继续发布消息到已关闭的话题。
+#
+
+
+def test_shutting_down_flag_initialized():
+    """测试 _shutting_down 标志在初始化时为 False"""
+    mock = MockControllerNode()
+    
+    # 基类初始化后，_shutting_down 应该为 False
+    assert mock.node._shutting_down == False
+
+
+def test_shutting_down_flag_set_on_shutdown():
+    """测试 shutdown() 设置 _shutting_down 标志"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 关闭前
+    assert mock.node._shutting_down == False
+    
+    # 调用 shutdown
+    mock.node.shutdown()
+    
+    # 关闭后
+    assert mock.node._shutting_down == True
+
+
+def test_control_loop_skips_when_shutting_down():
+    """测试控制循环在关闭时跳过执行"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 添加数据
+    odom = create_test_odom(vx=1.0)
+    traj = create_test_trajectory()
+    mock.update_odom(odom)
+    mock.update_trajectory(traj)
+    
+    # 正常情况下应该返回控制输出
+    result = mock.node._control_loop_core()
+    assert result is not None
+    
+    # 设置关闭标志
+    mock.node._shutting_down = True
+    
+    # 关闭时应该返回 None，不执行任何控制
+    result = mock.node._control_loop_core()
+    assert result is None
+    
+    # 不应该发布停止命令（因为直接返回了）
+    initial_stop_count = mock.node._stop_cmd_count
+    mock.node._control_loop_core()
+    assert mock.node._stop_cmd_count == initial_stop_count
+
+
+def test_control_loop_no_publish_after_shutdown():
+    """测试关闭后控制循环不发布任何消息"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 添加数据
+    odom = create_test_odom(vx=1.0)
+    traj = create_test_trajectory()
+    mock.update_odom(odom)
+    mock.update_trajectory(traj)
+    
+    # 执行一次控制，记录发布数量
+    mock.node._control_loop_core()
+    initial_cmd_count = len(mock.node._published_cmds)
+    initial_diag_count = len(mock.node._published_diags)
+    
+    # 关闭
+    mock.node.shutdown()
+    
+    # 再次执行控制循环
+    for _ in range(5):
+        mock.node._control_loop_core()
+    
+    # 不应该有新的发布
+    assert len(mock.node._published_cmds) == initial_cmd_count
+    assert len(mock.node._published_diags) == initial_diag_count
+
+
+def test_shutdown_idempotent():
+    """测试 shutdown() 可以安全地多次调用"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 多次调用 shutdown 不应该出错
+    mock.node.shutdown()
+    mock.node.shutdown()
+    mock.node.shutdown()
+    
+    assert mock.node._shutting_down == True
+
+
+def test_shutting_down_checked_before_emergency_stop():
+    """测试 _shutting_down 检查在紧急停止检查之前"""
+    mock = MockControllerNode()
+    mock.initialize()
+    
+    # 添加数据
+    odom = create_test_odom(vx=1.0)
+    traj = create_test_trajectory()
+    mock.update_odom(odom)
+    mock.update_trajectory(traj)
+    
+    # 设置紧急停止
+    mock.node._emergency_stop_requested = True
+    
+    # 正常情况下，紧急停止会发布停止命令
+    mock.node._control_loop_core()
+    assert mock.node._stop_cmd_count > 0
+    
+    # 重置计数
+    initial_stop_count = mock.node._stop_cmd_count
+    
+    # 设置关闭标志
+    mock.node._shutting_down = True
+    
+    # 关闭时，即使有紧急停止也不应该发布
+    mock.node._control_loop_core()
+    assert mock.node._stop_cmd_count == initial_stop_count

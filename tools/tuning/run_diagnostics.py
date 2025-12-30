@@ -40,7 +40,7 @@ from datetime import datetime
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.tuning.diagnostics_analyzer import DiagnosticsAnalyzer, AnalysisResult
+from tools.tuning.diagnostics_analyzer import DiagnosticsAnalyzer, AnalysisResult, TuningCategory
 from tools.tuning.config_generator import ConfigGenerator
 from tools.tuning.data_collector import (
     CollectionConfig, 
@@ -171,31 +171,66 @@ def print_analysis_results(results: list, summary: dict):
         print("\n✓ 当前配置表现良好，无需调整")
         return
     
-    # 按严重程度分组
-    critical = [r for r in results if r.severity == 'critical']
-    warning = [r for r in results if r.severity == 'warning']
-    info = [r for r in results if r.severity == 'info']
+    # 按调优分类和严重程度分组
+    tunable_results = [r for r in results if r.tuning_category == TuningCategory.TUNABLE]
+    design_results = [r for r in results if r.tuning_category == TuningCategory.DESIGN]
+    safety_results = [r for r in results if r.tuning_category == TuningCategory.SAFETY]
+    diagnostic_results = [r for r in results if r.tuning_category == TuningCategory.DIAGNOSTIC]
     
-    if critical:
-        print(f"\n🔴 严重问题 ({len(critical)}项):")
-        for r in critical:
-            print(f"  [{r.parameter}]")
-            print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
-            print(f"    原因: {r.reason}")
+    # 可调优参数
+    if tunable_results:
+        critical = [r for r in tunable_results if r.severity == 'critical']
+        warning = [r for r in tunable_results if r.severity == 'warning']
+        info = [r for r in tunable_results if r.severity == 'info']
+        
+        print("\n" + "-" * 40)
+        print("可调优参数 (建议采纳)")
+        print("-" * 40)
+        
+        if critical:
+            print(f"\n🔴 严重问题 ({len(critical)}项):")
+            for r in critical:
+                print(f"  [{r.parameter}]")
+                print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
+                print(f"    原因: {r.reason}")
+        
+        if warning:
+            print(f"\n🟡 警告 ({len(warning)}项):")
+            for r in warning:
+                print(f"  [{r.parameter}]")
+                print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
+                print(f"    原因: {r.reason}")
+        
+        if info:
+            print(f"\n🔵 建议 ({len(info)}项):")
+            for r in info:
+                print(f"  [{r.parameter}]")
+                print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
+                print(f"    原因: {r.reason}")
     
-    if warning:
-        print(f"\n🟡 警告 ({len(warning)}项):")
-        for r in warning:
-            print(f"  [{r.parameter}]")
-            print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
-            print(f"    原因: {r.reason}")
+    # 设计参数（仅诊断信息）
+    if design_results:
+        print("\n" + "-" * 40)
+        print("设计参数 (不建议自动调优)")
+        print("-" * 40)
+        for r in design_results:
+            print(f"  ⚪ [{r.parameter}]")
+            print(f"    {r.reason}")
     
-    if info:
-        print(f"\n🔵 建议 ({len(info)}项):")
-        for r in info:
-            print(f"  [{r.parameter}]")
-            print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
-            print(f"    原因: {r.reason}")
+    # 安全参数（仅诊断信息）
+    if safety_results:
+        print("\n" + "-" * 40)
+        print("安全参数 (不建议自动调整)")
+        print("-" * 40)
+        for r in safety_results:
+            # omega_max=0 是配置错误，需要修复
+            if r.category == 'config_error':
+                print(f"  🔴 [{r.parameter}] (配置错误，需修复)")
+                print(f"    当前值: {r.current_value} → 建议值: {r.suggested_value}")
+                print(f"    原因: {r.reason}")
+            else:
+                print(f"  ⚪ [{r.parameter}]")
+                print(f"    {r.reason}")
 
 
 def run_analysis(samples: list, config: dict, output_dir: Path, config_path: str):
@@ -259,7 +294,8 @@ def run_analysis(samples: list, config: dict, output_dir: Path, config_path: str
                     'current_value': r.current_value,
                     'suggested_value': r.suggested_value,
                     'reason': r.reason,
-                    'confidence': r.confidence
+                    'confidence': r.confidence,
+                    'tuning_category': r.tuning_category.value
                 }
                 for r in results
             ]
@@ -537,7 +573,10 @@ def generate_demo_data() -> list:
                 'tf2_available': True,
                 'tf2_injected': True,
                 'fallback_duration_ms': 0 if np.random.random() > 0.05 else np.random.exponential(50),
-                'accumulated_drift': np.random.exponential(0.01)
+                'accumulated_drift': np.random.exponential(0.01),
+                'source_frame': 'base_link',
+                'target_frame': 'odom',
+                'error_message': '' if np.random.random() > 0.02 else 'TF2 temporarily unavailable'
             },
             
             # 超时状态

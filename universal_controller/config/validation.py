@@ -8,6 +8,7 @@
 from typing import Dict, Any, List, Tuple, Optional
 
 from ..core.exceptions import ConfigValidationError
+from ..core.constants import EPSILON
 
 
 def get_config_value(
@@ -115,7 +116,7 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
         return isinstance(value, (int, float)) and not isinstance(value, bool)
     
     # EKF 数值稳定性参数验证
-    MIN_VELOCITY_FOR_JACOBIAN = 1e-6  # Jacobian 计算的最小速度阈值
+    MIN_VELOCITY_FOR_JACOBIAN = EPSILON  # Jacobian 计算的最小速度阈值
     min_vel_jacobian = get_config_value(config, 'ekf.min_velocity_for_jacobian')
     if min_vel_jacobian is not None and _is_numeric(min_vel_jacobian):
         if min_vel_jacobian < MIN_VELOCITY_FOR_JACOBIAN:
@@ -133,7 +134,7 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
                           f'可能导致协方差矩阵奇异，建议设置为 >= {MIN_EIGENVALUE}'))
     
     # MPC 权重验证 - 必须为正值
-    MIN_MPC_WEIGHT = 1e-6
+    MIN_MPC_WEIGHT = EPSILON
     mpc_weight_keys = [
         ('mpc.weights.position', 'MPC 位置权重'),
         ('mpc.weights.velocity', 'MPC 速度权重'),
@@ -178,6 +179,48 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
             errors.append(('constraints.v_min', 
                           f'最小速度 ({v_min}) 不应大于最大速度 ({v_max})'))
     
+    # 角速度约束验证 - omega_max 必须大于 0
+    # omega_max = 0 会导致机器人无法转向，这是一个严重的配置错误
+    omega_max = get_config_value(config, 'constraints.omega_max')
+    if omega_max is not None and _is_numeric(omega_max):
+        if omega_max <= 0:
+            errors.append(('constraints.omega_max', 
+                          f'最大角速度 ({omega_max}) 必须大于 0，否则机器人无法转向'))
+    
+    # 低速角速度约束验证 - omega_max_low 必须大于 0 且不超过 omega_max
+    # omega_max_low 用于低速时的角速度限制，防止低速大转弯导致的不稳定
+    omega_max_low = get_config_value(config, 'constraints.omega_max_low')
+    if omega_max_low is not None and _is_numeric(omega_max_low):
+        if omega_max_low <= 0:
+            errors.append(('constraints.omega_max_low', 
+                          f'低速最大角速度 ({omega_max_low}) 必须大于 0'))
+        elif omega_max is not None and _is_numeric(omega_max) and omega_max_low > omega_max:
+            errors.append(('constraints.omega_max_low', 
+                          f'低速最大角速度 ({omega_max_low}) 不应大于最大角速度 ({omega_max})'))
+    
+    # 加速度约束验证 - a_max 必须大于 0
+    a_max = get_config_value(config, 'constraints.a_max')
+    if a_max is not None and _is_numeric(a_max):
+        if a_max <= 0:
+            errors.append(('constraints.a_max', 
+                          f'最大加速度 ({a_max}) 必须大于 0，否则机器人无法加速'))
+    
+    # 角加速度约束验证 - alpha_max 必须大于 0
+    # alpha_max 用于 MPC 控制输入约束和安全监控
+    alpha_max = get_config_value(config, 'constraints.alpha_max')
+    if alpha_max is not None and _is_numeric(alpha_max):
+        if alpha_max <= 0:
+            errors.append(('constraints.alpha_max', 
+                          f'最大角加速度 ({alpha_max}) 必须大于 0，否则机器人无法改变角速度'))
+    
+    # 垂直加速度约束验证 - az_max 必须大于 0
+    # az_max 用于安全监控中的垂直加速度限制检测
+    az_max = get_config_value(config, 'constraints.az_max')
+    if az_max is not None and _is_numeric(az_max):
+        if az_max <= 0:
+            errors.append(('constraints.az_max', 
+                          f'最大垂直加速度 ({az_max}) 必须大于 0'))
+    
     # 推力约束一致性
     thrust_min = get_config_value(config, 'attitude.thrust_min')
     thrust_max = get_config_value(config, 'attitude.thrust_max')
@@ -218,32 +261,31 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
     # MPC 的时间步长应该与轨迹的时间步长匹配，否则预测会不准确
     mpc_dt = get_config_value(config, 'mpc.dt')
     if _is_numeric(mpc_dt) and _is_numeric(default_dt):
-        if abs(mpc_dt - default_dt) > 1e-6:
+        if abs(mpc_dt - default_dt) > EPSILON:
             errors.append(('mpc.dt', 
                           f'MPC 时间步长 ({mpc_dt}) 与轨迹时间步长 ({default_dt}) 不一致，'
                           f'这可能导致轨迹跟踪不准确'))
     
     min_points = get_config_value(config, 'trajectory.min_points')
     max_points = get_config_value(config, 'trajectory.max_points')
-    default_points = get_config_value(config, 'trajectory.default_num_points')
     if _is_numeric(min_points) and _is_numeric(max_points):
         if min_points > max_points:
             errors.append(('trajectory.min_points', 
                           f'最小轨迹点数 ({min_points}) 不应大于最大轨迹点数 ({max_points})'))
-    if _is_numeric(default_points) and _is_numeric(min_points) and _is_numeric(max_points):
-        if default_points < min_points or default_points > max_points:
-            errors.append(('trajectory.default_num_points', 
-                          f'默认轨迹点数 ({default_points}) 应在 [{min_points}, {max_points}] 范围内'))
     
     # low_speed_thresh 一致性检查
     # 设计说明: low_speed_thresh 的唯一定义点是 trajectory.low_speed_thresh
     # consistency 模块直接从 trajectory 配置读取此值
-    # 如果用户在 consistency 配置中设置了此值，发出警告提示用户移除
+    # 如果用户在 consistency 配置中设置了此值，记录警告但不阻止启动
+    # 注意：废弃参数使用 logger.warning 而非添加到 errors，因为这不是致命错误
     consistency_low_speed = get_config_value(config, 'consistency.low_speed_thresh')
     if consistency_low_speed is not None:
-        errors.append(('consistency.low_speed_thresh', 
-                      f'consistency.low_speed_thresh 已废弃，请移除此配置。'
-                      f'统一使用 trajectory.low_speed_thresh'))
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(
+            "配置废弃警告: consistency.low_speed_thresh 已废弃，请移除此配置。"
+            "统一使用 trajectory.low_speed_thresh"
+        )
     
     # Transform 配置一致性检查
     fallback_duration = get_config_value(config, 'transform.fallback_duration_limit_ms')
@@ -252,6 +294,18 @@ def validate_logical_consistency(config: Dict[str, Any]) -> List[Tuple[str, str]
         if fallback_duration > fallback_critical:
             errors.append(('transform.fallback_duration_limit_ms', 
                           f'TF2 降级警告阈值 ({fallback_duration}ms) 不应大于临界阈值 ({fallback_critical}ms)'))
+    
+    # Safety 加速度预热参数一致性检查
+    # accel_warmup_margin_multiplier 应该 <= accel_warmup_margin_max
+    # 否则 multiplier 会被隐式截断为 max，用户可能不知道配置未生效
+    accel_warmup_multiplier = get_config_value(config, 'safety.accel_warmup_margin_multiplier')
+    accel_warmup_max = get_config_value(config, 'safety.accel_warmup_margin_max')
+    if _is_numeric(accel_warmup_multiplier) and _is_numeric(accel_warmup_max):
+        if accel_warmup_multiplier > accel_warmup_max:
+            errors.append(('safety.accel_warmup_margin_multiplier', 
+                          f'预热裕度倍数 ({accel_warmup_multiplier}) 大于上限 ({accel_warmup_max})，'
+                          f'实际生效值将被截断为 {accel_warmup_max}。'
+                          f'请调整配置使 multiplier <= max'))
     
     return errors
 

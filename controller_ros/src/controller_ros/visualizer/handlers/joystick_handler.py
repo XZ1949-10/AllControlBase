@@ -15,28 +15,43 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class JoystickConfig:
-    """手柄配置"""
+    """手柄配置
+    
+    注意: max_linear 和 max_angular 应该从 constraints 配置读取，
+    确保与控制器使用相同的限制值。
+    """
     enable_button: int = 4          # LB 键
     estop_button: int = 5           # RB 键 (紧急停止)
     resume_button: int = 7          # Start 键 (恢复)
     linear_axis: int = 1            # 左摇杆 Y 轴
     angular_axis: int = 3           # 右摇杆 X 轴
-    max_linear: float = 0.5         # 最大线速度 (m/s)
-    max_angular: float = 1.0        # 最大角速度 (rad/s)
+    max_linear: float = 0.5         # 最大线速度 (m/s) - 从 constraints.v_max 读取
+    max_angular: float = 1.0        # 最大角速度 (rad/s) - 从 constraints.omega_max 读取
     deadzone: float = 0.1           # 摇杆死区
     
     @classmethod
-    def from_dict(cls, config: Dict[str, Any]) -> 'JoystickConfig':
-        """从字典创建配置"""
+    def from_dict(cls, joystick_config: Dict[str, Any], 
+                  constraints_config: Dict[str, Any] = None) -> 'JoystickConfig':
+        """从字典创建配置
+        
+        Args:
+            joystick_config: 手柄配置字典
+            constraints_config: 约束配置字典 (用于读取速度限制)
+        
+        Returns:
+            JoystickConfig 实例
+        """
+        constraints = constraints_config or {}
         return cls(
-            enable_button=config.get('enable_button', 4),
-            estop_button=config.get('estop_button', 5),
-            resume_button=config.get('resume_button', 7),
-            linear_axis=config.get('linear_axis', 1),
-            angular_axis=config.get('angular_axis', 3),
-            max_linear=config.get('max_linear', 0.5),
-            max_angular=config.get('max_angular', 1.0),
-            deadzone=config.get('deadzone', 0.1),
+            enable_button=joystick_config.get('enable_button', 4),
+            estop_button=joystick_config.get('estop_button', 5),
+            resume_button=joystick_config.get('resume_button', 7),
+            linear_axis=joystick_config.get('linear_axis', 1),
+            angular_axis=joystick_config.get('angular_axis', 3),
+            # 速度限制从 constraints 读取，确保一致性
+            max_linear=constraints.get('v_max', 0.5),
+            max_angular=constraints.get('omega_max', 1.0),
+            deadzone=joystick_config.get('deadzone', 0.1),
         )
 
 

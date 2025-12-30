@@ -76,11 +76,12 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         # 当累积漂移超过此值时，停止累积（认为估计已不可靠）
         self.max_accumulated_drift = transform_config.get('max_accumulated_drift', 1.0)  # 米
         self.source_frame = transform_config.get('source_frame', 'base_link')
+        self.target_frame = transform_config.get('target_frame', 'odom')
         self.drift_correction_thresh = transform_config.get('drift_correction_thresh', 0.01)
         
         # 坐标系验证配置
         self.expected_source_frames: List[str] = transform_config.get(
-            'expected_source_frames', ['base_link', 'base_link_0', ''])
+            'expected_source_frames', ['base_link', 'base_footprint', 'base_link_0', '', 'odom'])
         self.warn_unexpected_frame = transform_config.get('warn_unexpected_frame', True)
         self._warned_frames: set = set()  # 已警告过的坐标系，避免重复警告
         
@@ -415,8 +416,36 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         - 降级到 odom 积分时记录持续时间
         - 降级超过 500ms 触发更高级别警告
         - 降级超过 1000ms 触发临界状态 (F3.4)
+        
+        依赖说明:
+        - 需要 state_estimator 进行 odom 积分估计
+        - 如果 state_estimator 未设置，将返回原轨迹并标记为临界状态
         """
         current_time = get_monotonic_time()
+        
+        # 检查 state_estimator 依赖
+        if self.state_estimator is None:
+            # 首次进入降级且无 state_estimator，记录错误
+            if self.fallback_start_time is None:
+                self.fallback_start_time = current_time
+                logger.error(
+                    "TF2 fallback started but state_estimator is not set. "
+                    "Cannot estimate transform from odom integration. "
+                    "This is a configuration error - ensure ControllerManager.initialize_components() "
+                    "is called with state_estimator before coord_transformer, or use "
+                    "initialize_default_components() which handles dependencies automatically."
+                )
+            
+            fallback_duration = current_time - self.fallback_start_time
+            if fallback_duration > self.fallback_critical_limit:
+                status = TransformStatus.FALLBACK_CRITICAL
+            elif fallback_duration > self.fallback_duration_limit:
+                status = TransformStatus.FALLBACK_WARNING
+            else:
+                status = TransformStatus.FALLBACK_OK
+            
+            self._last_status = status
+            return traj, status
         
         if self.fallback_start_time is None:
             # 开始降级
@@ -686,12 +715,37 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self.state_estimator = estimator
     
     def get_status(self) -> Dict[str, Any]:
-        """获取变换器状态"""
+        """获取变换器状态
+        
+        Returns:
+            包含以下字段的状态字典:
+            - tf2_available: TF2 是否可用（未处于降级状态）
+            - tf2_injected: 是否使用外部 TF2 回调
+            - fallback_duration_ms: 降级持续时间（毫秒）
+            - accumulated_drift: 累积漂移估计（米）
+            - drift_estimate_reliable: 漂移估计是否可靠
+            - is_critical: 是否处于临界状态
+            - status: 状态名称
+            - tf2_initialized: TF2 是否已初始化
+            - source_frame: 源坐标系名称
+            - target_frame: 目标坐标系名称（从配置读取）
+            - error_message: 最近的错误信息
+        """
         fallback_duration_ms = 0.0
         if self.fallback_start_time is not None:
             fallback_duration_ms = (get_monotonic_time() - self.fallback_start_time) * 1000
         
         tf2_injected = self._external_tf2_lookup is not None
+        
+        # 构建错误信息
+        error_message = ''
+        if self.fallback_start_time is not None:
+            if fallback_duration_ms > self.fallback_critical_limit * 1000:
+                error_message = f'TF2 fallback critical: {fallback_duration_ms:.0f}ms'
+            elif fallback_duration_ms > self.fallback_duration_limit * 1000:
+                error_message = f'TF2 fallback warning: {fallback_duration_ms:.0f}ms'
+            else:
+                error_message = 'TF2 temporarily unavailable'
         
         return {
             'tf2_available': self.fallback_start_time is None,
@@ -702,7 +756,9 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
             'is_critical': self._last_status.is_critical(),
             'status': self._last_status.name,
             'tf2_initialized': self._tf2_initialized,
-            'external_tf2_callback': tf2_injected  # 保持向后兼容
+            'source_frame': self.source_frame,
+            'target_frame': self.target_frame,
+            'error_message': error_message
         }
     
     def reset(self) -> None:

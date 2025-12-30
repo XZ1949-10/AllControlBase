@@ -204,7 +204,7 @@ class ControllerNode(ControllerNodeBase, Node):
     
     def _control_callback(self):
         """控制循环回调"""
-        # 使用基类的核心控制逻辑
+        # 关闭检查已在基类 _control_loop_core() 中统一处理
         cmd = self._control_loop_core()
         
         if cmd is not None:
@@ -278,16 +278,65 @@ class ControllerNode(ControllerNodeBase, Node):
         """
         清理资源
         
-        显式取消控制定时器，确保资源及时释放。
-        虽然 destroy_node() 也会清理定时器，但显式清理是更好的实践。
+        完整的资源清理流程:
+        1. 设置关闭标志，阻止控制循环继续执行
+        2. 取消控制定时器
+        3. 发送最终停止命令
+        4. 销毁订阅器
+        5. 关闭发布器和服务
+        6. 调用基类清理
         """
-        # 取消控制定时器
+        # 1. 设置关闭标志 (基类会设置，但这里提前设置以阻止回调)
+        self._shutting_down = True
+        
+        # 2. 取消控制定时器
         if hasattr(self, '_control_timer') and self._control_timer is not None:
             self._control_timer.cancel()
             self._control_timer = None
         
-        # 调用基类清理
+        # 3. 发送最终停止命令
+        try:
+            if hasattr(self, '_publishers') and self._publishers is not None:
+                self._publishers.publish_stop_cmd()
+                self.get_logger().info("Final stop command sent")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to send final stop command: {e}")
+        
+        # 4. 销毁订阅器
+        if hasattr(self, '_odom_sub') and self._odom_sub is not None:
+            self.destroy_subscription(self._odom_sub)
+            self._odom_sub = None
+        
+        if hasattr(self, '_imu_sub') and self._imu_sub is not None:
+            self.destroy_subscription(self._imu_sub)
+            self._imu_sub = None
+        
+        if hasattr(self, '_traj_sub') and self._traj_sub is not None:
+            self.destroy_subscription(self._traj_sub)
+            self._traj_sub = None
+        
+        if hasattr(self, '_emergency_stop_sub') and self._emergency_stop_sub is not None:
+            self.destroy_subscription(self._emergency_stop_sub)
+            self._emergency_stop_sub = None
+        
+        # 5. 关闭发布器和服务
+        if hasattr(self, '_publishers') and self._publishers is not None:
+            self._publishers.shutdown()
+            self._publishers = None
+        
+        if hasattr(self, '_services') and self._services is not None:
+            self._services.shutdown()
+            self._services = None
+        
+        # 6. 关闭 TF 桥接
+        if hasattr(self, '_tf_bridge') and self._tf_bridge is not None:
+            self._tf_bridge.shutdown()
+            self._tf_bridge = None
+        
+        # 7. 调用基类清理
         ControllerNodeBase.shutdown(self)
+        
+        self.get_logger().info("Controller node shutdown complete")
 
 
 def main(args=None):

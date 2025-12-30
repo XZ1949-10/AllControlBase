@@ -117,31 +117,14 @@ class TimeoutMonitor:
         if self._startup_time is None:
             self._startup_time = receive_time
     
-    def check(self, current_time: float = None) -> TimeoutStatus:
+    def check(self) -> TimeoutStatus:
         """检查所有超时状态
         
-        Args:
-            current_time: 已废弃参数，保留用于向后兼容，实际使用单调时钟。
-                         此参数将在未来版本中移除。
+        使用单调时钟 (time.monotonic()) 进行超时检测，避免系统时间跳变影响。
         
         Note:
             超时阈值 <= 0 表示禁用该数据源的超时检测
-        
-        .. deprecated:: 1.0
-            `current_time` 参数已废弃，超时检测现在使用单调时钟 (time.monotonic())
-            以避免系统时间跳变的影响。此参数将在 2.0 版本中移除。
         """
-        # 废弃参数警告 (仅在传入非 None 值时警告，避免频繁日志)
-        if current_time is not None:
-            import warnings
-            warnings.warn(
-                "TimeoutMonitor.check() 的 current_time 参数已废弃，"
-                "超时检测现在使用单调时钟。此参数将在 2.0 版本中移除。",
-                DeprecationWarning,
-                stacklevel=2
-            )
-        
-        # 使用单调时钟，忽略外部传入的时间
         monotonic_now = get_monotonic_time()
         
         in_startup_grace = False

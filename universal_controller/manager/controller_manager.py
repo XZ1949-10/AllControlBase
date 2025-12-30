@@ -51,6 +51,7 @@ from ..core.data_types import (
 from ..core.enums import ControllerState, PlatformType
 from ..core.diagnostics_input import DiagnosticsInput
 from ..core.ros_compat import get_monotonic_time, normalize_angle
+from ..core.constants import EPSILON, MIN_SEGMENT_LENGTH
 from ..config.default_config import PLATFORM_CONFIG, DEFAULT_CONFIG
 from ..config.validation import validate_logical_consistency, ConfigValidationError
 from ..safety.timeout_monitor import TimeoutMonitor
@@ -140,9 +141,23 @@ class ControllerManager:
         self._last_mpc_cmd: Optional[ControlOutput] = None
         self._last_backup_cmd: Optional[ControlOutput] = None
         self._last_tracking_error: Optional[Dict[str, float]] = None
+        self._last_tracking_quality: Optional[Dict[str, Any]] = None  # 跟踪质量评估结果
         self._last_published_diagnostics: Optional[Dict[str, Any]] = None
         self._last_attitude_cmd: Optional[AttitudeCommand] = None  # F14: 姿态命令
         self._last_update_time: Optional[float] = None  # 用于计算实际时间间隔
+        
+        # 跟踪质量评估配置
+        # 从 TRACKING_CONFIG 获取默认值，确保配置单一数据源
+        from ..config.system_config import TRACKING_CONFIG
+        tracking_config = config.get('tracking', {})
+        self._tracking_thresholds = {
+            'lateral': tracking_config.get('lateral_thresh', TRACKING_CONFIG['lateral_thresh']),
+            'longitudinal': tracking_config.get('longitudinal_thresh', TRACKING_CONFIG['longitudinal_thresh']),
+            'heading': tracking_config.get('heading_thresh', TRACKING_CONFIG['heading_thresh']),
+            'prediction': tracking_config.get('prediction_thresh', TRACKING_CONFIG['prediction_thresh']),
+        }
+        self._tracking_weights = tracking_config.get('weights', TRACKING_CONFIG['weights'].copy())
+        self._tracking_rating = tracking_config.get('rating', TRACKING_CONFIG['rating'].copy())
         
         # 预测误差计算相关状态
         # 存储上一次 MPC 预测的下一步状态，用于计算预测误差
@@ -160,11 +175,8 @@ class ControllerManager:
             'notify_update_count_thresh', 50)  # 触发警告的 update 次数阈值
         
         # 诊断发布器（职责分离）
-        diagnostics_config = config.get('diagnostics', {})
-        self._diagnostics_publisher = DiagnosticsPublisher(
-            diagnostics_topic=diagnostics_config.get('topic', '/controller/diagnostics'),
-            cmd_topic=diagnostics_config.get('cmd_topic', '/cmd_unified')
-        )
+        # 注意: 话题名称配置在 ROS 层处理，核心库不再关心话题
+        self._diagnostics_publisher = DiagnosticsPublisher()
         
         # 尝试初始化 ROS Publisher (向后兼容)
         self._cmd_pub: Optional[Any] = None
@@ -261,10 +273,11 @@ class ControllerManager:
         """
         组件注入方法
         
-        注意：组件之间存在依赖关系：
+        组件依赖关系:
         - coord_transformer 依赖 state_estimator（用于 TF2 降级时的 odom 积分）
         
-        如果依赖的组件未提供，会在 update() 时进行延迟绑定检查。
+        依赖绑定会在此方法结束时自动执行。如果分多次调用此方法，
+        每次调用都会尝试重新绑定依赖，确保依赖关系正确建立。
         """
         if state_estimator:
             self.state_estimator = state_estimator
@@ -286,20 +299,24 @@ class ControllerManager:
             self.attitude_controller = attitude_controller
         
         # 延迟绑定：确保组件间依赖正确建立
+        # 每次调用都会尝试绑定，支持分多次设置组件的场景
         self._bind_component_dependencies()
         
-        # 初始化状态机
-        self.state_machine = StateMachine(self.config)
+        # 初始化状态机（如果尚未初始化）
+        if self.state_machine is None:
+            self.state_machine = StateMachine(self.config)
     
     def _bind_component_dependencies(self) -> None:
         """
         绑定组件间的依赖关系
         
         此方法可以多次调用，用于在组件更新后重新绑定依赖。
+        只有当所有依赖组件都存在时才会执行绑定。
         """
         # coord_transformer 依赖 state_estimator
-        if self.coord_transformer and self.state_estimator:
+        if self.coord_transformer is not None and self.state_estimator is not None:
             self.coord_transformer.set_state_estimator(self.state_estimator)
+            logger.debug("Bound state_estimator to coord_transformer")
     
     def initialize_default_components(self) -> None:
         """使用默认组件初始化"""
@@ -308,12 +325,20 @@ class ControllerManager:
         from ..tracker.mpc_controller import MPCController
         from ..consistency.weighted_analyzer import WeightedConsistencyAnalyzer
         from ..safety.safety_monitor import BasicSafetyMonitor
-        from ..transition.smooth_transition import ExponentialSmoothTransition
+        from ..transition.smooth_transition import ExponentialSmoothTransition, LinearSmoothTransition
         from ..transform.robust_transformer import RobustCoordinateTransformer
         from ..core.data_types import TrajectoryDefaults
         
         # 初始化轨迹默认配置
         TrajectoryDefaults.configure(self.config)
+        
+        # 根据配置选择平滑过渡实现
+        transition_type = self.config.get('transition', {}).get('type', 'exponential')
+        if transition_type == 'linear':
+            smooth_transition = LinearSmoothTransition(self.config)
+        else:
+            # 默认使用指数过渡
+            smooth_transition = ExponentialSmoothTransition(self.config)
         
         # 基础组件
         components = {
@@ -322,7 +347,7 @@ class ControllerManager:
             'backup_tracker': PurePursuitController(self.config, self.platform_config),
             'consistency_checker': WeightedConsistencyAnalyzer(self.config),
             'safety_monitor': BasicSafetyMonitor(self.config, self.platform_config),
-            'smooth_transition': ExponentialSmoothTransition(self.config),
+            'smooth_transition': smooth_transition,
             'coord_transformer': RobustCoordinateTransformer(self.config),
             'mpc_health_monitor': MPCHealthMonitor(self.config)
         }
@@ -412,8 +437,9 @@ class ControllerManager:
         cmd = self._select_controller_output(
             state, transformed_traj, consistency, mpc_cmd)
         
-        # 9. 计算跟踪误差
+        # 9. 计算跟踪误差和质量评估
         self._last_tracking_error = self._compute_tracking_error(state, transformed_traj)
+        self._last_tracking_quality = self._compute_tracking_quality(self._last_tracking_error)
         
         # 10. 安全检查
         cmd = self._apply_safety_check(state, cmd, diagnostics)
@@ -486,7 +512,9 @@ class ControllerManager:
         
         # 分别检测 odom 和 trajectory 的 notify 调用
         # 每个 notify 独立跟踪，避免相互干扰
-        self._update_count_without_notify += 1
+        # 只在检测完成前累积计数，避免无意义的内存增长
+        if not self._notify_warning_logged:
+            self._update_count_without_notify += 1
         
         if self._update_count_without_notify >= self._notify_update_count_thresh:
             # 检查 odom notify
@@ -727,7 +755,8 @@ class ControllerManager:
             transition_progress=self.smooth_transition.get_progress() if self.smooth_transition else 0.0,
             tf2_critical=tf2_critical,
             safety_check_passed=self._safety_check_passed,
-            emergency_stop=emergency_stop
+            emergency_stop=emergency_stop,
+            tracking_quality=self._last_tracking_quality
         )
     
     def _compute_tracking_error(self, state: np.ndarray, trajectory: Trajectory) -> Dict[str, float]:
@@ -743,30 +772,51 @@ class ControllerManager:
         注意:
         - 所有误差均为绝对值，用于诊断和质量评估
         - prediction_error 为 NaN 表示无预测数据（如使用 fallback 求解器时）
-        """
-        if len(trajectory.points) < 2:
-            self._last_mpc_predicted_state = None
-            return {'lateral_error': 0.0, 'longitudinal_error': 0.0, 
-                    'heading_error': 0.0, 'prediction_error': float('nan')}
         
+        边界情况处理:
+        - 空轨迹 (0 点): 返回零误差，无法计算有意义的跟踪误差
+        - 单点轨迹 (1 点): 计算到该点的距离作为误差，航向误差为指向该点的方向差
+        - 正常轨迹 (≥2 点): 使用完整的横向/纵向误差分解
+        """
         px, py = state[0], state[1]
         theta = state[6]
         
-        # 计算预测误差
-        # 比较上一次 MPC 预测的状态与当前实际状态
-        # 使用 NaN 表示无预测数据（fallback 求解器不提供预测）
+        # 计算预测误差 (在任何情况下都需要更新)
         prediction_error = float('nan')
         if self._last_mpc_predicted_state is not None:
             pred_px, pred_py = self._last_mpc_predicted_state[0], self._last_mpc_predicted_state[1]
-            # 位置预测误差 (欧几里得距离)
             prediction_error = np.sqrt((px - pred_px)**2 + (py - pred_py)**2)
         
-        # 更新预测状态：通过接口方法获取 MPC 预测的下一步状态
+        # 更新预测状态
         if self.mpc_tracker is not None:
             self._last_mpc_predicted_state = self.mpc_tracker.get_predicted_next_state()
         else:
             self._last_mpc_predicted_state = None
         
+        # 空轨迹: 无法计算有意义的误差
+        if len(trajectory.points) == 0:
+            return {'lateral_error': 0.0, 'longitudinal_error': 0.0, 
+                    'heading_error': 0.0, 'prediction_error': prediction_error}
+        
+        # 单点轨迹: 计算到该点的距离和航向误差
+        if len(trajectory.points) == 1:
+            target = trajectory.points[0]
+            dx = target.x - px
+            dy = target.y - py
+            dist = np.sqrt(dx**2 + dy**2)
+            
+            # 航向误差: 当前航向与指向目标点方向的差值
+            if dist > EPSILON:
+                target_heading = np.arctan2(dy, dx)
+                heading_error = abs(normalize_angle(theta - target_heading))
+            else:
+                heading_error = 0.0
+            
+            # 单点轨迹无法区分横向/纵向，将距离作为横向误差
+            return {'lateral_error': dist, 'longitudinal_error': 0.0, 
+                    'heading_error': heading_error, 'prediction_error': prediction_error}
+        
+        # 正常轨迹 (≥2 点): 完整的横向/纵向误差分解
         min_dist = float('inf')
         closest_idx = 0
         for i, p in enumerate(trajectory.points):
@@ -775,21 +825,20 @@ class ControllerManager:
                 min_dist = dist
                 closest_idx = i
         
+        # 确定用于计算误差的线段
         if closest_idx < len(trajectory.points) - 1:
             p0 = trajectory.points[closest_idx]
             p1 = trajectory.points[closest_idx + 1]
-        elif closest_idx > 0:
+        else:
+            # closest_idx 是最后一个点，使用前一个线段
             p0 = trajectory.points[closest_idx - 1]
             p1 = trajectory.points[closest_idx]
-        else:
-            return {'lateral_error': min_dist, 'longitudinal_error': 0.0,
-                    'heading_error': 0.0, 'prediction_error': prediction_error}
         
         dx = p1.x - p0.x
         dy = p1.y - p0.y
         traj_length = np.sqrt(dx**2 + dy**2)
         
-        if traj_length < 1e-6:
+        if traj_length < MIN_SEGMENT_LENGTH:
             return {'lateral_error': min_dist, 'longitudinal_error': 0.0,
                     'heading_error': 0.0, 'prediction_error': prediction_error}
         
@@ -809,6 +858,92 @@ class ControllerManager:
             'heading_error': heading_error,
             'prediction_error': prediction_error
         }
+    
+    def _compute_tracking_quality(self, tracking_error: Dict[str, float]) -> Dict[str, Any]:
+        """
+        计算跟踪质量评分
+        
+        使用 tracking 配置中的阈值和权重计算质量评分。
+        
+        评分算法:
+        1. 对每个误差分量，计算归一化评分: score = max(0, 1 - error/threshold) * 100
+        2. 使用配置的权重计算加权平均分
+        3. 根据评级阈值确定质量等级
+        
+        Args:
+            tracking_error: 跟踪误差字典，包含 lateral_error, longitudinal_error, 
+                           heading_error, prediction_error
+        
+        Returns:
+            质量评估结果字典:
+            - scores: 各分量评分 (0-100)
+            - overall_score: 加权总分 (0-100)
+            - rating: 质量等级 ('excellent', 'good', 'fair', 'poor')
+            - thresholds: 使用的阈值配置
+        """
+        scores = {}
+        
+        # 计算各分量评分
+        for key in ['lateral', 'longitudinal', 'heading']:
+            error_key = f'{key}_error'
+            if error_key in tracking_error:
+                error = tracking_error[error_key]
+                threshold = self._tracking_thresholds.get(key, 1.0)
+                if threshold > 0:
+                    # 归一化评分: 误差为0时100分，误差>=阈值时0分
+                    score = max(0.0, 1.0 - error / threshold) * 100
+                else:
+                    score = 100.0 if error == 0 else 0.0
+                scores[key] = score
+            else:
+                scores[key] = 100.0  # 无数据时默认满分
+        
+        # 预测误差评分 (可选，不参与加权平均)
+        prediction_error = tracking_error.get('prediction_error', float('nan'))
+        if np.isfinite(prediction_error):
+            threshold = self._tracking_thresholds.get('prediction', 0.5)
+            if threshold > 0:
+                scores['prediction'] = max(0.0, 1.0 - prediction_error / threshold) * 100
+            else:
+                scores['prediction'] = 100.0 if prediction_error == 0 else 0.0
+        else:
+            scores['prediction'] = float('nan')
+        
+        # 计算加权总分 (只使用 lateral, longitudinal, heading)
+        total_weight = 0.0
+        weighted_sum = 0.0
+        for key in ['lateral', 'longitudinal', 'heading']:
+            weight = self._tracking_weights.get(key, 0.0)
+            if key in scores:
+                weighted_sum += scores[key] * weight
+                total_weight += weight
+        
+        if total_weight > 0:
+            overall_score = weighted_sum / total_weight
+        else:
+            overall_score = 0.0
+        
+        # 确定质量等级
+        if overall_score >= self._tracking_rating.get('excellent', 90):
+            rating = 'excellent'
+        elif overall_score >= self._tracking_rating.get('good', 70):
+            rating = 'good'
+        elif overall_score >= self._tracking_rating.get('fair', 50):
+            rating = 'fair'
+        else:
+            rating = 'poor'
+        
+        return {
+            'scores': scores,
+            'overall_score': overall_score,
+            'rating': rating,
+            'thresholds': self._tracking_thresholds.copy(),
+            'weights': self._tracking_weights.copy(),
+        }
+    
+    def get_tracking_quality(self) -> Optional[Dict[str, Any]]:
+        """获取最新的跟踪质量评估结果"""
+        return self._last_tracking_quality
     
     def get_timeout_status(self) -> TimeoutStatus:
         """获取超时状态"""
@@ -847,6 +982,7 @@ class ControllerManager:
         self._last_mpc_cmd = None
         self._last_backup_cmd = None
         self._last_tracking_error = None
+        self._last_tracking_quality = None
         self._last_consistency = None
         self._last_mpc_health = None
         self._last_attitude_cmd = None
@@ -954,6 +1090,7 @@ class ControllerManager:
         self._last_mpc_cmd = None
         self._last_backup_cmd = None
         self._last_tracking_error = None
+        self._last_tracking_quality = None
         self._last_attitude_cmd = None
         self._last_update_time = None
         

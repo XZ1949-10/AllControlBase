@@ -61,9 +61,9 @@ class DataManager(LifecycleMixin):
     
     时钟回退处理策略:
     - 检测到时钟回退时，标记所有数据为"过时"（年龄设为 inf）
+    - 每种数据类型独立跟踪有效性，只有收到该类型的新数据才恢复
     - 记录时钟跳变事件供上层查询
     - 提供回调机制通知上层
-    - 等待新数据到来后才恢复正常
     
     时钟前跳处理策略 (可配置):
     - 默认: 只记录日志，不使数据无效 (适合仿真快进场景)
@@ -125,8 +125,10 @@ class DataManager(LifecycleMixin):
         self._clock_jump_events: List[ClockJumpEvent] = []
         self._max_clock_jump_events = 10  # 最多保留的事件数
         
-        # 数据有效性标记 - 时钟回退后数据被标记为无效
-        self._data_invalidated: bool = False
+        # 数据有效性标记 - 时钟回退后各数据分别标记为无效
+        # 设计说明：使用分离的有效性标记，确保每种数据只有在收到新数据后才恢复有效
+        # 这避免了"只收到 odom 就恢复所有数据有效性"的问题
+        self._data_invalidated: Dict[str, bool] = {'odom': False, 'imu': False, 'traj': False}
         
         # 统计信息
         # 注意：键名统一使用简短形式 'odom', 'imu', 'traj'
@@ -191,7 +193,11 @@ class DataManager(LifecycleMixin):
         if delta < -self.CLOCK_JITTER_TOLERANCE:
             event = ClockJumpEvent(self._last_time, now, delta)
             self._clock_jumped_back = True
-            self._data_invalidated = True
+            # 只标记已收到过数据的类型为无效
+            # 从未收到过的数据不需要标记（它们本来就没有有效数据）
+            for key in self._data_invalidated:
+                if key in self._latest_data:
+                    self._data_invalidated[key] = True
             
             # 记录事件
             self._clock_jump_events.append(event)
@@ -217,7 +223,10 @@ class DataManager(LifecycleMixin):
             
             # 根据配置决定是否使数据无效
             if self._invalidate_on_forward_jump:
-                self._data_invalidated = True
+                # 只标记已收到过数据的类型为无效
+                for key in self._data_invalidated:
+                    if key in self._latest_data:
+                        self._data_invalidated[key] = True
                 logger.warning(
                     f"Clock jumped forward by {delta:.3f}s "
                     f"(from {self._last_time:.3f} to {now:.3f}). "
@@ -238,7 +247,7 @@ class DataManager(LifecycleMixin):
         新数据到来时的处理
         
         Args:
-            data_type: 数据类型 ('odom', 'imu', 'trajectory')
+            data_type: 数据类型 ('odom', 'imu', 'traj')
             now: 当前时间（秒）
         
         Returns:
@@ -254,15 +263,39 @@ class DataManager(LifecycleMixin):
             # 更新 _last_time 以避免重复检测
             self._last_time = now
         
-        # 如果数据被标记为无效，新数据到来后恢复有效性
-        if self._data_invalidated:
-            # 只有当所有必需数据都更新后才恢复
-            # 这里简化处理：任何新数据都清除无效标记
-            # 因为新数据的时间戳是在当前时钟下设置的
-            self._data_invalidated = False
-            logger.info(f"Data validity restored after receiving new {data_type} data")
+        # 只恢复当前数据类型的有效性
+        # 设计说明：每种数据独立跟踪有效性，只有收到该类型的新数据才恢复
+        if self._data_invalidated.get(data_type, False):
+            self._data_invalidated[data_type] = False
+            logger.info(f"Data validity restored for {data_type} after receiving new data")
         
         return event
+    
+    def _invoke_clock_jump_callback(self, event: ClockJumpEvent) -> None:
+        """
+        调用时钟跳变回调
+        
+        在锁外调用，避免死锁。包含超时警告检测。
+        
+        Args:
+            event: 时钟跳变事件
+        """
+        if self._on_clock_jump is None:
+            return
+        
+        try:
+            start_time = time.monotonic()
+            self._on_clock_jump(event)
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            
+            # 警告慢回调（超过 10ms）
+            if elapsed_ms > 10.0:
+                logger.warning(
+                    f"Clock jump callback took {elapsed_ms:.1f}ms (should be < 10ms). "
+                    f"Consider using async processing for slow operations."
+                )
+        except Exception as e:
+            logger.error(f"Clock jump callback failed: {e}")
     
     def update_odom(self, ros_msg: Any) -> Odometry:
         """
@@ -285,11 +318,8 @@ class DataManager(LifecycleMixin):
             callback_event = self._on_new_data('odom', now)
         
         # 在锁外调用回调，避免死锁
-        if callback_event is not None and self._on_clock_jump is not None:
-            try:
-                self._on_clock_jump(callback_event)
-            except Exception as e:
-                logger.error(f"Clock jump callback failed: {e}")
+        if callback_event is not None:
+            self._invoke_clock_jump_callback(callback_event)
         
         return uc_odom
     
@@ -314,11 +344,8 @@ class DataManager(LifecycleMixin):
             callback_event = self._on_new_data('imu', now)
         
         # 在锁外调用回调，避免死锁
-        if callback_event is not None and self._on_clock_jump is not None:
-            try:
-                self._on_clock_jump(callback_event)
-            except Exception as e:
-                logger.error(f"Clock jump callback failed: {e}")
+        if callback_event is not None:
+            self._invoke_clock_jump_callback(callback_event)
         
         return uc_imu
     
@@ -343,11 +370,8 @@ class DataManager(LifecycleMixin):
             callback_event = self._on_new_data('traj', now)
         
         # 在锁外调用回调，避免死锁
-        if callback_event is not None and self._on_clock_jump is not None:
-            try:
-                self._on_clock_jump(callback_event)
-            except Exception as e:
-                logger.error(f"Clock jump callback failed: {e}")
+        if callback_event is not None:
+            self._invoke_clock_jump_callback(callback_event)
         
         return uc_traj
     
@@ -389,10 +413,9 @@ class DataManager(LifecycleMixin):
             值为距上次更新的秒数。未收到的数据返回 float('inf')。
             
         Note:
-            - 如果时钟回退（如仿真时间重置），所有数据年龄返回 inf，
-              表示数据已过时，需要等待新数据。
-            - 时钟跳变（回退或大幅前跳）会触发回调通知上层。
-            - 新数据到来后会自动恢复正常。
+            - 如果时钟回退（如仿真时间重置），被标记为无效的数据年龄返回 inf
+            - 每种数据独立跟踪有效性，只有收到该类型的新数据才恢复
+            - 时钟跳变（回退或大幅前跳）会触发回调通知上层
             - 键名统一使用简短形式: 'odom', 'imu', 'traj'
         """
         now = self._get_time_func()
@@ -410,8 +433,8 @@ class DataManager(LifecycleMixin):
             ages = {}
             # 统一使用简短键名: odom, imu, traj
             for key in ('odom', 'imu', 'traj'):
-                if self._data_invalidated:
-                    # 数据被标记为无效，返回 inf
+                if self._data_invalidated.get(key, False):
+                    # 该数据被标记为无效，返回 inf
                     ages[key] = float('inf')
                 elif key in self._timestamps:
                     # 正常计算年龄，防止负值
@@ -420,16 +443,8 @@ class DataManager(LifecycleMixin):
                     ages[key] = float('inf')
         
         # 在锁外调用回调，避免死锁
-        # 设计说明：
-        # 1. 回调函数可能需要调用 DataManager 的其他方法（如 clear()）
-        # 2. 如果在锁内调用回调，会导致死锁（即使使用 RLock，回调中的其他线程也可能阻塞）
-        # 3. _data_invalidated 状态在锁内已经设置完成，回调只是通知上层
-        # 4. 回调执行期间，其他线程可能更新数据，但这是预期行为（新数据会恢复有效性）
-        if callback_event is not None and self._on_clock_jump is not None:
-            try:
-                self._on_clock_jump(callback_event)
-            except Exception as e:
-                logger.error(f"Clock jump callback failed: {e}")
+        if callback_event is not None:
+            self._invoke_clock_jump_callback(callback_event)
         
         return ages
     
@@ -502,7 +517,9 @@ class DataManager(LifecycleMixin):
             self._timestamps.clear()
             self._last_time = 0.0
             self._clock_jumped_back = False
-            self._data_invalidated = False
+            # 重置所有数据的有效性标记
+            for key in self._data_invalidated:
+                self._data_invalidated[key] = False
             self._clock_jump_events.clear()
             # 重置统计信息
             for key in self._update_counts:
@@ -512,11 +529,14 @@ class DataManager(LifecycleMixin):
         """获取详细健康信息"""
         with self._lock:
             ages = self.get_data_ages()
+            # 检查是否所有数据都有效
+            all_data_valid = not any(self._data_invalidated.values())
             return {
                 'has_odom': 'odom' in self._latest_data,
                 'has_imu': 'imu' in self._latest_data,
                 'has_traj': 'traj' in self._latest_data,
-                'data_valid': not self._data_invalidated,
+                'data_valid': all_data_valid,
+                'data_invalidated': self._data_invalidated.copy(),
                 'clock_jumped_back': self._clock_jumped_back,
                 'odom_age_ms': ages.get('odom', float('inf')) * 1000,
                 'traj_age_ms': ages.get('traj', float('inf')) * 1000,
@@ -540,13 +560,26 @@ class DataManager(LifecycleMixin):
     
     def is_data_valid(self) -> bool:
         """
-        检查数据是否有效
+        检查所有数据是否有效
         
         Returns:
-            如果数据有效返回 True，时钟回退后数据无效直到新数据到来
+            如果所有数据都有效返回 True，任何数据无效则返回 False
         """
         with self._lock:
-            return not self._data_invalidated
+            return not any(self._data_invalidated.values())
+    
+    def is_data_type_valid(self, data_type: str) -> bool:
+        """
+        检查指定类型的数据是否有效
+        
+        Args:
+            data_type: 数据类型 ('odom', 'imu', 'traj')
+        
+        Returns:
+            如果该数据有效返回 True
+        """
+        with self._lock:
+            return not self._data_invalidated.get(data_type, True)
     
     def get_clock_jump_events(self) -> List[ClockJumpEvent]:
         """

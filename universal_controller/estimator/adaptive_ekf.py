@@ -136,8 +136,12 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self._imu_available = True
         
         # 日志节流标志 - 避免重复警告
-        self._quaternion_error_logged = False
-        self._euler_nan_logged = False
+        # 使用字典统一管理，便于 reset() 时清理
+        self._warning_logged = {
+            'quaternion_error': False,
+            'euler_nan': False,
+            'tilt_exceeded': False,
+        }
     
     def set_imu_available(self, available: bool) -> None:
         self._imu_available = available
@@ -155,17 +159,29 @@ class AdaptiveEKFEstimator(IStateEstimator):
         return self.x[6]
     
     def apply_drift_correction(self, dx: float, dy: float, dtheta: float) -> None:
-        """应用外部漂移校正"""
+        """应用外部漂移校正
+        
+        对位置和航向进行外部校正（如来自 SLAM 或 GPS 的修正）。
+        对于速度-航向耦合平台，同时更新速度方向以保持与新航向一致。
+        
+        Args:
+            dx: X 方向位置校正量（米）
+            dy: Y 方向位置校正量（米）
+            dtheta: 航向角校正量（弧度）
+        """
         self.x[0] += dx
         self.x[1] += dy
         self.x[6] += dtheta
         self.x[6] = normalize_angle(self.x[6])
         
         if self.velocity_heading_coupled:
-            v_body = np.sqrt(self.x[3]**2 + self.x[4]**2)
+            # 使用带符号的速度投影，与 predict() 方法保持一致
+            # v_signed > 0: 前进, v_signed < 0: 倒车
+            # 这确保漂移校正后速度方向正确（支持倒车场景）
+            v_signed = self.x[3] * np.cos(self.x[6] - dtheta) + self.x[4] * np.sin(self.x[6] - dtheta)
             new_theta = self.x[6]
-            self.x[3] = v_body * np.cos(new_theta)
-            self.x[4] = v_body * np.sin(new_theta)
+            self.x[3] = v_signed * np.cos(new_theta)
+            self.x[4] = v_signed * np.sin(new_theta)
         
         self.P[0, 0] += abs(dx) * 0.1
         self.P[1, 1] += abs(dy) * 0.1
@@ -206,13 +222,25 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self.x[6] += self.x[7] * dt
         self.x[6] = normalize_angle(self.x[6])
         
-        # 对于速度-航向耦合平台，更新速度方向
-        if self.velocity_heading_coupled and abs(self.x[7]) > 1e-6:
-            # 使用点积计算带符号的投影速度，而不是仅计算模长
-            # 这保留了运动方向（支持倒车），同时过滤掉非完整约束不允许的横向滑移
-            v_signed = self.x[3] * np.cos(self.x[6]) + self.x[4] * np.sin(self.x[6])
-            self.x[3] = v_signed * np.cos(self.x[6])
-            self.x[4] = v_signed * np.sin(self.x[6])
+        # 对于速度-航向耦合平台（差速车/阿克曼车），强制速度方向与航向一致
+        # 这是非完整约束的体现：车辆只能沿前进方向移动，不能横向滑移
+        # 
+        # 注意：无论角速度是否为零，都需要执行此约束
+        # - 当 omega ≠ 0 时：航向在变化，速度方向需要跟随
+        # - 当 omega ≈ 0 时：速度方向仍应与航向一致，修正测量噪声导致的横向分量
+        # 
+        # 低速保护：当速度非常小时，不强制执行耦合约束
+        # 原因：低速时速度方向不确定，强制耦合可能因噪声导致方向跳变
+        if self.velocity_heading_coupled:
+            v_magnitude = np.sqrt(self.x[3]**2 + self.x[4]**2)
+            # 只有当速度大于静止阈值时才执行耦合约束
+            # 使用 stationary_thresh 作为阈值，保持与其他低速判断的一致性
+            if v_magnitude > self.stationary_thresh:
+                # 使用点积计算带符号的投影速度，而不是仅计算模长
+                # 这保留了运动方向（支持倒车），同时过滤掉非完整约束不允许的横向滑移
+                v_signed = self.x[3] * np.cos(self.x[6]) + self.x[4] * np.sin(self.x[6])
+                self.x[3] = v_signed * np.cos(self.x[6])
+                self.x[4] = v_signed * np.sin(self.x[6])
 
         
         # 3. 更新协方差
@@ -382,12 +410,12 @@ class AdaptiveEKFEstimator(IStateEstimator):
                             # 虽然 euler_from_quaternion 内部有归一化，但仍可能返回 NaN
                             if not (np.isfinite(roll) and np.isfinite(pitch)):
                                 # 欧拉角计算失败，使用默认姿态
-                                if not hasattr(self, '_euler_nan_logged'):
+                                if not self._warning_logged['euler_nan']:
                                     logger.warning(
                                         f"euler_from_quaternion returned NaN/Inf: "
                                         f"roll={roll}, pitch={pitch}, q=({qx},{qy},{qz},{qw})"
                                     )
-                                    self._euler_nan_logged = True
+                                    self._warning_logged['euler_nan'] = True
                                 use_imu_orientation = False
                             # 额外检查: roll 和 pitch 应该在合理范围内
                             # 使用配置的最大倾斜角阈值
@@ -396,20 +424,20 @@ class AdaptiveEKFEstimator(IStateEstimator):
                             else:
                                 # roll/pitch 超出最大倾斜角阈值，使用默认姿态
                                 # 这可能是传感器故障或机器人翻倒
-                                if not hasattr(self, '_tilt_exceeded_logged'):
+                                if not self._warning_logged['tilt_exceeded']:
                                     logger.warning(
                                         f"IMU tilt angle exceeded max_tilt_angle ({np.degrees(self.max_tilt_angle):.1f}°): "
                                         f"roll={np.degrees(roll):.1f}°, pitch={np.degrees(pitch):.1f}°. "
                                         f"Using default horizontal orientation."
                                     )
-                                    self._tilt_exceeded_logged = True
+                                    self._warning_logged['tilt_exceeded'] = True
                                 use_imu_orientation = False
             except (TypeError, ValueError, IndexError, AttributeError) as e:
                 # 四元数数据格式错误，使用默认姿态
                 # 只在首次遇到时记录警告，避免日志泛滥
-                if not hasattr(self, '_quaternion_error_logged'):
+                if not self._warning_logged['quaternion_error']:
                     logger.warning(f"Invalid quaternion format in IMU data: {e}")
-                    self._quaternion_error_logged = True
+                    self._warning_logged['quaternion_error'] = True
                 use_imu_orientation = False
         if use_imu_orientation:
             # 加速度计静止时的期望测量值 (比力 = -g_body)
@@ -542,17 +570,23 @@ class AdaptiveEKFEstimator(IStateEstimator):
         重要: 此函数应在状态更新之前调用，使用预测前的状态值
         
         对于速度-航向耦合的平台 (差速车/阿克曼车):
-        - vx_world = v_body * cos(theta)
-        - vy_world = v_body * sin(theta)
+        - vx_world = v_signed * cos(theta)
+        - vy_world = v_signed * sin(theta)
+        其中 v_signed 是带符号的速度（正=前进，负=倒车）
         
         状态转移方程:
         - px_new = px + vx * dt
         - py_new = py + vy * dt
         - pz_new = pz + vz * dt
         - theta_new = theta + omega * dt
-        - 对于耦合平台: vx_new = v_body * cos(theta_new), vy_new = v_body * sin(theta_new)
+        - 对于耦合平台: vx_new = v_signed * cos(theta_new), vy_new = v_signed * sin(theta_new)
         
         Jacobian 在预测前状态点计算 (标准 EKF 做法)
+        
+        倒车支持:
+        - 使用带符号的速度投影 v_signed = vx * cos(theta) + vy * sin(theta)
+        - v_signed > 0 表示前进，v_signed < 0 表示倒车
+        - Jacobian 中的偏导数需要保持正确的符号
         
         Args:
             dt: 时间步长
@@ -571,47 +605,84 @@ class AdaptiveEKFEstimator(IStateEstimator):
         F[6, 7] = dt  # ∂theta/∂omega
         
         if self.velocity_heading_coupled:
-            # 使用传入的预测前速度计算 v_body
-            v_body = np.sqrt(vx**2 + vy**2)
             cos_theta = np.cos(theta)
             sin_theta = np.sin(theta)
             
-            # 使用平滑过渡避免 Jacobian 跳变
-            # 当 v_body 很小时，使用最小值来保证协方差传播
+            # 计算带符号的速度投影（沿航向方向的速度分量）
+            # v_signed > 0: 前进
+            # v_signed < 0: 倒车
+            v_signed = vx * cos_theta + vy * sin_theta
+            
+            # 使用保持符号的平滑函数避免 Jacobian 在零速度附近跳变
             # 
             # 物理意义：即使车辆静止，航向角的不确定性仍然会影响
             # 速度估计的不确定性（因为一旦开始运动，速度方向取决于航向）
+            # 
+            # 数学处理：
+            # effective_v = sign(v_signed) * sqrt(v_signed^2 + MIN_V^2)
+            # 这保持了速度的符号，同时在零速度附近提供平滑过渡
+            # 
+            # 当 |v_signed| >> MIN_V 时: effective_v ≈ v_signed
+            # 当 v_signed ≈ 0 时: effective_v ≈ sign(v_signed) * MIN_V（平滑过渡）
+            v_magnitude_smooth = np.sqrt(v_signed**2 + self.min_velocity_for_jacobian**2)
+            # 使用 np.sign，当 v_signed = 0 时返回 0，此时 effective_v = 0
+            # 这是合理的：静止时速度对航向的偏导数为 0
+            if abs(v_signed) < 1e-10:
+                # 完全静止时，使用一个小的正值保证协方差传播
+                effective_v = self.min_velocity_for_jacobian
+            else:
+                effective_v = np.sign(v_signed) * v_magnitude_smooth
             
-            # 使用平滑的 max 函数避免不连续
-            # effective_v = sqrt(v_body^2 + MIN_V^2) 近似于 max(v_body, MIN_V)
-            # 但在 v_body ≈ MIN_V 附近更平滑
-            effective_v = np.sqrt(v_body**2 + self.min_velocity_for_jacobian**2)
-            
-            # ∂vx_world/∂theta = -v_body * sin(theta)
-            # ∂vy_world/∂theta = v_body * cos(theta)
+            # ∂vx_world/∂theta = -v_signed * sin(theta)
+            # ∂vy_world/∂theta = v_signed * cos(theta)
+            # 
+            # 注意：这里使用 effective_v（带符号）而非 v_body（无符号）
+            # 倒车时 effective_v < 0，偏导数符号正确
             F[3, 6] = -effective_v * sin_theta
             F[4, 6] = effective_v * cos_theta
             
             # ∂vx_world/∂omega 和 ∂vy_world/∂omega
             # 由于 theta_new = theta + omega * dt
-            # vx_new = v_body * cos(theta_new)
+            # vx_new = v_signed * cos(theta_new)
             # 使用链式法则: ∂vx_new/∂omega = ∂vx_new/∂theta_new * ∂theta_new/∂omega
-            #                              = -v_body * sin(theta) * dt
+            #                              = -v_signed * sin(theta) * dt
             F[3, 7] = -effective_v * sin_theta * dt
             F[4, 7] = effective_v * cos_theta * dt
         
         return F
     
     def _ensure_positive_definite(self) -> None:
-        """确保协方差矩阵正定"""
+        """确保协方差矩阵正定
+        
+        优化策略:
+        1. 首先强制对称性（低成本操作）
+        2. 尝试 Cholesky 分解检测正定性（比特征值分解快）
+        3. 只有在 Cholesky 失败时才进行特征值分解修复
+        
+        这种分层策略在正常情况下避免了昂贵的特征值分解，
+        只在协方差矩阵出现问题时才进行完整修复。
+        """
+        # 强制对称性（低成本操作，总是执行）
         self.P = (self.P + self.P.T) / 2
+        
+        # 尝试 Cholesky 分解检测正定性
+        # Cholesky 分解比特征值分解快约 3 倍
+        try:
+            np.linalg.cholesky(self.P)
+            # Cholesky 成功，矩阵已经正定，无需进一步处理
+            return
+        except np.linalg.LinAlgError:
+            # Cholesky 失败，需要修复
+            pass
+        
+        # 使用特征值分解修复非正定矩阵
         try:
             eigenvalues, eigenvectors = np.linalg.eigh(self.P)
             if np.any(eigenvalues < self.min_eigenvalue):
                 eigenvalues = np.maximum(eigenvalues, self.min_eigenvalue)
                 self.P = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         except np.linalg.LinAlgError:
-            # 使用配置的初始协方差值而非硬编码
+            # 特征值分解也失败，重置为初始协方差
             self.P = np.eye(11) * self.initial_covariance
     
     def _get_adaptive_slip_threshold(self) -> float:
@@ -722,6 +793,5 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self._imu_drift_detected = False
         self._last_odom_orientation = None
         # 重置日志节流标志，允许重置后再次记录警告
-        self._quaternion_error_logged = False
-        self._euler_nan_logged = False
-        self._tilt_exceeded_logged = False
+        for key in self._warning_logged:
+            self._warning_logged[key] = False

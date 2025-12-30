@@ -8,6 +8,10 @@ Visualizer 参数加载器
 1. 私有参数 (~param) - 最高优先级
 2. 全局参数 (param) - 次优先级  
 3. 默认值 - 最低优先级
+
+速度限制统一性:
+- 速度限制 (v_max, omega_max) 统一从 constraints 配置读取
+- 确保 visualizer、cmd_vel_adapter、controller 使用相同的限制值
 """
 from typing import Dict, Any, Optional
 import logging
@@ -45,13 +49,8 @@ VISUALIZER_DEFAULTS = {
         'left_y_axis': 1,
         'right_x_axis': 3,
         'right_y_axis': 4,
-        'max_linear': 0.5,
-        'max_angular': 1.0,
         'deadzone': 0.1,
-    },
-    'constraints': {
-        'v_max': 0.5,
-        'omega_max': 1.0,
+        'publish_rate': 20.0,
     },
     'camera': {
         'use_camera': False,
@@ -63,12 +62,20 @@ VISUALIZER_DEFAULTS = {
     },
 }
 
+# constraints 默认值 (与 universal_controller 保持一致)
+CONSTRAINTS_DEFAULTS = {
+    'v_max': 0.5,
+    'omega_max': 1.0,
+}
+
 
 class VisualizerParamLoader:
     """
     Visualizer 参数加载器
     
     统一的配置加载接口，支持 ROS1 和 ROS2。
+    
+    速度限制统一从 constraints 配置读取，确保与控制器一致。
     
     使用示例:
         # ROS1 (在节点初始化后调用)
@@ -87,7 +94,7 @@ class VisualizerParamLoader:
             node: ROS2 节点 (ROS2) 或 None (ROS1)
         
         Returns:
-            配置字典
+            配置字典，包含 constraints 配置
         """
         try:
             import rospy
@@ -100,7 +107,9 @@ class VisualizerParamLoader:
         
         # 非 ROS 环境，返回默认配置
         import copy
-        return copy.deepcopy(VISUALIZER_DEFAULTS)
+        config = copy.deepcopy(VISUALIZER_DEFAULTS)
+        config['constraints'] = copy.deepcopy(CONSTRAINTS_DEFAULTS)
+        return config
     
     @staticmethod
     def _load_ros1() -> Dict[str, Any]:
@@ -110,8 +119,15 @@ class VisualizerParamLoader:
         
         config = copy.deepcopy(VISUALIZER_DEFAULTS)
         
-        # 递归加载参数
+        # 递归加载 visualizer 特有参数
         VisualizerParamLoader._load_recursive_ros1(config, '')
+        
+        # 从全局 constraints 配置读取速度限制
+        # 这确保与控制器使用相同的限制值
+        config['constraints'] = {
+            'v_max': rospy.get_param('constraints/v_max', CONSTRAINTS_DEFAULTS['v_max']),
+            'omega_max': rospy.get_param('constraints/omega_max', CONSTRAINTS_DEFAULTS['omega_max']),
+        }
         
         # 自动启用相机模式
         if config['topics']['camera_image']:
@@ -148,6 +164,16 @@ class VisualizerParamLoader:
         
         # 递归加载参数
         VisualizerParamLoader._load_recursive_ros2(config, '', node)
+        
+        # 从全局 constraints 配置读取速度限制
+        config['constraints'] = copy.deepcopy(CONSTRAINTS_DEFAULTS)
+        try:
+            if node.has_parameter('constraints.v_max'):
+                config['constraints']['v_max'] = node.get_parameter('constraints.v_max').value
+            if node.has_parameter('constraints.omega_max'):
+                config['constraints']['omega_max'] = node.get_parameter('constraints.omega_max').value
+        except Exception:
+            pass
         
         # 自动启用相机模式
         if config['topics']['camera_image']:

@@ -107,6 +107,7 @@ class VisualizerNode:
 
         # 适配器
         joy_config = self._config.get('joystick', {})
+        constraints_config = self._config.get('constraints', {})
         self._joy_adapter = JoyAdapter(joy_config)
         self._image_adapter = ImageAdapter()
         self._velocity_adapter = VelocityAdapter()
@@ -116,7 +117,7 @@ class VisualizerNode:
             velocity_history_sec=self._config.get('display', {}).get('velocity_history_sec', 10)
         )
         self._joystick_handler = JoystickHandler(
-            JoystickConfig.from_dict(joy_config)
+            JoystickConfig.from_dict(joy_config, constraints_config)
         )
         
         # 设置手柄回调
@@ -220,10 +221,10 @@ class VisualizerNode:
                 'resume_button': 7,
                 'linear_axis': 1,
                 'angular_axis': 3,
-                'max_linear': 0.5,
-                'max_angular': 1.0,
                 'deadzone': 0.1,
+                'publish_rate': 20.0,
             },
+            # 速度限制统一从 constraints 读取
             'constraints': {
                 'v_max': 0.5,
                 'omega_max': 1.0,

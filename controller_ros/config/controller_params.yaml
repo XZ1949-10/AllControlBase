@@ -7,6 +7,8 @@
 # - 本文件中的 system 配置会覆盖 DEFAULT_CONFIG 中的对应值
 #
 # 参数优先级: 本文件 > DEFAULT_CONFIG
+#
+# 注意: use_sim_time 由 launch 文件通过 <param name="/use_sim_time"> 设置
 
 # =============================================================================
 # 系统配置 (映射到 universal_controller 的 system 配置)
@@ -16,31 +18,29 @@ system:
   platform: "differential"        # 平台类型: differential/omni/ackermann/quadrotor
 
 # =============================================================================
-# ROS 节点配置
-# =============================================================================
-node:
-  use_sim_time: false             # 是否使用仿真时间
-
-# =============================================================================
 # 话题配置
 #
-# 注意: 空字符串 "" 表示禁用该话题的订阅
-#       例如: imu: "" 表示不订阅 IMU 话题 (适用于无 IMU 的平台)
+# 命名规范:
+# - 输入话题: /controller/input/<name>
+# - 输出话题: /controller/<name>
+# - 空字符串 "" 表示禁用该话题的订阅
+#   例如: imu: "" 表示不订阅 IMU 话题 (适用于无 IMU 的平台)
 # =============================================================================
 topics:
   # 输入话题
-  odom: "/odom"                           # 里程计输入
-  imu: "/imu"                             # IMU 输入 (可选，设为 "" 禁用)
-  trajectory: "/nn/local_trajectory"      # 轨迹输入
+  odom: "/controller/input/odom"              # 里程计输入
+  imu: ""                                     # IMU 输入 (可选，设为 "" 禁用)
+  trajectory: "/controller/input/trajectory"  # 轨迹输入
   emergency_stop: "/controller/emergency_stop"  # 紧急停止话题 (std_msgs/Empty)
   
   # 输出话题
-  cmd_unified: "/cmd_unified"             # 统一控制命令输出
-  diagnostics: "/controller/diagnostics"  # 诊断信息输出
-  state: "/controller/state"              # 控制器状态输出 (std_msgs/Int32)
+  cmd_unified: "/controller/cmd"              # 统一控制命令输出
+  diagnostics: "/controller/diagnostics"      # 诊断信息输出
+  state: "/controller/state"                  # 控制器状态输出 (std_msgs/Int32)
+  debug_path: "/controller/debug_path"        # 调试路径输出 (nav_msgs/Path)
   
   # 姿态控制话题 (仅四旋翼平台)
-  attitude_cmd: "/controller/attitude_cmd"  # 姿态命令输出
+  attitude_cmd: "/controller/attitude_cmd"    # 姿态命令输出
 
 # =============================================================================
 # TF 配置 (ROS TF2 特有参数)
@@ -79,6 +79,15 @@ watchdog:
 # =============================================================================
 diagnostics:
   publish_rate: 10                # 诊断发布降频率 (每 N 次控制循环发布一次)
+
+# =============================================================================
+# 轨迹验证配置 (映射到 universal_controller 的 trajectory 配置)
+# =============================================================================
+trajectory:
+  max_coord: 100.0                # 最大合理坐标值 (米)
+  velocity_decay_threshold: 0.1   # 速度衰减填充阈值 (m/s)
+  min_dt_sec: 0.001               # 最小时间间隔 (秒)
+  max_dt_sec: 10.0                # 最大时间间隔 (秒)
 
 # =============================================================================
 # MPC 配置 (映射到 universal_controller 的 mpc 配置)

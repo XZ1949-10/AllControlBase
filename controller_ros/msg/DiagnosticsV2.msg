@@ -46,6 +46,9 @@ bool transform_tf2_available
 bool transform_tf2_injected
 float32 transform_fallback_duration_ms
 float32 transform_accumulated_drift
+string transform_source_frame
+string transform_target_frame
+string transform_error_message
 
 # 超时状态
 bool timeout_odom

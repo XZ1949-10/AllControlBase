@@ -42,16 +42,20 @@ logger = logging.getLogger(__name__)
 
 # =============================================================================
 # 话题配置 (独立于算法配置，仅 ROS 层使用)
+#
+# 命名规范:
+# - 输入话题: /controller/input/<name>
+# - 输出话题: /controller/<name>
 # =============================================================================
 TOPICS_DEFAULTS = {
     # 输入话题
-    'odom': '/odom',
-    'imu': '/imu',
-    'trajectory': '/nn/local_trajectory',
+    'odom': '/controller/input/odom',
+    'imu': '',  # 默认禁用，需要时在配置中启用
+    'trajectory': '/controller/input/trajectory',
     'emergency_stop': '/controller/emergency_stop',
     
     # 输出话题
-    'cmd_unified': '/cmd_unified',
+    'cmd_unified': '/controller/cmd',
     'diagnostics': '/controller/diagnostics',
     'state': '/controller/state',
     'attitude_cmd': '/controller/attitude_cmd',
@@ -71,11 +75,6 @@ TF_DEFAULTS = {
     'buffer_warmup_interval_sec': 0.1,  # TF buffer 预热检查间隔
     'retry_interval_sec': 1.0,          # TF 注入重试间隔（秒）
     'max_retries': -1,                  # 最大重试次数，-1 表示无限重试
-}
-
-# 节点配置 (仅 ROS 层使用)
-NODE_DEFAULTS = {
-    'use_sim_time': False,
 }
 
 
@@ -133,16 +132,10 @@ class ROS1ParamStrategy(ParamLoaderStrategy):
             - 'system/ctrl_freq' 会解析为 '/system/ctrl_freq'
             - 不需要手动添加 '/' 前缀
         """
-        # 特殊处理 use_sim_time (全局参数)
-        if param_path == 'node/use_sim_time':
-            return self._rospy.get_param('/use_sim_time', default)
-        
         return self._rospy.get_param(param_path, default)
     
     def has_param(self, param_path: str) -> bool:
         """检查参数是否存在"""
-        if param_path == 'node/use_sim_time':
-            return self._rospy.has_param('/use_sim_time')
         return self._rospy.has_param(param_path)
 
 
@@ -409,20 +402,3 @@ class ParamLoader:
             tf_config[key] = ParamLoader._convert_type(value, default)
         
         return tf_config
-    
-    @staticmethod
-    def get_node_config(node=None) -> Dict[str, Any]:
-        """
-        获取节点配置
-        
-        节点配置是 ROS 层特有的，如 use_sim_time。
-        """
-        strategy = ParamLoader._get_strategy(node)
-        node_config = {}
-        
-        for key, default in NODE_DEFAULTS.items():
-            param_path = f"node/{key}"
-            value = strategy.get_param(param_path, default)
-            node_config[key] = ParamLoader._convert_type(value, default)
-        
-        return node_config

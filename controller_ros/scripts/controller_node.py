@@ -67,13 +67,10 @@ class ControllerNodeROS1(ControllerNodeBase):
     """
     
     def __init__(self):
-        # 关闭标志 - 防止关闭过程中发布到已关闭的话题
-        self._shutting_down = False
-        
         # 先初始化 ROS1 节点
         rospy.init_node('universal_controller_node')
         
-        # 再初始化基类
+        # 再初始化基类（基类会初始化 _shutting_down 标志）
         super().__init__()
         
         # 0. 检查自定义消息是否可用
@@ -209,10 +206,7 @@ class ControllerNodeROS1(ControllerNodeBase):
     
     def _control_callback(self, event):
         """控制循环回调"""
-        # 检查关闭标志，避免在关闭过程中发布
-        if self._shutting_down:
-            return
-        
+        # 关闭检查已在基类 _control_loop_core() 中统一处理
         cmd = self._control_loop_core()
         
         if cmd is not None:
@@ -277,16 +271,68 @@ class ControllerNodeROS1(ControllerNodeBase):
     # ==================== 生命周期 ====================
     
     def shutdown(self):
-        """关闭节点"""
-        # 设置关闭标志，阻止定时器回调继续发布
+        """
+        关闭节点
+        
+        完整的资源清理流程:
+        1. 设置关闭标志，阻止控制循环继续执行
+        2. 停止定时器
+        3. 发送最终停止命令
+        4. 关闭订阅器
+        5. 关闭发布器和服务
+        6. 调用基类关闭
+        """
+        # 1. 设置关闭标志 (基类会设置，但这里提前设置以阻止回调)
         self._shutting_down = True
         
-        # 停止定时器
+        # 2. 停止定时器
         if hasattr(self, '_timer') and self._timer is not None:
             self._timer.shutdown()
             self._timer = None
         
+        # 3. 发送最终停止命令
+        try:
+            if hasattr(self, '_publishers') and self._publishers is not None:
+                self._publishers.publish_stop_cmd()
+                rospy.loginfo("Final stop command sent")
+        except Exception as e:
+            rospy.logwarn(f"Failed to send final stop command: {e}")
+        
+        # 4. 关闭订阅器
+        if hasattr(self, '_odom_sub') and self._odom_sub is not None:
+            self._odom_sub.unregister()
+            self._odom_sub = None
+        
+        if hasattr(self, '_imu_sub') and self._imu_sub is not None:
+            self._imu_sub.unregister()
+            self._imu_sub = None
+        
+        if hasattr(self, '_traj_sub') and self._traj_sub is not None:
+            self._traj_sub.unregister()
+            self._traj_sub = None
+        
+        if hasattr(self, '_emergency_stop_sub') and self._emergency_stop_sub is not None:
+            self._emergency_stop_sub.unregister()
+            self._emergency_stop_sub = None
+        
+        # 5. 关闭发布器和服务
+        if hasattr(self, '_publishers') and self._publishers is not None:
+            self._publishers.shutdown()
+            self._publishers = None
+        
+        if hasattr(self, '_services') and self._services is not None:
+            self._services.shutdown()
+            self._services = None
+        
+        # 6. 关闭 TF 桥接
+        if hasattr(self, '_tf_bridge') and self._tf_bridge is not None:
+            self._tf_bridge.shutdown()
+            self._tf_bridge = None
+        
+        # 7. 调用基类关闭
         super().shutdown()
+        
+        rospy.loginfo("Controller node shutdown complete")
 
 
 # 保持向后兼容的类名

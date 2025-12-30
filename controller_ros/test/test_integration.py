@@ -160,8 +160,9 @@ def test_velocity_padding_integration():
     
     设计说明：
     - 当速度点少于位置点时，使用线性衰减填充
-    - 衰减从最后一个速度点开始，线性衰减到零
-    - 这确保轨迹末端平滑减速，避免高速运动到轨迹末端
+    - 衰减公式: decay_factor = (padding_count - i) / (padding_count + 1)
+    - 这确保从最后一个速度点平滑过渡到接近零（但不为零）
+    - 避免轨迹末端高速运动
     """
     from controller_ros.adapters import TrajectoryAdapter
     import numpy as np
@@ -186,20 +187,24 @@ def test_velocity_padding_integration():
     assert uc_traj.velocities[0, 0] == 1.0
     assert uc_traj.velocities[4, 0] == 3.0
     
-    # 后 15 个应该线性衰减到零
+    # 后 15 个应该线性衰减
     # 最后一个速度点是 [3.0, 0.3, 0.0, 0.03]
-    # 填充 15 个点，衰减因子: (15-1-i)/15 = (14-i)/15
+    # 填充 15 个点，衰减因子: (padding_count - i) / (padding_count + 1)
+    # - i=0: decay = 15/16 = 0.9375
+    # - i=14: decay = 1/16 = 0.0625 (接近零但不为零)
     padding_count = 15
     last_vel = np.array([3.0, 0.3, 0.0, 0.03])
     for i in range(padding_count):
-        expected_decay = (padding_count - 1 - i) / padding_count
+        expected_decay = (padding_count - i) / (padding_count + 1)
         expected_vel = last_vel * expected_decay
         actual_vel = uc_traj.velocities[5 + i]
         assert np.allclose(actual_vel, expected_vel, atol=0.001), \
             f"Point {5+i} should have decayed velocity {expected_vel}, got {actual_vel}"
     
-    # 最后一个填充点应该接近零
-    assert np.allclose(uc_traj.velocities[19], [0, 0, 0, 0], atol=0.001)
+    # 最后一个填充点应该接近零（但不完全为零）
+    # decay = 1/16 = 0.0625, 所以 last_vel * 0.0625 = [0.1875, 0.01875, 0, 0.001875]
+    expected_last = last_vel * (1 / (padding_count + 1))
+    assert np.allclose(uc_traj.velocities[19], expected_last, atol=0.001)
 
 
 def test_empty_frame_id_handling():
@@ -315,7 +320,7 @@ def test_tf2_injection_mechanism():
     
     # 验证回调已设置
     status = bridge.manager.coord_transformer.get_status()
-    assert status['external_tf2_callback'] == True
+    assert status['tf2_injected'] == True
     
     bridge.shutdown()
     print("✓ TF2 injection mechanism verified")
@@ -323,63 +328,6 @@ def test_tf2_injection_mechanism():
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
-
-
-def test_time_sync_key_aliases():
-    """测试 TimeSync 键名处理"""
-    from controller_ros.utils.time_sync import TimeSync
-    
-    time_sync = TimeSync(
-        max_odom_age_ms=100,
-        max_traj_age_ms=200,
-        max_imu_age_ms=50
-    )
-    
-    # 测试使用 'trajectory' 作为输入键名
-    ages_with_trajectory = {
-        'odom': 0.05,
-        'trajectory': 0.15,
-        'imu': 0.03
-    }
-    
-    timeouts = time_sync.check_freshness(ages_with_trajectory)
-    
-    # 返回的键应该是 'traj_timeout' (保持向后兼容)
-    assert 'traj_timeout' in timeouts
-    assert 'odom_timeout' in timeouts
-    assert 'imu_timeout' in timeouts
-    
-    # 验证超时判断正确
-    assert timeouts['odom_timeout'] == False  # 0.05 < 0.1
-    assert timeouts['traj_timeout'] == False  # 0.15 < 0.2
-    assert timeouts['imu_timeout'] == False   # 0.03 < 0.05
-    
-    # 测试超时情况
-    ages_timeout = {
-        'odom': 0.15,       # > 0.1, 超时
-        'trajectory': 0.25, # > 0.2, 超时
-        'imu': 0.06         # > 0.05, 超时
-    }
-    
-    timeouts2 = time_sync.check_freshness(ages_timeout)
-    assert timeouts2['odom_timeout'] == True
-    assert timeouts2['traj_timeout'] == True
-    assert timeouts2['imu_timeout'] == True
-    
-    # 测试 is_all_fresh 方法
-    ages_fresh = {
-        'odom': 0.05,
-        'trajectory': 0.15,
-        'imu': 0.03
-    }
-    assert time_sync.is_all_fresh(ages_fresh) == True
-    
-    ages_stale = {
-        'odom': 0.15,
-        'trajectory': 0.15,
-        'imu': 0.03
-    }
-    assert time_sync.is_all_fresh(ages_stale) == False  # odom 超时
 
 
 def test_diag_filler_numpy_imu_bias():

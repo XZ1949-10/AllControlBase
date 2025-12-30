@@ -7,10 +7,11 @@
 - TF2Compat: TF2 兼容层，通常通过 TFBridge 使用
 - TOPICS_DEFAULTS: 话题默认配置常量
 - TF_DEFAULTS: TF 默认配置常量
+
+注意: TimeSync 已废弃，超时检测统一由 universal_controller 的 TimeoutMonitor 处理
 """
 from .param_loader import ParamLoader, TOPICS_DEFAULTS, TF_DEFAULTS
 from .visualizer_param_loader import VisualizerParamLoader
-from .time_sync import TimeSync, TIMEOUT_DISABLED
 from .diagnostics_publisher import (
     fill_diagnostics_msg,
     DiagnosticsThrottler,
@@ -33,9 +34,6 @@ __all__ = [
     # 常量
     'TOPICS_DEFAULTS',
     'TF_DEFAULTS',
-    # 时间同步
-    'TimeSync',
-    'TIMEOUT_DISABLED',
     # 诊断工具
     'fill_diagnostics_msg',
     'DiagnosticsThrottler',

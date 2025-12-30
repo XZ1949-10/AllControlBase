@@ -38,12 +38,9 @@
 system:
   ctrl_freq: 20                   # 控制频率 (Hz) - TurtleBot1 建议 20Hz
   platform: "differential"        # 平台类型: 差速车
-
-# =============================================================================
-# ROS 节点配置
-# =============================================================================
-node:
-  use_sim_time: false             # 是否使用仿真时间
+  gravity: 9.81                   # 重力加速度 (m/s²) - EKF 状态估计使用
+  long_pause_threshold: 0.5       # 长时间暂停检测阈值 (秒) - 控制循环监控
+  ekf_reset_threshold: 2.0        # EKF 重置阈值 (秒) - 超过此时间间隔重置 EKF
 
 # =============================================================================
 # 话题配置
@@ -104,12 +101,14 @@ diagnostics:
 
 # =============================================================================
 # MPC 配置 (针对 TurtleBot1 优化，使用 ACADOS 高性能求解器)
+#
 # 注意: 预测时域已调整以匹配网络输出 8 个轨迹点
 # =============================================================================
 mpc:
   horizon: 7                      # MPC 预测时域 - 必须 < 轨迹点数(8)，留1点余量
   horizon_degraded: 4             # 降级模式预测时域
   dt: 0.1                         # MPC 时间步长 (秒) - 必须匹配轨迹 dt_sec=0.1
+  horizon_change_min_interval: 1.0  # Horizon 调整节流间隔 (秒) - 防止频繁重新初始化求解器
   
   # 代价函数权重 (针对 TurtleBot1 调优)
   # [2025-12-30 调优] 基于诊断结果优化:
@@ -131,30 +130,48 @@ mpc:
     nlp_solver_type: "SQP_RTI"    # NLP 求解器类型 (实时迭代，最快)
   
   # MPC 健康监控参数 (放宽阈值，适应 TurtleBot1 较低控制频率)
+  #
+  # 三区间超时计数衰减策略:
+  # ========================
+  # - 警告区 (> time_warning_thresh): 累积超时计数，重置良好计数
+  # - 恢复区 (< time_recovery_thresh): 累积良好计数，达到阈值后快速衰减超时计数
+  # - 中间区 (recovery <= time <= warning): 重置良好计数，缓慢衰减超时计数
+  #
+  # 这种设计提供了滞后效应，防止在阈值边界频繁切换状态。
+  #
   health_monitor:
-    time_warning_thresh_ms: 20    # 求解时间警告阈值 (ms) - 放宽
-    time_critical_thresh_ms: 40   # 求解时间临界阈值 (ms) - 放宽
-    time_recovery_thresh_ms: 15   # 求解时间恢复阈值 (ms) - 放宽
-    consecutive_warning_limit: 10 # 连续警告次数限制 - 更宽容
-    consecutive_recovery_limit: 5 # 连续恢复次数限制
-    # 数值稳定性监控 (新增)
+    # 求解时间阈值 (三区间边界)
+    time_warning_thresh_ms: 20    # 警告区下界 (ms) - 放宽
+    time_critical_thresh_ms: 40   # 临界阈值 (ms) - 超过此值直接判定不健康
+    time_recovery_thresh_ms: 15   # 恢复区上界 (ms) - 放宽
+    
+    # 连续计数阈值
+    consecutive_warning_limit: 10 # 连续超时次数限制 - 更宽容
+    consecutive_recovery_limit: 5 # 连续良好次数阈值 (达到后可恢复)
+    
+    # 超时计数衰减参数
+    consecutive_good_for_decay: 2 # 连续良好次数达到此值后开始衰减超时计数
+    timeout_decay_rate: 2         # 恢复区超时计数衰减速率 (每次减少的计数)
+    middle_zone_decay_rate: 1     # 中间区超时计数衰减速率 (比恢复区慢，提供滞后)
+    
+    # 数值稳定性监控
     condition_number_thresh: 1.0e+08  # 条件数警告阈值
     condition_number_recovery: 1.0e+05  # 条件数恢复阈值
     kkt_residual_thresh: 0.001    # KKT 残差阈值
     recovery_multiplier: 2.0      # 备选恢复条件的倍数
   
   # Fallback 求解器参数 (ACADOS 失败时使用)
-  # 注意: max_curvature, min_distance_thresh, min_turn_speed, default_speed_ratio
+  # 注意: kp_heading, max_curvature, min_distance_thresh, min_turn_speed, default_speed_ratio
   # 统一从 backup 配置读取，确保与 Pure Pursuit 备份控制器行为一致
   fallback:
     lookahead_steps: 3            # 前瞻步数 (MPC fallback 特有)
-    heading_kp: 1.5               # 航向控制增益
 
 # =============================================================================
 # 速度约束 (TurtleBot1 安全限制)
 # [2025-12-30 调优] 诊断发现 omega_max 被设为 0，导致无法转向
 # =============================================================================
 constraints:
+  # 差速车主要约束
   v_max: 0.5                      # 最大线速度 (m/s)
   v_min: -0.2                     # 最小线速度 (m/s) - 倒车限制
   omega_max: 1.0                  # 最大角速度 (rad/s) - 确保不为0!
@@ -163,14 +180,42 @@ constraints:
   a_max: 0.5                      # 最大加速度 (m/s²)
   az_max: 1.0                     # 最大垂直加速度 (m/s²) - 差速车不用，但速度平滑器需要
   alpha_max: 1.5                  # 最大角加速度 (rad/s²) - 1.0→1.5，允许更快转向
+  
+  # 全向车/3D 平台约束 (差速车可忽略，但保留以支持平台切换)
+  vx_max: 0.5                     # X 方向最大速度 (m/s)
+  vx_min: -0.5                    # X 方向最小速度 (m/s)
+  vy_max: 0.5                     # Y 方向最大速度 (m/s)
+  vy_min: -0.5                    # Y 方向最小速度 (m/s)
+  vz_max: 2.0                     # Z 方向最大速度 (m/s) - 3D 平台用
 
 # =============================================================================
 # 轨迹配置
 # [2025-12-30 调优] 诊断建议降低 low_speed_thresh
+#
+# 坐标系配置说明:
+# ===============
+# 坐标系配置统一在 transform 配置块中定义:
+# - transform.source_frame: 输入坐标系 (网络输出的局部坐标系)
+# - transform.target_frame: 输出坐标系 (控制器工作坐标系)
 # =============================================================================
 trajectory:
-  default_dt_sec: 0.1             # 默认时间步长 (秒) - 匹配网络输出
+  # 时间参数
+  default_dt_sec: 0.1             # 默认时间步长 (秒) - 匹配网络输出，必须与 mpc.dt 一致
+  min_dt_sec: 0.01                # 最小时间步长 (秒) - 验证用
+  max_dt_sec: 1.0                 # 最大时间步长 (秒) - 验证用
+  
+  # 轨迹点数限制
+  min_points: 2                   # 最小轨迹点数
+  max_points: 100                 # 最大轨迹点数
+  
+  # 速度计算参数
   low_speed_thresh: 0.05          # 低速阈值 (m/s) - 0.1→0.05，诊断建议
+  
+  # 轨迹验证参数
+  max_point_distance: 10.0        # 相邻点最大距离 (m)
+  min_confidence: 0.0             # 最小置信度
+  max_confidence: 1.0             # 最大置信度
+  default_confidence: 0.9         # 默认置信度
 
 # =============================================================================
 # 一致性检查配置 (提升平滑性)
@@ -218,16 +263,24 @@ safety:
   v_stop_thresh: 0.05             # 停车速度阈值 (m/s)
   stopping_timeout: 5.0           # 停车超时时间 (秒)
   emergency_decel: 1.0            # 紧急减速度 (m/s²)
+  velocity_margin: 1.1            # 速度限制裕度 (安全检查时的速度上限倍数)
+  accel_margin: 1.5               # 加速度限制裕度 (安全检查时的加速度上限倍数)
   
-  # 低速保护
-  low_speed:
-    threshold: 0.1                # 低速阈值 (m/s)
-    omega_limit: 1.0              # 低速角速度限制 (rad/s)
+  # 注意: 低速保护参数在 constraints 配置块中定义:
+  # - omega_max_low: 低速时最大角速度
+  # - v_low_thresh: 低速阈值
   
-  # 安全裕度
-  margins:
-    velocity: 1.1                 # 速度裕度 (110%)
-    acceleration: 1.5             # 加速度裕度 (150%)
+  # 加速度滤波参数 - 减少速度测量噪声导致的加速度估计噪声
+  accel_filter_window: 3          # 滑动窗口大小
+  accel_filter_alpha: 0.3         # 低通滤波系数 (正常运行)
+  accel_filter_warmup_alpha: 0.5  # 滤波器预热期间的系数 (加速收敛)
+  accel_filter_warmup_period: 3   # 滤波器预热期长度
+  accel_warmup_margin_multiplier: 1.5  # 预热期间裕度倍数
+  accel_warmup_margin_max: 2.0    # 预热期间裕度上限 (防止配置错误)
+  accel_absolute_max_multiplier: 2.0   # 绝对加速度上限倍数 (硬性安全限制)
+  min_dt_for_accel: 0.001         # 加速度计算最小时间间隔 (秒)
+  max_dt_for_accel: 1.0           # 加速度计算最大时间间隔 (秒)
+  vz_stop_thresh: 0.1             # 垂直停车速度阈值 (m/s) - 3D 平台用
   
   # 状态机配置
   #
@@ -319,9 +372,6 @@ backup:
   kp_heading: 2.0                 # 航向增益 (1.5→2.0)
   kp_z: 1.0                       # Z 方向增益 (3D 平台用)
   
-  # 时间步长
-  dt: 0.05                        # 时间步长 (秒)
-  
   # 速度参数
   max_curvature: 5.0              # 最大曲率限制 (1/m)
   min_turn_speed: 0.1             # 最小转向速度 (m/s)
@@ -351,15 +401,31 @@ backup:
 # 统一的坐标变换配置入口，包含：
 # - 坐标系名称（source_frame, target_frame）
 # - 算法层参数（降级、漂移估计等）
+#
+# 漂移估计说明:
+# =============
+# 当 TF2 不可用时，系统会使用里程计积分进行降级处理。
+# 漂移估计用于估算降级期间累积的位置误差。
+# - drift_estimation_enabled: false 表示禁用漂移估计（TurtleBot1 TF2 稳定）
+# - max_accumulated_drift: 漂移累积上限，超过后停止累积（认为估计不可靠）
 # =============================================================================
 transform:
   source_frame: base_footprint    # TurtleBot1 机体坐标系
   target_frame: odom              # 里程计坐标系
   timeout_ms: 50                  # TF2 查询超时 (ms)
-  fallback_duration_limit_ms: 500 # 降级持续限制 (ms)
-  fallback_critical_limit_ms: 1000  # 临界降级限制 (ms)
-  drift_estimation_enabled: false # 漂移估计开关
+  fallback_duration_limit_ms: 500 # 降级持续限制 (ms) - 超过此值发出警告
+  fallback_critical_limit_ms: 1000  # 临界降级限制 (ms) - 超过此值标记为临界
+  
+  # 漂移估计参数 (TF2 降级时使用)
+  drift_estimation_enabled: false # 漂移估计开关 - TurtleBot1 TF2 稳定，禁用
+  max_accumulated_drift: 1.0      # 漂移累积上限 (米) - 超过后停止累积
+  drift_rate: 0.01                # 基础漂移率 (米/秒)
+  drift_velocity_factor: 0.1      # 速度漂移因子 (每 1 m/s 增加的漂移率比例)
+  max_drift_dt: 0.5               # 漂移估计最大时间间隔 (秒)
+  drift_correction_thresh: 0.01   # 漂移校正阈值 (米/弧度)
   recovery_correction_enabled: true  # 恢复校正开关
+  
+  # 坐标系验证
   expected_source_frames:         # 预期的源坐标系列表
     - base_footprint
     - base_link
@@ -411,6 +477,8 @@ ekf:
   measurement_noise:
     odom_position: 0.01           # 里程计位置噪声
     odom_velocity: 0.1            # 里程计速度噪声
+    odom_orientation: 0.01        # 里程计航向噪声
+    odom_angular_velocity: 0.05   # 里程计角速度噪声
     imu_accel: 0.5                # IMU 加速度噪声
     imu_gyro: 0.01                # IMU 陀螺仪噪声
   
@@ -448,15 +516,15 @@ ekf:
 # 架构说明:
 # - 以固定频率发布命令，解决底盘 cmd_vel 超时问题
 # - 手柄命令超时检测，确保手柄断开时机器人停止
+#
+# 速度限制说明:
+# - 速度限制统一从 constraints.v_max/omega_max 读取
+# - 不再单独配置 max_linear/max_angular，避免配置不一致
 # =============================================================================
 cmd_vel_adapter:
   # 发布配置
   publish_rate: 20.0              # 命令发布频率 (Hz) - 需要高于底盘超时频率
   joy_timeout: 0.5                # 手柄命令超时 (秒) - 超时后发布零速度
-  
-  # 速度限制 (与 constraints 保持一致)
-  max_linear: 0.5                 # 最大线速度 (m/s)
-  max_angular: 1.0                # 最大角速度 (rad/s)
   
   # 速度变化率限制 (0 = 禁用，由 MPC 负责平滑)
   max_linear_accel: 0.0           # 最大线加速度 (m/s²)

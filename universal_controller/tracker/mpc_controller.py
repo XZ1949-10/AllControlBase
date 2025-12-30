@@ -10,6 +10,7 @@ from ..core.data_types import Trajectory, ControlOutput, ConsistencyResult
 from ..core.enums import PlatformType
 from ..core.ros_compat import normalize_angle, angle_difference, get_monotonic_time
 from ..core.velocity_smoother import VelocitySmoother
+from ..core.constants import EPSILON
 from ..config.default_config import PLATFORM_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class MPCController(ITrajectoryTracker):
         
         # 权重验证：确保权重为正值，避免 ACADOS 数值问题
         # 零权重会导致 Hessian 矩阵奇异，求解器可能失败
-        MIN_WEIGHT = 1e-6  # 最小权重值
+        MIN_WEIGHT = EPSILON  # 最小权重值
         if self.Q_pos < MIN_WEIGHT:
             logger.warning(f"MPC position weight {self.Q_pos} too small, using {MIN_WEIGHT}")
             self.Q_pos = MIN_WEIGHT
@@ -97,10 +98,11 @@ class MPCController(ITrajectoryTracker):
         # MPC 特有参数从 mpc.fallback 读取
         fallback_config = mpc_config.get('fallback', {})
         self.fallback_lookahead_steps = fallback_config.get('lookahead_steps', 3)
-        self.fallback_heading_kp = fallback_config.get('heading_kp', 1.5)
         
         # 共享参数从 backup 配置读取，确保与 Pure Pursuit 备份控制器一致
+        # 包括: kp_heading, max_curvature, min_distance_thresh, min_turn_speed, default_speed_ratio
         backup_config = config.get('backup', {})
+        self.fallback_heading_kp = backup_config.get('kp_heading', 1.5)
         self.fallback_max_curvature = backup_config.get('max_curvature', 5.0)
         self.fallback_min_distance_thresh = backup_config.get('min_distance_thresh', 0.1)
         self.min_turn_speed = backup_config.get('min_turn_speed', 0.1)
@@ -130,10 +132,15 @@ class MPCController(ITrajectoryTracker):
         self._last_predicted_next_state: Optional[np.ndarray] = None  # 预测的下一步状态
         
         # 速度平滑器
+        # 注意: VelocitySmoother 的 dt 应该使用实际控制周期，而不是 MPC 预测步长
+        # 实际控制周期 = 1/ctrl_freq，从 system 配置读取
+        # 如果未配置，使用 backup.dt 作为回退（向后兼容）
+        ctrl_freq = config.get('system', {}).get('ctrl_freq', 50)
+        smoother_dt = 1.0 / ctrl_freq
         az_max = constraints.get('az_max', 1.0)
         self._velocity_smoother = VelocitySmoother(
             a_max=self.a_max, az_max=az_max,
-            alpha_max=self.alpha_max, dt=self.dt
+            alpha_max=self.alpha_max, dt=smoother_dt
         )
     
     def _initialize_solver(self) -> None:
@@ -209,28 +216,28 @@ class MPCController(ITrajectoryTracker):
                 # vy_world = v_forward * sin(theta)
                 # 其中 v_forward 是沿车辆前进方向的速度（可正可负，支持倒车）
                 # 
-                # 由于非完整约束，世界坐标系下的速度模长等于前向速度的绝对值:
-                # |v_world| = sqrt(vx_world² + vy_world²) = |v_forward|
+                # 从世界坐标系速度恢复带符号的前向速度:
+                # v_forward = vx_world * cos(theta) + vy_world * sin(theta)
+                # 这是速度向量在航向方向上的投影，保留了正负号
                 # 
                 # 动力学方程 (考虑向心加速度):
+                # dpx/dt = v_forward * cos(theta)
+                # dpy/dt = v_forward * sin(theta)
                 # dvx_world/dt = a_forward * cos(theta) - v_forward * omega * sin(theta)
                 # dvy_world/dt = a_forward * sin(theta) + v_forward * omega * cos(theta)
                 # 
                 # 其中 a_forward 是沿车辆前进方向的加速度 (控制输入 ax)
                 # 第二项是由于旋转产生的向心加速度
-                # 
-                # 注意: 这里使用 sqrt(vx² + vy²) 计算速度模长，对于差速车这等于 |v_forward|
-                # 添加小量 1e-6 避免除零，不影响物理正确性
-                v_forward_magnitude = ca.sqrt(vx**2 + vy**2 + 1e-6)
+                v_forward = vx * ca.cos(theta) + vy * ca.sin(theta)
                 xdot = ca.vertcat(
-                    v_forward_magnitude * ca.cos(theta),                                    # dpx/dt
-                    v_forward_magnitude * ca.sin(theta),                                    # dpy/dt
-                    vz,                                                                     # dpz/dt
-                    ax * ca.cos(theta) - v_forward_magnitude * omega * ca.sin(theta),       # dvx_world/dt
-                    ax * ca.sin(theta) + v_forward_magnitude * omega * ca.cos(theta),       # dvy_world/dt
-                    az,                                                                     # dvz/dt
-                    omega,                                                                  # dtheta/dt
-                    alpha                                                                   # domega/dt
+                    v_forward * ca.cos(theta),                                    # dpx/dt
+                    v_forward * ca.sin(theta),                                    # dpy/dt
+                    vz,                                                           # dpz/dt
+                    ax * ca.cos(theta) - v_forward * omega * ca.sin(theta),       # dvx_world/dt
+                    ax * ca.sin(theta) + v_forward * omega * ca.cos(theta),       # dvy_world/dt
+                    az,                                                           # dvz/dt
+                    omega,                                                        # dtheta/dt
+                    alpha                                                         # domega/dt
                 )
             
             model.x = x
@@ -340,11 +347,6 @@ class MPCController(ITrajectoryTracker):
         self._solver.set(0, 'lbx', state)
         self._solver.set(0, 'ubx', state)
         
-        # 获取 hard velocities（始终需要）
-        hard_velocities = trajectory.get_hard_velocities()
-        # 获取 soft velocities（如果启用）
-        soft_velocities = trajectory.velocities if trajectory.soft_enabled else None
-        
         theta_ref = state[6]
         alpha = consistency.alpha
         
@@ -352,27 +354,9 @@ class MPCController(ITrajectoryTracker):
             traj_idx = min(i, len(trajectory.points) - 1)
             ref_point = trajectory.points[traj_idx]
             
-            # 混合速度计算: final_vel = alpha * soft_vel + (1 - alpha) * hard_vel
-            # 当 soft_enabled=False 时，alpha=1.0，结果为 hard_vel
-            if hard_velocities is not None and traj_idx < len(hard_velocities):
-                hard_vel = hard_velocities[traj_idx]
-                vx_hard, vy_hard, vz_hard = hard_vel[0], hard_vel[1], hard_vel[2]
-                wz_hard = hard_vel[3] if len(hard_vel) > 3 else 0.0
-            else:
-                vx_hard, vy_hard, vz_hard, wz_hard = 0.0, 0.0, 0.0, 0.0
-            
-            if soft_velocities is not None and traj_idx < len(soft_velocities):
-                soft_vel = soft_velocities[traj_idx]
-                vx_soft, vy_soft, vz_soft = soft_vel[0], soft_vel[1], soft_vel[2]
-                wz_soft = soft_vel[3] if len(soft_vel) > 3 else 0.0
-                # 混合: alpha * soft + (1 - alpha) * hard
-                vx_ref = alpha * vx_soft + (1 - alpha) * vx_hard
-                vy_ref = alpha * vy_soft + (1 - alpha) * vy_hard
-                vz_ref = alpha * vz_soft + (1 - alpha) * vz_hard
-                wz_ref = alpha * wz_soft + (1 - alpha) * wz_hard
-            else:
-                # 没有 soft velocities，完全使用 hard velocities
-                vx_ref, vy_ref, vz_ref, wz_ref = vx_hard, vy_hard, vz_hard, wz_hard
+            # 使用统一的混合速度接口
+            blended_vel = trajectory.get_blended_velocity(traj_idx, alpha)
+            vx_ref, vy_ref, vz_ref, wz_ref = blended_vel[0], blended_vel[1], blended_vel[2], blended_vel[3]
             
             if i == 0:
                 theta_ref = state[6]
@@ -383,7 +367,7 @@ class MPCController(ITrajectoryTracker):
                 next_point = trajectory.points[traj_idx + 1]
                 dx = next_point.x - ref_point.x
                 dy = next_point.y - ref_point.y
-                if np.sqrt(dx**2 + dy**2) > 0.01:
+                if np.sqrt(dx**2 + dy**2) > self.fallback_min_distance_thresh:
                     theta_ref = np.arctan2(dy, dx)
             
             # y_ref 维度 = 8 (状态) + 4 (控制参考，通常为0)
@@ -422,8 +406,14 @@ class MPCController(ITrajectoryTracker):
             omega = x_next[7]
             frame_id = self.output_frame  # 使用配置的输出坐标系
         else:
-            v_world = np.sqrt(x_next[3]**2 + x_next[4]**2)
-            vx = v_world
+            # 差速车：从世界坐标系速度恢复带符号的前向速度
+            # v_forward = vx_world * cos(theta) + vy_world * sin(theta)
+            # 这是速度向量在航向方向上的投影，保留了正负号
+            theta_next = x_next[6]
+            vx_world = x_next[3]
+            vy_world = x_next[4]
+            v_forward = vx_world * np.cos(theta_next) + vy_world * np.sin(theta_next)
+            vx = v_forward  # 机体坐标系下的前向速度（带符号）
             vy = 0.0
             vz = 0.0
             omega = x_next[7]
@@ -527,30 +517,13 @@ class MPCController(ITrajectoryTracker):
         dy = target.y - py
         dist = np.sqrt(dx**2 + dy**2)
         
-        # 计算目标速度 - 混合模式
-        # final_vel = alpha * soft_vel + (1 - alpha) * hard_vel
-        hard_velocities = trajectory.get_hard_velocities()
+        # 使用统一的混合速度接口计算目标速度
         alpha = consistency.alpha
+        target_v = trajectory.get_blended_speed(lookahead_idx, alpha)
         
-        # 计算 hard velocity 大小
-        if hard_velocities is not None and lookahead_idx < len(hard_velocities):
-            v_hard = hard_velocities[lookahead_idx]
-            v_hard_mag = np.sqrt(v_hard[0]**2 + v_hard[1]**2)
-        else:
-            v_hard_mag = self.v_max * self.default_speed_ratio
-        
-        # 计算 soft velocity 大小（如果启用）
-        if trajectory.soft_enabled and trajectory.velocities is not None:
-            if lookahead_idx < len(trajectory.velocities):
-                v_soft = trajectory.velocities[lookahead_idx]
-                v_soft_mag = np.sqrt(v_soft[0]**2 + v_soft[1]**2)
-            else:
-                v_soft_mag = v_hard_mag  # fallback to hard
-            # 混合: alpha * soft + (1 - alpha) * hard
-            target_v = alpha * v_soft_mag + (1 - alpha) * v_hard_mag
-        else:
-            # soft_enabled=False: alpha=1.0，完全使用 hard velocities
-            target_v = v_hard_mag
+        # 如果轨迹点不足，使用默认速度
+        if len(trajectory.points) < 2:
+            target_v = self.v_max * self.default_speed_ratio
         
         target_v = min(target_v, self.v_max)
         
@@ -581,7 +554,7 @@ class MPCController(ITrajectoryTracker):
             
             # Pure Pursuit 曲率公式: κ = 2*y/L²
             # 当目标点在车辆后方 (local_x < 0) 时，应该先转向
-            if L_sq > 1e-6:
+            if L_sq > EPSILON:
                 if local_x < 0:
                     # 目标点在后方，使用航向误差控制而非曲率
                     target_heading = np.arctan2(dy, dx)

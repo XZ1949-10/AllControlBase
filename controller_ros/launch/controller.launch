@@ -27,6 +27,9 @@
     话题配置说明:
     - 话题名通过参数配置 (topics/*)，不使用 remap
     - 默认话题在 controller_params.yaml 中定义
+    - 话题命名规范:
+      - 输入话题: /controller/input/<name>
+      - 输出话题: /controller/<name>
     - 如需修改话题，请修改 YAML 配置或使用参数覆盖:
         <param name="topics/odom" value="/custom/odom"/>
     

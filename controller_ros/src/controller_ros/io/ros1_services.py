@@ -17,6 +17,13 @@ from ..utils.diagnostics_publisher import fill_diagnostics_msg
 
 logger = logging.getLogger(__name__)
 
+# 服务名称常量
+SERVICE_RESET = '/controller/reset'
+SERVICE_GET_DIAGNOSTICS = '/controller/get_diagnostics'
+SERVICE_SET_STATE = '/controller/set_state'
+SERVICE_SET_HOVER_YAW = '/controller/set_hover_yaw'
+SERVICE_GET_ATTITUDE_RATE_LIMITS = '/controller/get_attitude_rate_limits'
+
 
 class ROS1ServiceManager:
     """
@@ -61,18 +68,18 @@ class ROS1ServiceManager:
         """创建所有服务"""
         # 重置服务
         self._reset_srv = rospy.Service(
-            '/controller/reset', Trigger, self._handle_reset
+            SERVICE_RESET, Trigger, self._handle_reset
         )
-        rospy.loginfo("Created service: /controller/reset")
+        rospy.loginfo(f"Created service: {SERVICE_RESET}")
         
         # 获取诊断服务
         try:
             from controller_ros.srv import GetDiagnostics
             self._get_diag_srv = rospy.Service(
-                '/controller/get_diagnostics', GetDiagnostics,
+                SERVICE_GET_DIAGNOSTICS, GetDiagnostics,
                 self._handle_get_diagnostics
             )
-            rospy.loginfo("Created service: /controller/get_diagnostics")
+            rospy.loginfo(f"Created service: {SERVICE_GET_DIAGNOSTICS}")
         except ImportError:
             self._get_diag_srv = None
             rospy.logwarn("GetDiagnostics service not available")
@@ -81,10 +88,10 @@ class ROS1ServiceManager:
         try:
             from controller_ros.srv import SetControllerState
             self._set_state_srv = rospy.Service(
-                '/controller/set_state', SetControllerState,
+                SERVICE_SET_STATE, SetControllerState,
                 self._handle_set_state
             )
-            rospy.loginfo("Created service: /controller/set_state")
+            rospy.loginfo(f"Created service: {SERVICE_SET_STATE}")
         except ImportError:
             self._set_state_srv = None
             rospy.logwarn("SetControllerState service not available")
@@ -99,10 +106,10 @@ class ROS1ServiceManager:
         try:
             from controller_ros.srv import SetHoverYaw
             self._set_hover_yaw_srv = rospy.Service(
-                '/controller/set_hover_yaw', SetHoverYaw,
+                SERVICE_SET_HOVER_YAW, SetHoverYaw,
                 self._handle_set_hover_yaw
             )
-            rospy.loginfo("Created service: /controller/set_hover_yaw")
+            rospy.loginfo(f"Created service: {SERVICE_SET_HOVER_YAW}")
         except ImportError:
             self._set_hover_yaw_srv = None
             rospy.logwarn("SetHoverYaw service not available")
@@ -111,10 +118,10 @@ class ROS1ServiceManager:
         try:
             from controller_ros.srv import GetAttitudeRateLimits
             self._get_attitude_limits_srv = rospy.Service(
-                '/controller/get_attitude_rate_limits', GetAttitudeRateLimits,
+                SERVICE_GET_ATTITUDE_RATE_LIMITS, GetAttitudeRateLimits,
                 self._handle_get_attitude_rate_limits
             )
-            rospy.loginfo("Created service: /controller/get_attitude_rate_limits")
+            rospy.loginfo(f"Created service: {SERVICE_GET_ATTITUDE_RATE_LIMITS}")
         except ImportError:
             self._get_attitude_limits_srv = None
             rospy.logwarn("GetAttitudeRateLimits service not available")

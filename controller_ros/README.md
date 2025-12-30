@@ -135,22 +135,28 @@ roslaunch controller_ros controller.launch use_sim_time:=true
 
 ### 话题
 
+话题命名规范:
+- 输入话题: `/controller/input/<name>`
+- 输出话题: `/controller/<name>`
+
 #### 订阅 (输入)
 
 | 话题 | 类型 | 说明 |
 |------|------|------|
-| `/odom` | nav_msgs/Odometry | 里程计 |
-| `/imu` | sensor_msgs/Imu | IMU (可选) |
-| `/nn/local_trajectory` | controller_ros/LocalTrajectoryV4 | 网络预测轨迹 |
+| `/controller/input/odom` | nav_msgs/Odometry | 里程计 |
+| `/controller/input/trajectory` | controller_ros/LocalTrajectoryV4 | 轨迹输入 |
 | `/controller/emergency_stop` | std_msgs/Empty | 紧急停止信号 |
+
+注意: IMU 话题默认禁用，需要时在配置中启用。
 
 #### 发布 (输出)
 
 | 话题 | 类型 | 说明 |
 |------|------|------|
-| `/cmd_unified` | controller_ros/UnifiedCmd | 统一控制命令 |
+| `/controller/cmd` | controller_ros/UnifiedCmd | 统一控制命令 |
 | `/controller/diagnostics` | controller_ros/DiagnosticsV2 | 诊断信息 (降频发布) |
 | `/controller/state` | std_msgs/Int32 | 控制器状态 (每次控制循环发布) |
+| `/controller/debug_path` | nav_msgs/Path | 调试路径 (用于 RViz 可视化) |
 | `/controller/attitude_cmd` | controller_ros/AttitudeCmd | 姿态命令 (仅四旋翼) |
 
 **状态值说明** (ControllerState 枚举):

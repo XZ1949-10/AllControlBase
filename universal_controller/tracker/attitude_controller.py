@@ -70,6 +70,7 @@ import numpy as np
 from ..core.interfaces import IAttitudeController
 from ..core.data_types import ControlOutput, AttitudeCommand
 from ..core.ros_compat import get_monotonic_time, normalize_angle
+from ..core.constants import EPSILON
 
 
 class QuadrotorAttitudeController(IAttitudeController):
@@ -314,7 +315,7 @@ class QuadrotorAttitudeController(IAttitudeController):
             # 推力很小，使用简化计算
             # 假设小姿态角近似: roll ≈ -ay/g, pitch ≈ ax/g
             # 使用类常量限制姿态角范围，避免数值不稳定
-            if thrust_accel > 1e-6:
+            if thrust_accel > EPSILON:
                 sin_limit = self.LOW_THRUST_ATTITUDE_SIN_LIMIT
                 roll = np.arcsin(np.clip(-ay_body / self.gravity, -sin_limit, sin_limit))
                 pitch = -np.arcsin(np.clip(ax_body / self.gravity, -sin_limit, sin_limit))

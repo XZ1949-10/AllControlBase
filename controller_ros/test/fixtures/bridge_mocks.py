@@ -221,17 +221,37 @@ class MockControllerManager:
 
 
 class MockCoordTransformer:
-    """模拟坐标变换器"""
+    """模拟坐标变换器
+    
+    模拟 RobustCoordinateTransformer 的接口，用于测试。
+    get_status() 返回的字段与实际实现保持一致。
+    """
     
     def __init__(self):
         self._tf2_callback = None
+        self._tf2_available = True
+        self._fallback_duration_ms = 0.0
+        self._accumulated_drift = 0.0
     
     def set_tf2_lookup_callback(self, callback) -> None:
         """设置 TF2 查找回调"""
         self._tf2_callback = callback
     
     def get_status(self) -> Dict[str, Any]:
-        """获取状态"""
+        """获取状态
+        
+        返回与 RobustCoordinateTransformer.get_status() 一致的字段。
+        """
         return {
-            'external_tf2_callback': self._tf2_callback is not None
+            'tf2_available': self._tf2_available,
+            'tf2_injected': self._tf2_callback is not None,
+            'fallback_duration_ms': self._fallback_duration_ms,
+            'accumulated_drift': self._accumulated_drift,
+            'drift_estimate_reliable': True,
+            'is_critical': False,
+            'status': 'TF2_OK',
+            'tf2_initialized': True,
+            'source_frame': 'base_link',
+            'target_frame': 'odom',
+            'error_message': ''
         }

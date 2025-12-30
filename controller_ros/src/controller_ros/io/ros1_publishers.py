@@ -81,9 +81,12 @@ class ROS1PublisherManager:
             from controller_ros.msg import UnifiedCmd, DiagnosticsV2
             self._UnifiedCmd = UnifiedCmd
             self._DiagnosticsV2 = DiagnosticsV2
+            # 预创建可复用的消息对象
+            self._reusable_diag_msg = DiagnosticsV2()
         except ImportError:
             self._UnifiedCmd = None
             self._DiagnosticsV2 = None
+            self._reusable_diag_msg = None
             rospy.logwarn("Custom messages (UnifiedCmd, DiagnosticsV2) not available")
         
         # 控制命令发布器
@@ -158,14 +161,14 @@ class ROS1PublisherManager:
             rospy.logwarn_throttle(10.0, "Diagnostics publisher is None, cannot publish")
             return
         
-        if self._DiagnosticsV2 is None:
-            rospy.logwarn_throttle(10.0, "DiagnosticsV2 message type is None, cannot publish")
+        if self._reusable_diag_msg is None:
+            rospy.logwarn_throttle(10.0, "DiagnosticsV2 message not available, cannot publish")
             return
         
         try:
-            msg = self._DiagnosticsV2()
-            fill_diagnostics_msg(msg, diag, get_time_func=lambda: rospy.Time.now())
-            self._diag_pub.publish(msg)
+            # 复用消息对象，避免每次创建新对象
+            fill_diagnostics_msg(self._reusable_diag_msg, diag, get_time_func=lambda: rospy.Time.now())
+            self._diag_pub.publish(self._reusable_diag_msg)
         except Exception as e:
             rospy.logwarn_throttle(10.0, f"Failed to publish diagnostics: {e}")
     

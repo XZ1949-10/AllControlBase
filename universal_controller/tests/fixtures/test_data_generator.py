@@ -63,8 +63,9 @@ def create_test_trajectory(
         轨迹点是相对于当前机器人位置的局部坐标。
     """
     # 使用配置默认值
+    # 注意: default_num_points 已从配置中移除，测试使用硬编码默认值 20
     if num_points is None:
-        num_points = _get_trajectory_default('default_num_points', 20)
+        num_points = 20
     if dt is None:
         dt = _get_trajectory_default('default_dt_sec', 0.1)
     if frame_id is None:
@@ -263,7 +264,8 @@ def create_test_state_sequence(
     x, y, theta = initial_state
     vx, vy = 0.0, 0.0
     
-    default_num_points = _get_trajectory_default('default_num_points', 20)
+    # 注意: default_num_points 已从配置中移除，测试使用硬编码默认值 20
+    default_num_points = 20
     
     for i in range(num_steps):
         traj = create_test_trajectory(
@@ -336,8 +338,9 @@ def create_local_trajectory_with_transform(
     Returns:
         (local_traj, odom_traj): 局部坐标系轨迹 (base_link) 和 odom 坐标系轨迹
     """
+    # 注意: default_num_points 已从配置中移除，测试使用硬编码默认值 20
     if num_points is None:
-        num_points = _get_trajectory_default('default_num_points', 20)
+        num_points = 20
     if dt is None:
         dt = _get_trajectory_default('default_dt_sec', 0.1)
     

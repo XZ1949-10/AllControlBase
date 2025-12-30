@@ -9,6 +9,7 @@ from ..core.data_types import ControlOutput, SafetyDecision
 from ..core.enums import ControllerState, PlatformType
 from ..core.diagnostics_input import DiagnosticsInput
 from ..core.ros_compat import get_monotonic_time
+from ..core.constants import EPSILON
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ class BasicSafetyMonitor(ISafetyMonitor):
         safety_config = config.get('safety', {})
         self.velocity_margin = safety_config.get('velocity_margin', 1.1)
         self.accel_margin = safety_config.get('accel_margin', 1.5)
+        
+        # 紧急减速度配置
+        # 用于安全违规时限制命令的减速度
+        self.emergency_decel = safety_config.get('emergency_decel', 3.0)
         
         # 加速度滤波参数
         self.accel_filter_window = safety_config.get('accel_filter_window', 3)
@@ -141,25 +146,23 @@ class BasicSafetyMonitor(ISafetyMonitor):
             self._filter_warmup_count = 0
         
         # 预热期间使用更大的滤波系数，加速收敛
-        # 
-        # 设计说明：预热期结束时从 warmup_alpha 切换到 normal_alpha
-        # 这可能导致滤波输出的小跳变，但这是可接受的，因为：
-        # 1. 预热期间使用更宽松的安全阈值，小跳变不会触发误报
-        # 2. 两个 alpha 值通常接近（默认 0.5 vs 0.3），跳变幅度很小
-        # 3. 后续滤波会平滑掉这个小跳变
+        # 使用渐进过渡避免预热期结束时的跳变
         if self._filter_warmup_count < self._filter_warmup_period:
-            # 预热期间使用配置的预热系数加速收敛
-            self._filtered_ax = self.accel_filter_warmup_alpha * avg_ax + (1 - self.accel_filter_warmup_alpha) * self._filtered_ax
-            self._filtered_ay = self.accel_filter_warmup_alpha * avg_ay + (1 - self.accel_filter_warmup_alpha) * self._filtered_ay
-            self._filtered_az = self.accel_filter_warmup_alpha * avg_az + (1 - self.accel_filter_warmup_alpha) * self._filtered_az
-            self._filtered_alpha = self.accel_filter_warmup_alpha * avg_alpha + (1 - self.accel_filter_warmup_alpha) * self._filtered_alpha
+            # 预热期间：从 warmup_alpha 渐进过渡到 normal_alpha
+            # 过渡因子从 0 增长到 1
+            transition_factor = self._filter_warmup_count / self._filter_warmup_period
+            # 线性插值：alpha = warmup_alpha * (1 - t) + normal_alpha * t
+            current_alpha = (self.accel_filter_warmup_alpha * (1 - transition_factor) + 
+                           self.accel_filter_alpha * transition_factor)
             self._filter_warmup_count += 1
         else:
             # 正常滤波
-            self._filtered_ax = self.accel_filter_alpha * avg_ax + (1 - self.accel_filter_alpha) * self._filtered_ax
-            self._filtered_ay = self.accel_filter_alpha * avg_ay + (1 - self.accel_filter_alpha) * self._filtered_ay
-            self._filtered_az = self.accel_filter_alpha * avg_az + (1 - self.accel_filter_alpha) * self._filtered_az
-            self._filtered_alpha = self.accel_filter_alpha * avg_alpha + (1 - self.accel_filter_alpha) * self._filtered_alpha
+            current_alpha = self.accel_filter_alpha
+        
+        self._filtered_ax = current_alpha * avg_ax + (1 - current_alpha) * self._filtered_ax
+        self._filtered_ay = current_alpha * avg_ay + (1 - current_alpha) * self._filtered_ay
+        self._filtered_az = current_alpha * avg_az + (1 - current_alpha) * self._filtered_az
+        self._filtered_alpha = current_alpha * avg_alpha + (1 - current_alpha) * self._filtered_alpha
         
         return self._filtered_ax, self._filtered_ay, self._filtered_az, self._filtered_alpha
     
@@ -169,7 +172,17 @@ class BasicSafetyMonitor(ISafetyMonitor):
     
     def check(self, state: np.ndarray, cmd: ControlOutput, 
               diagnostics: DiagnosticsInput) -> SafetyDecision:
-        """检查控制命令安全性"""
+        """检查控制命令安全性
+        
+        安全检查流程:
+        1. 检查速度限制 (水平、垂直、角速度)
+        2. 检查加速度限制 (使用滤波后的加速度估计)
+        3. 如果违规，使用 emergency_decel 限制减速度
+        
+        emergency_decel 使用说明:
+        - 当检测到安全违规时，限制命令的变化率不超过 emergency_decel
+        - 这确保了即使在紧急情况下，机器人也能平滑减速而非急停
+        """
         diag = diagnostics
         
         reasons = []
@@ -180,7 +193,7 @@ class BasicSafetyMonitor(ISafetyMonitor):
         v_horizontal = cmd.v_horizontal
         if v_horizontal > self.v_max * self.velocity_margin:
             reasons.append(f"v_horizontal {v_horizontal:.2f} exceeds limit")
-            if v_horizontal > 1e-6:
+            if v_horizontal > EPSILON:
                 scale = self.v_max / v_horizontal
                 limited_cmd.vx = cmd.vx * scale
                 limited_cmd.vy = cmd.vy * scale
@@ -235,18 +248,16 @@ class BasicSafetyMonitor(ISafetyMonitor):
                 # 首先检查绝对上限（硬性限制）
                 if accel_horizontal > accel_absolute_limit:
                     reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds absolute limit {accel_absolute_limit:.2f}")
-                    if accel_horizontal > 1e-6:
-                        scale = self.a_max / accel_horizontal  # 限制到正常值
-                        limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
-                        limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
+                    # 使用 emergency_decel 限制减速度
+                    limited_cmd = self._apply_emergency_decel_limit(
+                        limited_cmd, self._last_cmd, dt, 'horizontal')
                     needs_limiting = True
                 # 然后检查正常限制（考虑预热裕度）
                 elif accel_horizontal > self.a_max * accel_margin_effective:
                     reasons.append(f"a_horizontal {accel_horizontal:.2f} exceeds limit")
-                    if accel_horizontal > 1e-6:
-                        scale = self.a_max / accel_horizontal
-                        limited_cmd.vx = self._last_cmd.vx + ax * scale * dt
-                        limited_cmd.vy = self._last_cmd.vy + ay * scale * dt
+                    # 使用 emergency_decel 限制减速度
+                    limited_cmd = self._apply_emergency_decel_limit(
+                        limited_cmd, self._last_cmd, dt, 'horizontal')
                     needs_limiting = True
                 
                 if self.is_3d:
@@ -254,21 +265,25 @@ class BasicSafetyMonitor(ISafetyMonitor):
                     az_absolute_limit = self.az_max * self.accel_absolute_max_multiplier
                     if abs(az) > az_absolute_limit:
                         reasons.append(f"az {az:.2f} exceeds absolute limit {az_absolute_limit:.2f}")
-                        limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
+                        limited_cmd = self._apply_emergency_decel_limit(
+                            limited_cmd, self._last_cmd, dt, 'vertical')
                         needs_limiting = True
                     elif abs(az) > self.az_max * accel_margin_effective:
                         reasons.append(f"az {az:.2f} exceeds limit")
-                        limited_cmd.vz = self._last_cmd.vz + np.clip(az, -self.az_max, self.az_max) * dt
+                        limited_cmd = self._apply_emergency_decel_limit(
+                            limited_cmd, self._last_cmd, dt, 'vertical')
                         needs_limiting = True
                 
                 # 角加速度绝对上限检查
                 if abs(alpha) > alpha_absolute_limit:
                     reasons.append(f"alpha {alpha:.2f} exceeds absolute limit {alpha_absolute_limit:.2f}")
-                    limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
+                    limited_cmd = self._apply_emergency_decel_limit(
+                        limited_cmd, self._last_cmd, dt, 'angular')
                     needs_limiting = True
                 elif abs(alpha) > self.alpha_max * accel_margin_effective:
                     reasons.append(f"alpha {alpha:.2f} exceeds limit")
-                    limited_cmd.omega = self._last_cmd.omega + np.clip(alpha, -self.alpha_max, self.alpha_max) * dt
+                    limited_cmd = self._apply_emergency_decel_limit(
+                        limited_cmd, self._last_cmd, dt, 'angular')
                     needs_limiting = True
         
         self._last_cmd = limited_cmd.copy() if needs_limiting else cmd.copy()
@@ -292,6 +307,63 @@ class BasicSafetyMonitor(ISafetyMonitor):
             )
         
         return SafetyDecision(safe=True, new_state=None, reason="", limited_cmd=None)
+    
+    def _apply_emergency_decel_limit(self, cmd: ControlOutput, last_cmd: ControlOutput,
+                                     dt: float, component: str) -> ControlOutput:
+        """
+        应用紧急减速度限制
+        
+        使用 emergency_decel 限制命令的变化率，确保平滑减速。
+        
+        设计说明:
+        - 水平和垂直速度使用 emergency_decel (线加速度限制)
+        - 角速度使用 emergency_decel 与 alpha_max 的比例关系
+          即: emergency_alpha = emergency_decel * (alpha_max / a_max)
+          这确保了线速度和角速度的紧急减速比例一致
+        
+        Args:
+            cmd: 当前命令
+            last_cmd: 上一次命令
+            dt: 时间间隔
+            component: 要限制的分量 ('horizontal', 'vertical', 'angular')
+        
+        Returns:
+            限制后的命令
+        """
+        max_delta_v = self.emergency_decel * dt
+        
+        if component == 'horizontal':
+            # 限制水平速度变化
+            dvx = cmd.vx - last_cmd.vx
+            dvy = cmd.vy - last_cmd.vy
+            dv_mag = np.sqrt(dvx**2 + dvy**2)
+            
+            if dv_mag > max_delta_v and dv_mag > EPSILON:
+                scale = max_delta_v / dv_mag
+                cmd.vx = last_cmd.vx + dvx * scale
+                cmd.vy = last_cmd.vy + dvy * scale
+        
+        elif component == 'vertical':
+            # 限制垂直速度变化
+            dvz = cmd.vz - last_cmd.vz
+            if abs(dvz) > max_delta_v:
+                cmd.vz = last_cmd.vz + np.sign(dvz) * max_delta_v
+        
+        elif component == 'angular':
+            # 限制角速度变化
+            # 使用与线速度相同的紧急减速比例
+            # emergency_alpha = emergency_decel * (alpha_max / a_max)
+            # 这确保了紧急情况下线速度和角速度的减速比例一致
+            if self.a_max > EPSILON:
+                emergency_alpha = self.emergency_decel * (self.alpha_max / self.a_max)
+            else:
+                emergency_alpha = self.alpha_max  # fallback
+            max_delta_omega = emergency_alpha * dt
+            domega = cmd.omega - last_cmd.omega
+            if abs(domega) > max_delta_omega:
+                cmd.omega = last_cmd.omega + np.sign(domega) * max_delta_omega
+        
+        return cmd
     
     def reset(self) -> None:
         self._last_cmd = None

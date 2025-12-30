@@ -58,10 +58,19 @@ def test_handlers():
         JoystickHandler, DataAggregator, JoystickConfig
     )
     
-    # 创建测试实例
+    # 测试直接构造
     config = JoystickConfig(max_linear=0.5)
     handler = JoystickHandler(config)
     assert handler.config.max_linear == 0.5
+    
+    # 测试 from_dict 方法 (速度限制从 constraints 读取)
+    joy_config = {'enable_button': 4, 'deadzone': 0.15}
+    constraints_config = {'v_max': 0.8, 'omega_max': 1.5}
+    config2 = JoystickConfig.from_dict(joy_config, constraints_config)
+    assert config2.enable_button == 4
+    assert config2.deadzone == 0.15
+    assert config2.max_linear == 0.8  # 从 constraints.v_max 读取
+    assert config2.max_angular == 1.5  # 从 constraints.omega_max 读取
     
     aggregator = DataAggregator()
     data = aggregator.get_data()

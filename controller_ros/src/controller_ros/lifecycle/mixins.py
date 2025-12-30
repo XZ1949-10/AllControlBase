@@ -83,6 +83,7 @@ class LifecycleMixin(ILifecycle):
         初始化组件
         
         线程安全，幂等。
+        如果初始化失败，会调用 _do_shutdown() 清理可能已分配的资源。
         """
         with self._lifecycle_lock:
             # 幂等性：已经运行则直接返回成功
@@ -108,6 +109,8 @@ class LifecycleMixin(ILifecycle):
                     self._lifecycle_state = LifecycleState.ERROR
                     self._last_error = "Initialization returned False"
                     logger.error(f"{self._component_name}: Initialization failed")
+                    # 清理可能已分配的资源
+                    self._safe_cleanup()
                 
                 return success
                 
@@ -115,7 +118,21 @@ class LifecycleMixin(ILifecycle):
                 self._lifecycle_state = LifecycleState.ERROR
                 self._last_error = str(e)
                 logger.error(f"{self._component_name}: Initialization error: {e}")
+                # 清理可能已分配的资源
+                self._safe_cleanup()
                 return False
+    
+    def _safe_cleanup(self) -> None:
+        """
+        安全清理资源
+        
+        在初始化失败时调用，清理可能已分配的资源。
+        捕获所有异常，确保不会因清理失败而掩盖原始错误。
+        """
+        try:
+            self._do_shutdown()
+        except Exception as e:
+            logger.warning(f"{self._component_name}: Cleanup error (ignored): {e}")
     
     def shutdown(self) -> None:
         """

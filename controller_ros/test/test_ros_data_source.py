@@ -80,6 +80,7 @@ class MockDiagnosticsV2:
         self.transition_progress = 1.0
         self.error_message = ''
         self.consecutive_errors = 0
+        self.safety_check_passed = True
         self.emergency_stop = False
 
 
