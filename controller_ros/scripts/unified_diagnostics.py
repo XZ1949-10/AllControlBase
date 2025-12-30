@@ -1724,13 +1724,51 @@ class UnifiedDiagnostics:
 
     # ==================== 系统调优功能 ====================
     
+    def _wait_for_confirmation(self, stage_name: str, prerequisites: list, warnings: list = None):
+        """
+        等待用户确认阶段执行
+        
+        Args:
+            stage_name: 阶段名称
+            prerequisites: 前提条件列表
+            warnings: 警告信息列表 (可选)
+        
+        Returns:
+            bool: True 表示用户确认继续，False 表示用户跳过
+        """
+        self._log(f"\n  {Colors.CYAN}[前提条件]{Colors.NC}")
+        for prereq in prerequisites:
+            self._log(f"    • {prereq}")
+        
+        if warnings:
+            self._log(f"\n  {Colors.RED}[警告]{Colors.NC}")
+            for warn in warnings:
+                self._log(f"    ⚠️  {warn}")
+        
+        self._log(f"\n  {Colors.YELLOW}按 Enter 确认并开始 {stage_name} (Ctrl+C 跳过此阶段)...{Colors.NC}")
+        
+        try:
+            input()
+            return True
+        except KeyboardInterrupt:
+            self._log(f"\n  {Colors.YELLOW}[跳过]{Colors.NC} 用户取消 {stage_name}")
+            return False
+    
     def _run_topic_monitoring(self):
         """阶段1: 话题监控"""
         self._log(f"\n{Colors.BLUE}{'─'*70}")
         self._log(f"  阶段1/6: 话题监控 ({self.args.duration}秒)")
         self._log(f"{'─'*70}{Colors.NC}")
         self._log(f"\n  {Colors.YELLOW}[提示]{Colors.NC} 此阶段仅被动监听话题，如需测试底盘能力请使用 --test-chassis")
-        self._log(f"  {Colors.CYAN}[前提]{Colors.NC} 需要: turtlebot_bringup + trajectory_publisher")
+        
+        # 显示前提条件并等待确认
+        prerequisites = [
+            "turtlebot_bringup 已启动 (roslaunch turtlebot_bringup minimal.launch)",
+            "trajectory_publisher 已启动 (神经网络轨迹发布节点)",
+            f"监控时长: {self.args.duration} 秒"
+        ]
+        if not self._wait_for_confirmation("阶段1: 话题监控", prerequisites):
+            return
         
         self.monitors['odom'] = OdometryAnalyzer(self.topics['odom'])
         self.monitors['imu'] = TopicMonitor(self.topics['imu'], Imu)
@@ -1779,19 +1817,24 @@ class UnifiedDiagnostics:
         self._log(f"\n{Colors.BLUE}{'─'*70}")
         self._log(f"  阶段2/6: 底盘能力测试")
         self._log(f"{'─'*70}{Colors.NC}")
-        self._log(f"\n  {Colors.RED}⚠️  警告: 机器人会移动! 确保周围空间安全。{Colors.NC}")
-        self._log(f"  {Colors.CYAN}[前提]{Colors.NC} 需要: 安全的测试空间，机器人可以自由移动")
+        
         self._log(f"\n  测试内容:")
         self._log(f"    1. 最大速度测试 (3秒)")
         self._log(f"    2. 加速度测试 (2秒)")
         self._log(f"    3. 最大角速度测试 (2秒)")
         self._log(f"    4. 响应时间测试 (3秒)")
-        self._log(f"\n  {Colors.YELLOW}按 Enter 开始测试 (Ctrl+C 跳过)...{Colors.NC}")
         
-        try:
-            input()  # 等待用户确认
-        except KeyboardInterrupt:
-            self._log(f"\n  {Colors.YELLOW}[跳过]{Colors.NC} 用户取消底盘测试")
+        # 显示前提条件并等待确认
+        prerequisites = [
+            "周围空间安全，机器人可以自由移动",
+            "里程计话题正常发布 (/odom)",
+            "速度命令话题可用 (/mobile_base/commands/velocity)"
+        ]
+        warnings = [
+            "机器人会移动! 确保周围空间安全。",
+            "测试过程中请勿触碰机器人"
+        ]
+        if not self._wait_for_confirmation("阶段2: 底盘能力测试", prerequisites, warnings):
             return
         
         # 重新启动里程计监控器（阶段1已经停止）
@@ -1812,15 +1855,35 @@ class UnifiedDiagnostics:
             tester = ChassisTestRunner(self.topics['cmd_vel'], odom_monitor, log_func=self._log)
             tester.setup()
             
-            self._log(f"\n  {Colors.CYAN}[进度]{Colors.NC} 开始测试...")
-            self._log(f"    [1/4] 最大速度测试...")
-            tester.test_max_velocity(target_v=0.5)
-            self._log(f"    [2/4] 加速度测试...")
-            tester.test_acceleration(target_v=0.3)
-            self._log(f"    [3/4] 最大角速度测试...")
-            tester.test_angular_velocity(target_w=1.0)
-            self._log(f"    [4/4] 响应时间测试...")
-            tester.test_response_time(step_v=0.3)
+            self._log(f"\n  {Colors.CYAN}[进度]{Colors.NC} 开始子阶段测试...")
+            
+            # 子阶段 2.1: 最大速度测试
+            self._log(f"\n  {Colors.MAGENTA}--- 子阶段 2.1/4: 最大速度测试 ---{Colors.NC}")
+            sub_prereqs = ["机器人前方有足够空间 (至少2米)", "目标速度: 0.5 m/s，持续3秒"]
+            if self._wait_for_confirmation("子阶段2.1: 最大速度测试", sub_prereqs, ["机器人将向前移动!"]):
+                tester.test_max_velocity(target_v=0.5)
+                self._log(f"    {Colors.GREEN}[完成]{Colors.NC} 最大速度测试完成")
+            
+            # 子阶段 2.2: 加速度测试
+            self._log(f"\n  {Colors.MAGENTA}--- 子阶段 2.2/4: 加速度测试 ---{Colors.NC}")
+            sub_prereqs = ["机器人前方有足够空间", "目标速度: 0.3 m/s，测试加速能力"]
+            if self._wait_for_confirmation("子阶段2.2: 加速度测试", sub_prereqs, ["机器人将快速加速!"]):
+                tester.test_acceleration(target_v=0.3)
+                self._log(f"    {Colors.GREEN}[完成]{Colors.NC} 加速度测试完成")
+            
+            # 子阶段 2.3: 最大角速度测试
+            self._log(f"\n  {Colors.MAGENTA}--- 子阶段 2.3/4: 最大角速度测试 ---{Colors.NC}")
+            sub_prereqs = ["机器人周围有足够空间", "目标角速度: 1.0 rad/s，持续2秒"]
+            if self._wait_for_confirmation("子阶段2.3: 最大角速度测试", sub_prereqs, ["机器人将原地旋转!"]):
+                tester.test_angular_velocity(target_w=1.0)
+                self._log(f"    {Colors.GREEN}[完成]{Colors.NC} 最大角速度测试完成")
+            
+            # 子阶段 2.4: 响应时间测试
+            self._log(f"\n  {Colors.MAGENTA}--- 子阶段 2.4/4: 响应时间测试 ---{Colors.NC}")
+            sub_prereqs = ["机器人前方有足够空间", "测试阶跃响应，目标速度: 0.3 m/s"]
+            if self._wait_for_confirmation("子阶段2.4: 响应时间测试", sub_prereqs, ["机器人将突然启动!"]):
+                tester.test_response_time(step_v=0.3)
+                self._log(f"    {Colors.GREEN}[完成]{Colors.NC} 响应时间测试完成")
             
             self.results['chassis_tests'] = tester.results
             self._log(f"\n  {Colors.GREEN}[完成]{Colors.NC} 阶段2完成")
@@ -1833,8 +1896,16 @@ class UnifiedDiagnostics:
         self._log(f"\n{Colors.BLUE}{'─'*70}")
         self._log(f"  阶段3/6: 控制器运行时诊断 ({self.args.duration}秒)")
         self._log(f"{'─'*70}{Colors.NC}")
-        self._log(f"\n  {Colors.RED}[前提]{Colors.NC} 控制器必须正在运行!")
-        self._log(f"         roslaunch controller_ros controller.launch")
+        
+        # 显示前提条件并等待确认
+        prerequisites = [
+            "控制器必须正在运行 (roslaunch controller_ros controller.launch)",
+            f"诊断话题可用 ({self.topics['diagnostics']})",
+            f"监控时长: {self.args.duration} 秒",
+            "建议: 移动机器人以生成跟踪数据"
+        ]
+        if not self._wait_for_confirmation("阶段3: 控制器运行时诊断", prerequisites):
+            return
         
         if not CUSTOM_MSG_AVAILABLE:
             self._log(f"\n  {Colors.RED}[ERROR]{Colors.NC} controller_ros 消息不可用，跳过")
@@ -1929,6 +2000,26 @@ class UnifiedDiagnostics:
         self._log(f"\n{Colors.BLUE}{'─'*70}")
         self._log(f"  阶段4/6: 计算推荐配置")
         self._log(f"{'─'*70}{Colors.NC}")
+        
+        # 显示前提条件并等待确认
+        data_sources = []
+        if self.results.get('odom'):
+            data_sources.append(f"里程计数据: {self.results['odom'].get('count', 0)} 条消息")
+        if self.results.get('trajectory'):
+            data_sources.append(f"轨迹数据: {self.results['trajectory'].get('count', 0)} 条消息")
+        if self.results.get('chassis_tests'):
+            data_sources.append("底盘测试结果: 已完成")
+        if self.results.get('controller'):
+            data_sources.append(f"控制器诊断: {self.results['controller'].get('msg_count', 0)} 条消息")
+        
+        prerequisites = [
+            "基于前面阶段收集的数据计算推荐配置",
+            "将生成 15 个配置模块"
+        ] + data_sources
+        
+        if not self._wait_for_confirmation("阶段4: 计算推荐配置", prerequisites):
+            return
+        
         self._log(f"\n  {Colors.CYAN}[进度]{Colors.NC} 分析收集的数据...")
         
         odom = self.results.get('odom', {})
@@ -2470,6 +2561,14 @@ class UnifiedDiagnostics:
         self._log(f"  阶段5/6: 诊断结果")
         self._log(f"{'─'*70}{Colors.NC}")
         
+        # 显示前提条件并等待确认
+        prerequisites = [
+            "显示所有收集的诊断数据和推荐配置",
+            "包含: 传感器状态、轨迹特性、底盘特性、推荐参数"
+        ]
+        if not self._wait_for_confirmation("阶段5: 显示诊断结果", prerequisites):
+            return
+        
         # 传感器状态
         self._log(f"{Colors.CYAN}传感器状态:{Colors.NC}")
         for name in ['odom', 'imu', 'trajectory']:
@@ -2639,6 +2738,16 @@ class UnifiedDiagnostics:
         self._log(f"\n{Colors.BLUE}{'─'*70}")
         self._log(f"  阶段6/6: 生成配置文件")
         self._log(f"{'─'*70}{Colors.NC}")
+        
+        # 显示前提条件并等待确认
+        prerequisites = [
+            f"输出文件: {output_file}",
+            "将生成包含 15 个配置模块的 YAML 文件",
+            "配置基于前面阶段收集的数据"
+        ]
+        if not self._wait_for_confirmation("阶段6: 生成配置文件", prerequisites):
+            return
+        
         self._log(f"\n  {Colors.CYAN}[进度]{Colors.NC} 生成配置文件: {output_file}")
         
         # 构建完整配置 (15个配置模块，与 universal_controller/config/default_config.py 对应)
