@@ -21,7 +21,7 @@
 # 话题配置 - 仅可视化器特有话题
 # =============================================================================
 topics:
-  camera_image: ""                        # 相机图像 (可选，留空使用俯视图)
+  camera_image: "/usb_cam/image_raw"      # 相机图像
   joy: "/joy"                             # 手柄输入
   cmd_vel_output: "/joy_cmd_vel"          # 手柄控制输出
   control_mode: "/visualizer/control_mode"  # 控制模式 (true=手柄, false=网络)
@@ -63,5 +63,5 @@ joystick:
 # 相机配置
 # =============================================================================
 camera:
-  use_camera: false                       # 是否使用相机图像
-  calibration_file: ""                    # 单应性标定文件路径
+  use_camera: true                        # 是否使用相机图像
+  calibration_file: ""                    # 单应性标定文件路径 (需要先标定)

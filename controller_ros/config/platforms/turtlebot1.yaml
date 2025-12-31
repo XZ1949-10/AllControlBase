@@ -163,7 +163,7 @@ cmd_vel_adapter:
   enable_rate_limit: true         # 启用速度变化率限制
   joy_topic: "/joy_cmd_vel"       # 手柄输入话题
   mode_topic: "/visualizer/control_mode"  # 模式切换话题
-  output_topic: "/mobile_base/commands/velocity"  # TurtleBot1 底盘话题
+  output_topic: "/cmd_vel_mux/input/navi"  # TurtleBot1 cmd_vel_mux 导航输入
 
 
 # =============================================================================
