@@ -21,7 +21,7 @@ import logging
 import time
 
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Joy, Image
+from sensor_msgs.msg import Joy, Image, Imu
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Empty, Bool
 
@@ -92,6 +92,7 @@ class VisualizerNode:
         # 话题配置
         topics = self._config.get('topics', {})
         self._odom_topic = topics.get('odom', '/odom')
+        self._imu_topic = topics.get('imu', '/mobile_base/sensors/imu_data')
         self._traj_topic = topics.get('trajectory', '/nn/local_trajectory')
         self._cmd_topic = topics.get('cmd_unified', '/cmd_unified')
         self._diag_topic = topics.get('diagnostics', '/controller/diagnostics')
@@ -100,6 +101,10 @@ class VisualizerNode:
         self._cmd_vel_topic = topics.get('cmd_vel_output', '/cmd_vel')
         self._mode_topic = topics.get('control_mode', '/visualizer/control_mode')
         self._estop_topic = topics.get('emergency_stop', '/controller/emergency_stop')
+        
+        # IMU 角速度缓存 (用于补充 odom 中缺失的角速度)
+        self._imu_angular_z = 0.0
+        self._imu_lock = threading.Lock()
         
         # 相机标定配置
         camera_config = self._config.get('camera', {})
@@ -156,6 +161,7 @@ class VisualizerNode:
         
         self._ros.log_info(f"Visualizer node initialized (ROS{ROS_VERSION})")
         self._ros.log_info(f"  Odom topic: {self._odom_topic}")
+        self._ros.log_info(f"  IMU topic: {self._imu_topic}")
         self._ros.log_info(f"  Trajectory topic: {self._traj_topic}")
         self._ros.log_info(f"  Joy topic: {self._joy_topic}")
     
@@ -245,6 +251,14 @@ class VisualizerNode:
             Odometry, self._odom_topic,
             self._odom_callback, 10
         )
+        
+        # IMU (用于获取角速度，因为 TurtleBot1 的 odom 不提供角速度)
+        if self._imu_topic:
+            self._ros.create_subscriber(
+                Imu, self._imu_topic,
+                self._imu_callback, 10
+            )
+            self._ros.log_info(f"  IMU angular velocity enabled from: {self._imu_topic}")
         
         # 轨迹
         if _LocalTrajectoryV4 is not None:
@@ -360,6 +374,17 @@ class VisualizerNode:
             msg.pose.pose.orientation.w,
         )
         velocity = self._velocity_adapter.from_odom(msg, timestamp)
+        
+        # 调试日志 - 每 50 次打印一次，显示原始值和转换后的值
+        if not hasattr(self, '_odom_count'):
+            self._odom_count = 0
+        self._odom_count += 1
+        if self._odom_count % 50 == 0:
+            self._ros.log_info(
+                f"[DEBUG] Odom raw: vx={msg.twist.twist.linear.x:.3f}, omega={msg.twist.twist.angular.z:.4f} | "
+                f"Converted: vx={velocity.linear_x:.3f}, omega={velocity.angular_z:.4f}"
+            )
+        
         self._data_aggregator.update_odom(position, orientation, velocity, timestamp)
     
     def _traj_callback(self, msg):
