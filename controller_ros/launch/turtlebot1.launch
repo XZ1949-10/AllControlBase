@@ -10,6 +10,10 @@
     roslaunch controller_ros turtlebot1.launch dashboard:=true visualizer:=true
     roslaunch controller_ros turtlebot1.launch use_sim_time:=true
   
+  默认行为:
+    - dashboard 和 visualizer 默认关闭，需要时显式启用
+    - 这样可以减少资源消耗，避免不必要的 PyQt5 依赖
+  
   前置条件:
     1. TurtleBot1 驱动已启动: roslaunch turtlebot_bringup minimal.launch
     2. universal_controller 已安装 (pip install -e .)
@@ -19,12 +23,10 @@
 <launch>
   <!-- ========== 参数 ========== -->
   <arg name="use_sim_time" default="false" doc="Use simulation time"/>
-  <arg name="dashboard" default="true" doc="Launch Dashboard GUI for monitoring"/>
-  <arg name="visualizer" default="true" doc="Launch TurtleBot1 运行可视化界面 (轨迹、速度、手柄控制)"/>
-  <arg name="camera_image" default="/usb_cam/image_raw" doc="相机图像话题 (留空使用俯视图模式)"/>
-  <arg name="calibration_file" default="$(find controller_ros)/config/homography_calib.yaml" doc="单应性标定文件"/>
-  <arg name="max_linear" default="0.5" doc="Maximum linear velocity (m/s)"/>
-  <arg name="max_angular" default="1.0" doc="Maximum angular velocity (rad/s)"/>
+  <arg name="dashboard" default="false" doc="Launch Dashboard GUI for monitoring"/>
+  <arg name="visualizer" default="false" doc="Launch TurtleBot1 运行可视化界面 (轨迹、速度、手柄控制)"/>
+  <arg name="camera_image" default="" doc="相机图像话题 (留空使用俯视图模式)"/>
+  <arg name="calibration_file" default="" doc="单应性标定文件 (留空使用俯视图模式)"/>
   
   <!-- ========== 全局参数 ========== -->
   <param name="/use_sim_time" value="$(arg use_sim_time)"/>
@@ -66,13 +68,10 @@
     - 以固定频率发布命令，解决底盘超时问题
     - 应用速度限制保护 TurtleBot1
     
-    配置来源: config/turtlebot1.yaml -> cmd_vel_adapter
-    可通过 launch 参数覆盖:
-      <param name="max_linear" value="0.3"/>
+    速度限制配置:
+    - 统一从 constraints.v_max 和 constraints.omega_max 读取
+    - 在 turtlebot1.yaml 中配置，确保与控制器一致
     -->
-    <!-- 允许通过 launch 参数覆盖速度限制 -->
-    <param name="max_linear" value="$(arg max_linear)"/>
-    <param name="max_angular" value="$(arg max_angular)"/>
   </node>
   
   <!-- ========== Dashboard 节点 (可选) ========== -->
@@ -93,9 +92,9 @@
     
     <node pkg="controller_ros" type="visualizer_node.py" name="turtlebot_visualizer" 
           output="screen">
-      <!-- 相机和标定配置 -->
-      <param name="topics/camera_image" value="$(arg camera_image)"/>
-      <param name="camera/calibration_file" value="$(arg calibration_file)"/>
+      <!-- 相机和标定配置 - 仅在用户显式指定时覆盖 -->
+      <param name="topics/camera_image" value="$(arg camera_image)" if="$(eval camera_image != '')"/>
+      <param name="camera/calibration_file" value="$(arg calibration_file)" if="$(eval calibration_file != '')"/>
       <!-- 
       TurtleBot1 运行可视化界面
       功能:

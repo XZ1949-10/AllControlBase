@@ -3,12 +3,6 @@
 
 提供 ILifecycleComponent 接口的完整实现，简化组件的生命周期管理。
 
-v3.19 重构说明：
----------------
-- LifecycleMixin 现在实现统一的 ILifecycleComponent 接口
-- 提供完整的状态跟踪、错误处理、线程安全保护
-- 子类只需实现 _do_xxx() 方法
-
 使用方法：
 ---------
 1. 继承 LifecycleMixin
@@ -44,16 +38,16 @@ import time
 import logging
 import threading
 
-from .interfaces import ILifecycle, LifecycleState
+from .interfaces import ILifecycleComponent, LifecycleState
 
 logger = logging.getLogger(__name__)
 
 
-class LifecycleMixin(ILifecycle):
+class LifecycleMixin(ILifecycleComponent):
     """
     生命周期管理 Mixin
     
-    提供 ILifecycle 接口的默认实现，包括：
+    提供 ILifecycleComponent 接口的默认实现，包括：
     - 状态跟踪 (lifecycle_state 属性)
     - 错误处理
     - 运行时间统计

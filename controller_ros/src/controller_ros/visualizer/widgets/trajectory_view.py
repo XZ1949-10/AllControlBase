@@ -4,7 +4,7 @@
 在相机图像或俯视图上显示轨迹和机器人位置。
 支持使用单应性变换将轨迹投影到相机图像上。
 """
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 import math
 import logging
 
@@ -19,6 +19,42 @@ from ..homography import HomographyTransform
 logger = logging.getLogger(__name__)
 
 
+# 默认颜色配置
+DEFAULT_COLORS = {
+    'trajectory': [0, 255, 0],    # 绿色 - 轨迹点
+    'robot': [255, 0, 0],         # 红色 - 机器人
+    'target': [255, 255, 0],      # 黄色 - 目标点
+    'background': [40, 40, 40],   # 深灰 - 背景
+    'grid': [60, 60, 60],         # 浅灰 - 网格
+    'text': [200, 200, 200],      # 浅灰 - 文字
+}
+
+
+def _to_qcolor(color_list: List[int]) -> QColor:
+    """
+    将 [R, G, B] 列表转换为 QColor
+    
+    Args:
+        color_list: RGB 颜色列表，每个分量应在 [0, 255] 范围内
+    
+    Returns:
+        QColor 对象，无效输入返回默认灰色并记录警告
+    """
+    if isinstance(color_list, (list, tuple)) and len(color_list) >= 3:
+        try:
+            # 转换为整数并限制在有效范围内
+            r = max(0, min(255, int(color_list[0])))
+            g = max(0, min(255, int(color_list[1])))
+            b = max(0, min(255, int(color_list[2])))
+            return QColor(r, g, b)
+        except (TypeError, ValueError) as e:
+            # 转换失败，记录警告并返回默认颜色
+            logger.warning(f"Invalid color value {color_list}: {e}, using default gray")
+    else:
+        logger.warning(f"Invalid color format {color_list}, expected [R, G, B] list, using default gray")
+    return QColor(128, 128, 128)  # 默认灰色
+
+
 class TrajectoryView(QWidget):
     """
     轨迹可视化视图
@@ -28,18 +64,23 @@ class TrajectoryView(QWidget):
     - 在图像/俯视图上绘制轨迹点
     - 显示机器人当前位置和朝向
     - 显示轨迹元信息
+    
+    颜色配置:
+    - 通过 display_config 参数传入，支持 trajectory_color, robot_color, target_color
+    - 未配置时使用默认颜色
     """
     
-    # 颜色定义
-    COLOR_TRAJECTORY = QColor(0, 255, 0)       # 绿色 - 轨迹点
-    COLOR_ROBOT = QColor(255, 0, 0)            # 红色 - 机器人
-    COLOR_TARGET = QColor(255, 255, 0)         # 黄色 - 目标点
-    COLOR_BACKGROUND = QColor(40, 40, 40)      # 深灰 - 背景
-    COLOR_GRID = QColor(60, 60, 60)            # 浅灰 - 网格
-    COLOR_TEXT = QColor(200, 200, 200)         # 浅灰 - 文字
-    
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, display_config: Dict[str, Any] = None):
         super().__init__(parent)
+        
+        # 从配置加载颜色
+        display_config = display_config or {}
+        self._color_trajectory = _to_qcolor(display_config.get('trajectory_color', DEFAULT_COLORS['trajectory']))
+        self._color_robot = _to_qcolor(display_config.get('robot_color', DEFAULT_COLORS['robot']))
+        self._color_target = _to_qcolor(display_config.get('target_color', DEFAULT_COLORS['target']))
+        self._color_background = _to_qcolor(DEFAULT_COLORS['background'])
+        self._color_grid = _to_qcolor(DEFAULT_COLORS['grid'])
+        self._color_text = _to_qcolor(DEFAULT_COLORS['text'])
         
         # 数据
         self._trajectory: Optional[TrajectoryData] = None
@@ -200,13 +241,13 @@ class TrajectoryView(QWidget):
     def _draw_grid_background(self, painter: QPainter):
         """绘制网格背景 (俯视图模式)"""
         # 背景
-        painter.fillRect(self.rect(), self.COLOR_BACKGROUND)
+        painter.fillRect(self.rect(), self._color_background)
         
         # 计算缩放
         self._scale = min(self.width(), self.height()) / (2 * self._view_range)
         
         # 网格
-        pen = QPen(self.COLOR_GRID)
+        pen = QPen(self._color_grid)
         pen.setWidth(1)
         painter.setPen(pen)
         
@@ -237,7 +278,7 @@ class TrajectoryView(QWidget):
         painter.drawLine(0, cy, self.width(), cy)   # X 轴
         
         # 轴标签
-        painter.setPen(self.COLOR_TEXT)
+        painter.setPen(self._color_text)
         font = QFont()
         font.setPointSize(10)
         painter.setFont(font)
@@ -282,7 +323,7 @@ class TrajectoryView(QWidget):
         points = self._trajectory.points
         
         # 绘制轨迹线
-        pen = QPen(self.COLOR_TRAJECTORY)
+        pen = QPen(self._color_trajectory)
         pen.setWidth(2)
         painter.setPen(pen)
         
@@ -296,12 +337,12 @@ class TrajectoryView(QWidget):
             sx, sy = self._world_to_screen(p.x, p.y)
             
             if i == 0:
-                # 第一个点 (目标点) - 黄色
-                painter.setBrush(QBrush(self.COLOR_TARGET))
+                # 第一个点 (目标点) - 使用配置的目标颜色
+                painter.setBrush(QBrush(self._color_target))
                 radius = 8
             else:
-                # 其他点 - 绿色
-                painter.setBrush(QBrush(self.COLOR_TRAJECTORY))
+                # 其他点 - 使用配置的轨迹颜色
+                painter.setBrush(QBrush(self._color_trajectory))
                 radius = 5
             
             painter.setPen(Qt.NoPen)
@@ -336,7 +377,7 @@ class TrajectoryView(QWidget):
                 projected_points.append(None)
         
         # 绘制轨迹线
-        pen = QPen(self.COLOR_TRAJECTORY)
+        pen = QPen(self._color_trajectory)
         pen.setWidth(3)
         painter.setPen(pen)
         
@@ -365,11 +406,11 @@ class TrajectoryView(QWidget):
             ratio = i / max(num_points - 1, 1)
             
             if i == 0:
-                # 第一个点 - 绿色大圆
-                color = self.COLOR_TRAJECTORY
+                # 第一个点 - 使用配置的轨迹颜色
+                color = self._color_trajectory
                 radius = 12
             elif i == num_points - 1:
-                # 最后一个点 - 蓝色
+                # 最后一个点 - 橙色
                 color = QColor(255, 100, 0)
                 radius = 10
             else:
@@ -401,7 +442,7 @@ class TrajectoryView(QWidget):
         robot_size = 20
         
         # 绘制机器人三角形 (指向前方)
-        painter.setBrush(QBrush(self.COLOR_ROBOT))
+        painter.setBrush(QBrush(self._color_robot))
         painter.setPen(Qt.NoPen)
         
         # 三角形顶点 (指向屏幕上方，即世界 X 正方向)

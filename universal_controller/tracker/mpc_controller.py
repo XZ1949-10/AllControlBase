@@ -46,7 +46,7 @@ class MPCController(ITrajectoryTracker):
         mpc_config = config.get('mpc', config)
         
         self.horizon = mpc_config.get('horizon', 20)
-        self.dt = mpc_config.get('dt', 0.02)
+        self.dt = mpc_config.get('dt', 0.1)  # 默认值与 mpc_config.py 一致
         
         constraints = config.get('constraints', platform_config.get('constraints', {}))
         self.v_max = constraints.get('v_max', 2.0)
@@ -55,6 +55,14 @@ class MPCController(ITrajectoryTracker):
         self.a_max = constraints.get('a_max', 1.5)
         self.vz_max = constraints.get('vz_max', 2.0)
         self.alpha_max = constraints.get('alpha_max', 3.0)  # 角加速度限制
+        
+        # 运行时约束验证：omega_max 必须为正值
+        # 零或负值会导致 MPC 约束设置错误和求解失败
+        if self.omega_max <= 0:
+            raise ValueError(
+                f"omega_max must be > 0, got {self.omega_max}. "
+                f"Check constraints.omega_max in config."
+            )
         
         self.output_frame = platform_config.get('output_frame', 'base_link')
         self.platform_type = platform_config.get('type', PlatformType.DIFFERENTIAL)
@@ -630,8 +638,7 @@ class MPCController(ITrajectoryTracker):
             try:
                 # 保存引用用于日志
                 solver_id = id(self._solver)
-                # 显式删除引用
-                del self._solver
+                # 显式设为 None（不使用 del，避免 None 时报错）
                 self._solver = None
                 logger.debug(f"Released solver reference (id={solver_id})")
             except Exception as e:
@@ -640,7 +647,6 @@ class MPCController(ITrajectoryTracker):
         
         if self._ocp is not None:
             try:
-                del self._ocp
                 self._ocp = None
             except Exception as e:
                 logger.warning(f"Error releasing OCP: {e}")

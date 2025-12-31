@@ -47,6 +47,19 @@ class PurePursuitController(ITrajectoryTracker):
         self.alpha_max = constraints.get('alpha_max', 3.0)
         self.vz_max = constraints.get('vz_max', 2.0)
         
+        # 运行时约束验证：omega_max 必须为正值
+        # 零或负值会导致机器人无法转向
+        if self.omega_max <= 0:
+            raise ValueError(
+                f"omega_max must be > 0, got {self.omega_max}. "
+                f"Check constraints.omega_max in config."
+            )
+        if self.omega_max_low <= 0:
+            raise ValueError(
+                f"omega_max_low must be > 0, got {self.omega_max_low}. "
+                f"Check constraints.omega_max_low in config."
+            )
+        
         self.vx_max = constraints.get('vx_max', self.v_max)
         self.vx_min = constraints.get('vx_min', -self.v_max)
         self.vy_max = constraints.get('vy_max', self.v_max)

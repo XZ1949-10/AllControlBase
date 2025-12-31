@@ -8,8 +8,12 @@ UC 数据类型: universal_controller.core.data_types.Trajectory
 - ROS: 0=MODE_TRACK, 1=MODE_STOP, 2=MODE_HOLD
 - UC:  0=MODE_TRACK, 1=MODE_STOP, 2=MODE_HOVER, 3=MODE_EMERGENCY
 - 注意: ROS 的 MODE_HOLD 对应 UC 的 MODE_HOVER (数值相同，语义相近)
+
+配置说明:
+- 配置参数统一从 universal_controller.config.trajectory_config.TRAJECTORY_CONFIG 读取
+- 通过 DataManager 传递配置，确保与 YAML 配置一致
 """
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Dict
 import logging
 import numpy as np
 
@@ -17,6 +21,7 @@ from universal_controller.core.data_types import (
     Trajectory as UcTrajectory, Header, Point3D
 )
 from universal_controller.core.enums import TrajectoryMode
+from universal_controller.config.trajectory_config import TRAJECTORY_CONFIG
 from .base import IMsgConverter
 
 logger = logging.getLogger(__name__)
@@ -30,20 +35,9 @@ logger = logging.getLogger(__name__)
 VELOCITY_DIMENSION = 4
 
 # ============================================================================
-# 默认配置值 (可通过配置覆盖)
+# 默认坐标系 (当 ROS 消息的 frame_id 为空时使用)
 # ============================================================================
-
-# 默认坐标系，当 ROS 消息的 frame_id 为空时使用
 DEFAULT_TRAJECTORY_FRAME_ID = 'base_link'
-
-# 轨迹验证默认配置
-DEFAULT_TRAJECTORY_CONFIG = {
-    'max_coord': 100.0,              # 最大合理坐标值 (米)
-    'velocity_decay_threshold': 0.1,  # 速度衰减填充阈值 (m/s)
-    'min_dt_sec': 0.001,             # 最小时间间隔 (秒)
-    'max_dt_sec': 10.0,              # 最大时间间隔 (秒)
-    'default_dt_sec': 0.1,           # 默认时间间隔 (秒)
-}
 
 
 class TrajectoryAdapter(IMsgConverter):
@@ -61,7 +55,7 @@ class TrajectoryAdapter(IMsgConverter):
     - 如果 ROS 消息的 frame_id 为空，使用默认值 'base_link'
     - 网络输出的轨迹通常在 base_link 坐标系下
     
-    配置参数 (通过 config 字典传入):
+    配置参数 (从 TRAJECTORY_CONFIG 读取，可通过 config 字典覆盖):
     - max_coord: 最大合理坐标值 (米)
     - velocity_decay_threshold: 速度衰减填充阈值 (m/s)
     - min_dt_sec: 最小时间间隔 (秒)
@@ -69,26 +63,41 @@ class TrajectoryAdapter(IMsgConverter):
     - default_dt_sec: 默认时间间隔 (秒)
     """
     
-    def __init__(self, config: dict = None):
+    def __init__(self, config: Dict[str, Any] = None):
         """
         初始化轨迹适配器
         
         Args:
-            config: 配置字典，可选。支持的配置项见 DEFAULT_TRAJECTORY_CONFIG
+            config: 配置字典，可选。会与 TRAJECTORY_CONFIG 合并，
+                   传入的配置优先级更高。
+                   
+        dt_sec 配置优先级:
+            1. config['trajectory']['default_dt_sec'] (如果显式配置)
+            2. config['mpc']['dt'] (自动继承，确保一致性)
+            3. TRAJECTORY_CONFIG['default_dt_sec'] (默认值)
         """
         super().__init__()
         
-        # 合并配置
-        self._config = DEFAULT_TRAJECTORY_CONFIG.copy()
+        # 从 TRAJECTORY_CONFIG 获取默认值，然后用传入的 config 覆盖
+        self._config = TRAJECTORY_CONFIG.copy()
         if config is not None:
-            self._config.update(config)
+            # 合并 trajectory 配置
+            traj_config = config.get('trajectory', {})
+            self._config.update(traj_config)
+            
+            # dt_sec 优先级: trajectory.default_dt_sec > mpc.dt > 默认值
+            # 如果 trajectory.default_dt_sec 未显式配置，则继承 mpc.dt
+            if 'default_dt_sec' not in traj_config and 'mpc' in config:
+                mpc_dt = config['mpc'].get('dt')
+                if mpc_dt is not None:
+                    self._config['default_dt_sec'] = mpc_dt
         
         # 缓存常用配置值
-        self._max_coord = self._config['max_coord']
-        self._velocity_decay_threshold = self._config['velocity_decay_threshold']
-        self._min_dt_sec = self._config['min_dt_sec']
-        self._max_dt_sec = self._config['max_dt_sec']
-        self._default_dt_sec = self._config['default_dt_sec']
+        self._max_coord = self._config.get('max_coord', 100.0)
+        self._velocity_decay_threshold = self._config.get('velocity_decay_threshold', 0.1)
+        self._min_dt_sec = self._config.get('min_dt_sec', 0.01)
+        self._max_dt_sec = self._config.get('max_dt_sec', 1.0)
+        self._default_dt_sec = self._config.get('default_dt_sec', 0.1)
     
     def _validate_dt_sec(self, dt_sec: float) -> float:
         """

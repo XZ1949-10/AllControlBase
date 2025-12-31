@@ -46,8 +46,9 @@ class SafetyPanel(QGroupBox):
         safety = self._config.get('safety', {})
         
         # 低速保护配置 - 从 constraints 读取
-        self._low_speed_thresh = constraints.get('v_low_thresh', CONSTRAINTS_CONFIG.get('v_low_thresh', 0.1))
-        self._low_speed_omega = constraints.get('omega_max_low', CONSTRAINTS_CONFIG.get('omega_max_low', 1.0))
+        # 注意: v_low_thresh 是控制器低速保护阈值，与 trajectory.low_speed_thresh (轨迹计算阈值) 不同
+        self._v_low_thresh = constraints.get('v_low_thresh', CONSTRAINTS_CONFIG.get('v_low_thresh', 0.1))
+        self._omega_max_low = constraints.get('omega_max_low', CONSTRAINTS_CONFIG.get('omega_max_low', 1.0))
         
         # 安全裕度配置 - 使用扁平参数
         self._vel_margin = safety.get('velocity_margin', SAFETY_CONFIG.get('velocity_margin', 1.1))
@@ -93,12 +94,12 @@ class SafetyPanel(QGroupBox):
         low_grid.setSpacing(3)
         
         low_grid.addWidget(QLabel('低速阈值:'), 0, 0)
-        self.low_thresh_label = QLabel(f'{self._low_speed_thresh} m/s')
+        self.low_thresh_label = QLabel(f'{self._v_low_thresh} m/s')
         self.low_thresh_label.setStyleSheet('color: #B0B0B0;')
         low_grid.addWidget(self.low_thresh_label, 0, 1)
         
         low_grid.addWidget(QLabel('低速角速度限制:'), 1, 0)
-        self.low_omega_label = QLabel(f'{self._low_speed_omega} rad/s')
+        self.low_omega_label = QLabel(f'{self._omega_max_low} rad/s')
         self.low_omega_label.setStyleSheet('color: #B0B0B0;')
         low_grid.addWidget(self.low_omega_label, 1, 1)
         
@@ -148,8 +149,8 @@ class SafetyPanel(QGroupBox):
     def _update_config_labels(self):
         """更新配置标签显示"""
         if hasattr(self, 'low_thresh_label'):
-            self.low_thresh_label.setText(f'{self._low_speed_thresh} m/s')
-            self.low_omega_label.setText(f'{self._low_speed_omega} rad/s')
+            self.low_thresh_label.setText(f'{self._v_low_thresh} m/s')
+            self.low_omega_label.setText(f'{self._omega_max_low} rad/s')
             self.vel_margin_label.setText(f'{self._vel_margin * 100:.0f}% ({self._vel_margin}x)')
             self.accel_margin_label.setText(f'{self._accel_margin * 100:.0f}% ({self._accel_margin}x)')
     

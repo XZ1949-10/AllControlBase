@@ -55,7 +55,7 @@ class PlatformConfig:
     ctrl_freq: int = 50
     mpc_horizon: int = 20
     mpc_horizon_degraded: int = 10
-    mpc_dt: float = 0.02
+    mpc_dt: float = 0.1  # 默认值与 mpc_config.py 一致
 
 
 @dataclass
@@ -83,7 +83,7 @@ class MPCHealthStatus:
     healthy: bool = True
     # 新增监控指标
     dt_mismatch: bool = False             # MPC dt 与控制周期不匹配
-    mpc_dt: float = 0.02                  # MPC 时间步长
+    mpc_dt: float = 0.1                   # MPC 时间步长 (默认值与 mpc_config.py 一致)
     control_period: float = 0.02          # 控制周期
     consecutive_good: int = 0             # 连续良好次数
 

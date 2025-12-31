@@ -102,7 +102,7 @@ class MockDashboardDataSource:
             ctrl_freq=self.config.get('system', {}).get('ctrl_freq', 50),
             mpc_horizon=self.config.get('mpc', {}).get('horizon', 20),
             mpc_horizon_degraded=self.config.get('mpc', {}).get('horizon_degraded', 10),
-            mpc_dt=self.config.get('mpc', {}).get('dt', 0.02),
+            mpc_dt=self.config.get('mpc', {}).get('dt', 0.1),  # 默认值与 mpc_config.py 一致
         )
         
         # 控制器状态

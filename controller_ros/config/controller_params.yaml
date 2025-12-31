@@ -1,107 +1,73 @@
 # controller_params.yaml
-# 控制器 ROS 节点参数配置 (ROS1 Noetic)
+# 控制器 ROS 节点基础配置 (ROS1 Noetic)
 #
-# 配置层次说明:
-# - 本文件定义 ROS 节点层面的配置 (话题、TF、诊断等)
-# - 控制器算法参数由 universal_controller 的 DEFAULT_CONFIG 提供默认值
-# - 本文件中的 system 配置会覆盖 DEFAULT_CONFIG 中的对应值
+# =============================================================================
+# 配置架构说明
+# =============================================================================
 #
-# 参数优先级: 本文件 > DEFAULT_CONFIG
+# 配置优先级 (从低到高):
+#   1. universal_controller/config/*.py  - 算法默认配置
+#   2. 本文件                             - ROS 层基础配置
+#   3. 平台特定配置 (如 turtlebot1.yaml) - 平台覆盖
+#   4. ROS 参数服务器                     - 运行时覆盖
 #
-# 注意: use_sim_time 由 launch 文件通过 <param name="/use_sim_time"> 设置
+# 本文件职责:
+#   - 定义 ROS 层特有配置 (话题、TF2 参数)
+#   - 提供通用的默认话题命名规范
+#   - 平台特定配置应在各自的 YAML 文件中定义
+#
+# 注意: 算法参数 (MPC、约束、安全等) 使用 DEFAULT_CONFIG 默认值
+#       无需在此重复定义
+#
 
 # =============================================================================
-# 系统配置 (映射到 universal_controller 的 system 配置)
-# =============================================================================
-system:
-  ctrl_freq: 50                   # 控制频率 (Hz)
-  platform: "differential"        # 平台类型: differential/omni/ackermann/quadrotor
-
-# =============================================================================
-# 话题配置
+# 话题配置 - ROS 层特有
 #
 # 命名规范:
 # - 输入话题: /controller/input/<name>
 # - 输出话题: /controller/<name>
-# - 空字符串 "" 表示禁用该话题的订阅
-#   例如: imu: "" 表示不订阅 IMU 话题 (适用于无 IMU 的平台)
+# - 空字符串 "" 表示禁用该话题
 # =============================================================================
 topics:
   # 输入话题
-  odom: "/controller/input/odom"              # 里程计输入
-  imu: ""                                     # IMU 输入 (可选，设为 "" 禁用)
-  trajectory: "/controller/input/trajectory"  # 轨迹输入
-  emergency_stop: "/controller/emergency_stop"  # 紧急停止话题 (std_msgs/Empty)
+  odom: "/controller/input/odom"
+  imu: ""                                     # 默认禁用，平台配置中启用
+  trajectory: "/controller/input/trajectory"
+  emergency_stop: "/controller/emergency_stop"
   
   # 输出话题
-  cmd_unified: "/controller/cmd"              # 统一控制命令输出
-  diagnostics: "/controller/diagnostics"      # 诊断信息输出
-  state: "/controller/state"                  # 控制器状态输出 (std_msgs/Int32)
-  debug_path: "/controller/debug_path"        # 调试路径输出 (nav_msgs/Path)
-  
-  # 姿态控制话题 (仅四旋翼平台)
-  attitude_cmd: "/controller/attitude_cmd"    # 姿态命令输出
+  cmd_unified: "/controller/cmd"
+  diagnostics: "/controller/diagnostics"
+  state: "/controller/state"
+  debug_path: "/controller/debug_path"
+  attitude_cmd: "/controller/attitude_cmd"    # 仅四旋翼平台
 
 # =============================================================================
-# TF 配置 (ROS TF2 特有参数)
-# 
-# 注意：坐标系名称（source_frame, target_frame）统一在 transform 配置中定义
+# 坐标变换配置 - ROS TF2 特有参数
+#
+# 算法层参数 (source_frame, target_frame, timeout_ms 等) 使用 DEFAULT_CONFIG
+# 本文件只定义 ROS TF2 扩展参数
+#
+# TF2 注入重试策略:
+# - 使用指数退避：初始间隔 -> 2x -> 4x -> ... -> 最大间隔
+# - 成功注入后重置退避状态
+# - max_retries = -1 表示无限重试
 # =============================================================================
-tf:
+transform:
   buffer_warmup_timeout_sec: 2.0  # TF buffer 预热超时 (秒)
   buffer_warmup_interval_sec: 0.1 # TF buffer 预热检查间隔 (秒)
-  retry_interval_sec: 1.0         # TF2 重试间隔 (秒)
+  retry_interval_sec: 1.0         # TF2 初始重试间隔 (秒)
+  max_retry_interval_sec: 30.0    # TF2 最大重试间隔 (秒)
+  backoff_multiplier: 2.0         # TF2 重试退避倍数
   max_retries: -1                 # TF2 最大重试次数 (-1 = 无限)
 
 # =============================================================================
-# 坐标变换配置
-# =============================================================================
-transform:
-  source_frame: "base_link"       # 源坐标系 (机体坐标系)
-  target_frame: "odom"            # 目标坐标系 (里程计坐标系)
-  timeout_ms: 10                  # TF 查询超时 (毫秒)
-
-# =============================================================================
-# 超时配置 (映射到 universal_controller 的 watchdog 配置)
+# 时钟配置 - 时钟跳变检测参数
 #
-# 注意: 超时阈值 <= 0 表示禁用该数据源的超时检测
-#       例如: imu_timeout_ms: -1 表示禁用 IMU 超时检测 (适用于无 IMU 的平台)
+# 用于检测仿真时间跳变或系统时钟异常。
+# 大多数场景使用默认值即可，仅在特殊需求时修改。
 # =============================================================================
-watchdog:
-  odom_timeout_ms: 200            # 里程计超时 (ms)，<=0 禁用
-  traj_timeout_ms: 500            # 轨迹超时 (ms)，<=0 禁用
-  traj_grace_ms: 100              # 轨迹超时宽限期 (ms)
-  imu_timeout_ms: 100             # IMU 超时 (ms)，<=0 禁用
-  startup_grace_ms: 1000          # 启动宽限期 (ms)
-
-# =============================================================================
-# 诊断配置
-# =============================================================================
-diagnostics:
-  publish_rate: 10                # 诊断发布降频率 (每 N 次控制循环发布一次)
-
-# =============================================================================
-# 轨迹验证配置 (映射到 universal_controller 的 trajectory 配置)
-# =============================================================================
-trajectory:
-  max_coord: 100.0                # 最大合理坐标值 (米)
-  velocity_decay_threshold: 0.1   # 速度衰减填充阈值 (m/s)
-  min_dt_sec: 0.001               # 最小时间间隔 (秒)
-  max_dt_sec: 10.0                # 最大时间间隔 (秒)
-
-# =============================================================================
-# MPC 配置 (映射到 universal_controller 的 mpc 配置)
-# =============================================================================
-mpc:
-  horizon: 20                     # MPC 预测时域
-  horizon_degraded: 10            # 降级模式预测时域
-  dt: 0.1                         # MPC 时间步长 (秒)
-
-# =============================================================================
-# 姿态控制配置 (仅四旋翼平台，映射到 universal_controller 的 attitude 配置)
-# =============================================================================
-attitude:
-  mass: 1.5                       # 质量 (kg)
-  roll_max: 0.5                   # 最大滚转角 (rad, ~30°)
-  pitch_max: 0.5                  # 最大俯仰角 (rad, ~30°)
-  hover_yaw_compensation: true    # 是否启用悬停 yaw 补偿
+clock:
+  jitter_tolerance: 0.001         # 时钟抖动容忍度 (秒)，小于此值的跳变被忽略
+  jump_threshold: 1.0             # 时钟大幅跳变阈值 (秒)，超过此值触发警告
+  max_events: 10                  # 最多保留的时钟跳变事件数

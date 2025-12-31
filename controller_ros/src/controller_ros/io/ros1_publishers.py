@@ -19,6 +19,12 @@ from universal_controller.core.data_types import ControlOutput, AttitudeCommand,
 from ..adapters import OutputAdapter, AttitudeAdapter
 from ..utils.diagnostics_publisher import fill_diagnostics_msg, DiagnosticsThrottler
 from ..utils.param_loader import TOPICS_DEFAULTS
+from ..utils.msg_availability import (
+    CUSTOM_MSGS_AVAILABLE,
+    UnifiedCmd,
+    DiagnosticsV2,
+    AttitudeCmd,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +69,7 @@ class ROS1PublisherManager:
         else:
             self._attitude_adapter = None
         
-        # 消息类型缓存 (在 _create_publishers 中设置)
-        self._DiagnosticsV2 = None
-        self._UnifiedCmd = None
-        self._AttitudeCmd = None
-        
-        # 创建发布器 (会设置消息类型缓存)
+        # 创建发布器
         self._create_publishers()
         
         # 诊断节流器
@@ -76,36 +77,29 @@ class ROS1PublisherManager:
     
     def _create_publishers(self):
         """创建所有发布器"""
-        # 尝试导入自定义消息
-        try:
-            from controller_ros.msg import UnifiedCmd, DiagnosticsV2
-            self._UnifiedCmd = UnifiedCmd
-            self._DiagnosticsV2 = DiagnosticsV2
-            # 预创建可复用的消息对象
+        # 预创建可复用的诊断消息对象
+        if CUSTOM_MSGS_AVAILABLE and DiagnosticsV2 is not None:
             self._reusable_diag_msg = DiagnosticsV2()
-        except ImportError:
-            self._UnifiedCmd = None
-            self._DiagnosticsV2 = None
+        else:
             self._reusable_diag_msg = None
-            rospy.logwarn("Custom messages (UnifiedCmd, DiagnosticsV2) not available")
         
         # 控制命令发布器
         cmd_topic = self._topics.get('cmd_unified', TOPICS_DEFAULTS['cmd_unified'])
-        if self._UnifiedCmd is not None:
-            self._cmd_pub = rospy.Publisher(cmd_topic, self._UnifiedCmd, queue_size=1)
+        if CUSTOM_MSGS_AVAILABLE and UnifiedCmd is not None:
+            self._cmd_pub = rospy.Publisher(cmd_topic, UnifiedCmd, queue_size=1)
             rospy.loginfo(f"Publishing cmd to: {cmd_topic}")
         else:
             self._cmd_pub = None
-            rospy.logerr(f"Cannot create command publisher: UnifiedCmd not available")
+            rospy.logerr("Cannot create command publisher: UnifiedCmd not available")
         
         # 诊断发布器
         diag_topic = self._topics.get('diagnostics', TOPICS_DEFAULTS['diagnostics'])
-        if self._DiagnosticsV2 is not None:
-            self._diag_pub = rospy.Publisher(diag_topic, self._DiagnosticsV2, queue_size=10)
+        if CUSTOM_MSGS_AVAILABLE and DiagnosticsV2 is not None:
+            self._diag_pub = rospy.Publisher(diag_topic, DiagnosticsV2, queue_size=10)
             rospy.loginfo(f"Publishing diagnostics to: {diag_topic}")
         else:
             self._diag_pub = None
-            rospy.logwarn(f"Cannot create diagnostics publisher: DiagnosticsV2 not available")
+            rospy.logwarn("Cannot create diagnostics publisher: DiagnosticsV2 not available")
         
         # 状态发布器 (标准消息，始终可用)
         state_topic = self._topics.get('state', TOPICS_DEFAULTS['state'])
@@ -120,12 +114,10 @@ class ROS1PublisherManager:
         # 姿态命令发布器 (四旋翼平台)
         if self._is_quadrotor:
             attitude_topic = self._topics.get('attitude_cmd', TOPICS_DEFAULTS['attitude_cmd'])
-            try:
-                from controller_ros.msg import AttitudeCmd
-                self._AttitudeCmd = AttitudeCmd
+            if CUSTOM_MSGS_AVAILABLE and AttitudeCmd is not None:
                 self._attitude_pub = rospy.Publisher(attitude_topic, AttitudeCmd, queue_size=1)
                 rospy.loginfo(f"Publishing attitude to: {attitude_topic}")
-            except ImportError:
+            else:
                 self._attitude_pub = None
                 rospy.logwarn("AttitudeCmd message not available")
         else:

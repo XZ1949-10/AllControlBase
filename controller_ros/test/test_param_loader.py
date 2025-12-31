@@ -17,50 +17,50 @@ class TestParamLoaderTypeConversion:
     
     def test_convert_int_to_float(self):
         """测试 int -> float 转换"""
-        from controller_ros.utils.param_loader import ParamLoader
+        from controller_ros.utils.param_utils import convert_param_type
         
         # YAML 可能将 0.0 解析为 int 0
-        result = ParamLoader._convert_type(0, 0.5)
+        result = convert_param_type(0, 0.5)
         assert isinstance(result, float)
         assert result == 0.0
     
     def test_convert_float_to_int(self):
         """测试 float -> int 转换"""
-        from controller_ros.utils.param_loader import ParamLoader
+        from controller_ros.utils.param_utils import convert_param_type
         
-        result = ParamLoader._convert_type(10.0, 5)
+        result = convert_param_type(10.0, 5)
         assert isinstance(result, int)
         assert result == 10
     
     def test_convert_bool_preserved(self):
         """测试 bool 类型保持"""
-        from controller_ros.utils.param_loader import ParamLoader
+        from controller_ros.utils.param_utils import convert_param_type
         
-        result = ParamLoader._convert_type(True, False)
+        result = convert_param_type(True, False)
         assert isinstance(result, bool)
         assert result is True
     
     def test_convert_string_preserved(self):
         """测试字符串类型保持"""
-        from controller_ros.utils.param_loader import ParamLoader
+        from controller_ros.utils.param_utils import convert_param_type
         
-        result = ParamLoader._convert_type("test", "default")
+        result = convert_param_type("test", "default")
         assert isinstance(result, str)
         assert result == "test"
     
     def test_convert_list_preserved(self):
         """测试列表类型保持"""
-        from controller_ros.utils.param_loader import ParamLoader
+        from controller_ros.utils.param_utils import convert_param_type
         
-        result = ParamLoader._convert_type([1, 2, 3], [])
+        result = convert_param_type([1, 2, 3], [])
         assert isinstance(result, list)
         assert result == [1, 2, 3]
     
     def test_convert_none_default(self):
         """测试 None 默认值"""
-        from controller_ros.utils.param_loader import ParamLoader
+        from controller_ros.utils.param_utils import convert_param_type
         
-        result = ParamLoader._convert_type("any_value", None)
+        result = convert_param_type("any_value", None)
         assert result == "any_value"
 
 
@@ -69,7 +69,7 @@ class TestParamLoaderRecursive:
     
     def test_load_nested_config(self):
         """测试嵌套配置加载"""
-        from controller_ros.utils.param_loader import ParamLoader, DefaultParamStrategy
+        from controller_ros.utils.param_utils import load_params_recursive, DefaultStrategy
         
         # 模拟配置结构
         config = {
@@ -82,10 +82,10 @@ class TestParamLoaderRecursive:
             }
         }
         
-        strategy = DefaultParamStrategy()
+        strategy = DefaultStrategy()
         
         # 递归加载（使用默认策略，不会改变值）
-        ParamLoader._load_recursive(config, '', strategy)
+        load_params_recursive(config, '', strategy)
         
         # 验证结构保持
         assert config['mpc']['horizon'] == 20
@@ -94,10 +94,10 @@ class TestParamLoaderRecursive:
     
     def test_load_with_mock_ros_params(self):
         """测试使用模拟 ROS 参数"""
-        from controller_ros.utils.param_loader import ParamLoader, ParamLoaderStrategy
+        from controller_ros.utils.param_utils import load_params_recursive, IParamStrategy
         
         # 创建模拟策略
-        class MockStrategy(ParamLoaderStrategy):
+        class MockStrategy(IParamStrategy):
             def __init__(self, params: Dict[str, Any]):
                 self._params = params
             
@@ -124,7 +124,7 @@ class TestParamLoaderRecursive:
         }
         
         strategy = MockStrategy(ros_params)
-        ParamLoader._load_recursive(config, '', strategy)
+        load_params_recursive(config, '', strategy)
         
         # 验证 ROS 参数覆盖了默认值
         assert config['mpc']['horizon'] == 15
@@ -134,26 +134,28 @@ class TestParamLoaderRecursive:
 
 
 class TestParamLoaderConfigSeparation:
-    """测试 tf 和 transform 配置分离"""
+    """测试 transform 配置统一"""
     
-    def test_tf_config_only_contains_ros_specific_params(self):
-        """测试 tf 配置仅包含 ROS TF2 特有参数"""
-        from controller_ros.utils.param_loader import TF_DEFAULTS
+    def test_transform_ros_defaults_contains_tf2_params(self):
+        """测试 TRANSFORM_ROS_DEFAULTS 包含 ROS TF2 特有参数"""
+        from controller_ros.utils.param_loader import TRANSFORM_ROS_DEFAULTS
         
-        # tf 配置应该只包含 ROS TF2 特有参数
+        # TRANSFORM_ROS_DEFAULTS 应该包含 ROS TF2 特有参数
         expected_keys = {
             'buffer_warmup_timeout_sec',
             'buffer_warmup_interval_sec',
             'retry_interval_sec',
+            'max_retry_interval_sec',
+            'backoff_multiplier',
             'max_retries',
         }
         
-        assert set(TF_DEFAULTS.keys()) == expected_keys
+        assert set(TRANSFORM_ROS_DEFAULTS.keys()) == expected_keys
         
-        # 坐标系名称不应该在 tf 配置中
-        assert 'source_frame' not in TF_DEFAULTS
-        assert 'target_frame' not in TF_DEFAULTS
-        assert 'timeout_ms' not in TF_DEFAULTS
+        # 坐标系名称不应该在 TRANSFORM_ROS_DEFAULTS 中（它们在 DEFAULT_CONFIG['transform'] 中）
+        assert 'source_frame' not in TRANSFORM_ROS_DEFAULTS
+        assert 'target_frame' not in TRANSFORM_ROS_DEFAULTS
+        assert 'timeout_ms' not in TRANSFORM_ROS_DEFAULTS
     
     def test_transform_config_contains_frame_names(self):
         """测试 transform 配置包含坐标系名称"""
@@ -208,36 +210,31 @@ class TestParamLoaderIntegration:
         assert 'solver' in config['mpc']
         assert 'fallback' in config['mpc']
     
-    def test_load_includes_tf_config(self):
-        """测试 load() 包含 TF 配置
+    def test_load_includes_transform_config_with_tf2_params(self):
+        """测试 load() 包含统一的 transform 配置
         
-        验证 TF 配置被正确加载到 config['tf'] 中，
+        验证 TF2 参数被正确加载到 config['transform'] 中，
         供 TF2InjectionManager 使用。
         
-        配置分层设计：
-        - tf: ROS TF2 特有参数（buffer 预热、重试等）
-        - transform: 坐标变换配置（坐标系名称 + 算法参数）
+        配置统一设计：
+        - transform: 包含坐标系名称 + 算法参数 + ROS TF2 特有参数
+        - tf: 已废弃，向后兼容时仍支持读取
         """
-        from controller_ros.utils.param_loader import ParamLoader, TF_DEFAULTS
+        from controller_ros.utils.param_loader import ParamLoader, TRANSFORM_ROS_DEFAULTS
         
         config = ParamLoader.load(None)
         
-        # 验证 tf 配置存在
-        assert 'tf' in config, "config should contain 'tf' key"
+        # 验证 transform 配置存在
+        assert 'transform' in config, "config should contain 'transform' key"
         
-        # 验证 tf 配置包含所有默认键（仅 ROS TF2 特有参数）
-        for key in TF_DEFAULTS.keys():
-            assert key in config['tf'], f"Missing tf key: {key}"
-        
-        # 验证 transform 配置存在且包含坐标系名称
-        assert 'transform' in config
+        # 验证 transform 配置包含坐标系名称
         assert 'source_frame' in config['transform']
         assert 'target_frame' in config['transform']
         assert 'timeout_ms' in config['transform']
         
-        # 验证 tf 配置不再包含坐标系名称（已移至 transform）
-        assert 'source_frame' not in config['tf']
-        assert 'target_frame' not in config['tf']
+        # 验证 transform 配置包含 ROS TF2 特有参数
+        for key in TRANSFORM_ROS_DEFAULTS.keys():
+            assert key in config['transform'], f"Missing transform key: {key}"
     
     def test_load_includes_diagnostics_publish_rate(self):
         """测试 load() 包含诊断发布率配置

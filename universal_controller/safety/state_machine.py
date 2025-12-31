@@ -363,7 +363,21 @@ class StateMachine:
     # ==================== 状态处理器 ====================
     
     def _handle_init(self, diag: DiagnosticsInput) -> Optional[ControllerState]:
-        """处理 INIT 状态"""
+        """处理 INIT 状态
+        
+        启动策略说明:
+        ===============
+        INIT 状态直接进入 NORMAL，而非 MPC_DEGRADED。
+        
+        设计原因:
+        1. 启动时 MPC 通常是健康的（刚初始化）
+        2. 如果 MPC 不健康，_handle_normal 会在第一帧检测并降级
+        3. 用户期望系统快速启动，不需要额外的观察期
+        
+        与 _handle_stopped 的区别:
+        - INIT: 系统刚启动，MPC 状态未知但通常健康
+        - STOPPED: 异常后恢复，MPC 可能不稳定，需要观察期
+        """
         if diag.has_valid_data:
             return ControllerState.NORMAL
         return None
@@ -472,7 +486,23 @@ class StateMachine:
         return None
     
     def _handle_stopped(self, diag: DiagnosticsInput) -> Optional[ControllerState]:
-        """处理 STOPPED 状态"""
+        """处理 STOPPED 状态
+        
+        恢复策略说明:
+        ===============
+        从 STOPPED 恢复时，始终先进入 MPC_DEGRADED 状态进行观察。
+        
+        设计原因:
+        1. STOPPED 状态下 MPC 不运行，没有历史数据可供判断稳定性
+        2. 直接进入 NORMAL 过于激进，MPC 可能不稳定
+        3. 先进入 MPC_DEGRADED 可以:
+           - 使用降级的 horizon 减少计算负担
+           - 积累 MPC 成功历史
+           - 通过 mpc_recovery_thresh 验证稳定性后再恢复到 NORMAL
+        
+        这与 _handle_backup_active 的恢复策略一致:
+        BACKUP_ACTIVE -> MPC_DEGRADED -> NORMAL/SOFT_DISABLED
+        """
         can_resume = (
             diag.has_valid_data and 
             not diag.odom_timeout and 
@@ -480,11 +510,9 @@ class StateMachine:
         )
         
         if can_resume:
-            mpc_is_healthy = diag.mpc_health is not None and diag.mpc_health.healthy
-            if mpc_is_healthy and not diag.safety_failed:
-                return ControllerState.NORMAL
-            else:
-                return ControllerState.MPC_DEGRADED
+            # 始终先进入 MPC_DEGRADED 进行观察
+            # 在 MPC_DEGRADED 中会通过 mpc_recovery_thresh 验证稳定性
+            return ControllerState.MPC_DEGRADED
         
         return None
     

@@ -73,7 +73,8 @@ TRANSFORM_CONFIG = {
     # - base_footprint: TurtleBot 等平台使用的机体坐标系
     # - base_link_0: 推理时刻冻结的机体坐标系 (同 base_link)
     # - '': 空字符串，使用默认 source_frame
-    # - odom: 已经在里程计坐标系的轨迹 (不需要变换，直接使用)
+    # - odom: 轨迹已在里程计坐标系中 (无需变换，直接使用)
+    #         适用于规划器直接输出全局坐标的场景
     'expected_source_frames': ['base_link', 'base_footprint', 'base_link_0', '', 'odom'],
     'warn_unexpected_frame': True,    # 对非期望坐标系发出警告
 }

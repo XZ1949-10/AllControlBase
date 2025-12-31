@@ -554,7 +554,7 @@ class ROSDashboardDataSource:
             ctrl_freq=self._config.get('system', {}).get('ctrl_freq', 50),
             mpc_horizon=self._config.get('mpc', {}).get('horizon', 20),
             mpc_horizon_degraded=self._config.get('mpc', {}).get('horizon_degraded', 10),
-            mpc_dt=self._config.get('mpc', {}).get('dt', 0.02),
+            mpc_dt=self._config.get('mpc', {}).get('dt', 0.1),  # 默认值与 mpc_config.py 一致
         )
 
     def _build_controller_status(self, diag: Dict) -> ControllerStatus:

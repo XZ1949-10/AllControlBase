@@ -226,10 +226,11 @@ class DiagnosticsPublisher:
             estimator_imu_available=state_output.imu_available if state_output else True,
             
             # 跟踪误差
+            # prediction_error 使用 NaN 表示"无数据"，与 DiagnosticsV2 默认值保持一致
             tracking_lateral_error=tracking_error.get('lateral_error', 0.0) if tracking_error else 0.0,
             tracking_longitudinal_error=tracking_error.get('longitudinal_error', 0.0) if tracking_error else 0.0,
             tracking_heading_error=tracking_error.get('heading_error', 0.0) if tracking_error else 0.0,
-            tracking_prediction_error=tracking_error.get('prediction_error', 0.0) if tracking_error else 0.0,
+            tracking_prediction_error=tracking_error.get('prediction_error', float('nan')) if tracking_error else float('nan'),
             
             # 跟踪质量
             tracking_quality_score=tracking_quality.get('overall_score', 0.0) if tracking_quality else 0.0,

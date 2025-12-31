@@ -165,14 +165,13 @@ class ControllerManager:
         
         # notify_xxx_received() 调用跟踪
         # 用于检测外部调用者是否正确调用了数据接收通知方法
-        self._last_odom_notify_time: Optional[float] = None
-        self._last_traj_notify_time: Optional[float] = None
-        self._notify_warning_logged: bool = False  # 检测完成标志
-        self._odom_notify_warned: bool = False  # odom notify 警告标志
-        self._traj_notify_warned: bool = False  # traj notify 警告标志
-        self._update_count_without_notify: int = 0  # 无 notify 的 update 调用计数
-        self._notify_update_count_thresh: int = config.get('watchdog', {}).get(
-            'notify_update_count_thresh', 50)  # 触发警告的 update 次数阈值
+        # 简化设计：只跟踪是否曾经调用过，不再使用复杂的计数机制
+        self._odom_notify_called: bool = False
+        self._traj_notify_called: bool = False
+        self._notify_check_done: bool = False  # 检测完成标志
+        self._update_count: int = 0  # update 调用计数
+        self._notify_check_threshold: int = config.get('watchdog', {}).get(
+            'notify_update_count_thresh', 50)  # 触发检查的 update 次数阈值
         
         # 诊断发布器（职责分离）
         # 注意: 话题名称配置在 ROS 层处理，核心库不再关心话题
@@ -239,7 +238,7 @@ class ControllerManager:
         这会更新超时监控器的时间戳。
         """
         self.timeout_monitor.update_odom()
-        self._last_odom_notify_time = get_monotonic_time()
+        self._odom_notify_called = True
     
     def notify_trajectory_received(self) -> None:
         """
@@ -249,7 +248,7 @@ class ControllerManager:
         这会更新超时监控器的时间戳。
         """
         self.timeout_monitor.update_trajectory()
-        self._last_traj_notify_time = get_monotonic_time()
+        self._traj_notify_called = True
     
     def notify_imu_received(self) -> None:
         """
@@ -312,11 +311,30 @@ class ControllerManager:
         
         此方法可以多次调用，用于在组件更新后重新绑定依赖。
         只有当所有依赖组件都存在时才会执行绑定。
+        
+        依赖关系:
+        - coord_transformer 依赖 state_estimator（用于 TF2 降级时的 odom 积分）
+        
+        设计说明:
+        - 绑定成功后不再重复绑定（幂等性）
+        - 如果 coord_transformer 存在但 state_estimator 未设置，发出警告
+        - 这是早期警告，帮助用户在 TF2 降级前发现配置问题
         """
         # coord_transformer 依赖 state_estimator
-        if self.coord_transformer is not None and self.state_estimator is not None:
-            self.coord_transformer.set_state_estimator(self.state_estimator)
-            logger.debug("Bound state_estimator to coord_transformer")
+        if self.coord_transformer is not None:
+            if self.state_estimator is not None:
+                # 检查是否已经绑定（避免重复绑定）
+                if self.coord_transformer.state_estimator is None:
+                    self.coord_transformer.set_state_estimator(self.state_estimator)
+                    logger.debug("Bound state_estimator to coord_transformer")
+            elif self.coord_transformer.state_estimator is None:
+                # 早期警告：coord_transformer 存在但 state_estimator 未设置
+                # 这意味着 TF2 降级时将无法使用 odom 积分进行变换估计
+                logger.warning(
+                    "coord_transformer is set but state_estimator is not. "
+                    "TF2 fallback will not work correctly without state_estimator. "
+                    "If TF2 may be unavailable, ensure state_estimator is initialized first."
+                )
     
     def initialize_default_components(self) -> None:
         """使用默认组件初始化"""
@@ -364,18 +382,28 @@ class ControllerManager:
         logger.info(f"Controller state changed: {old_state.name} -> {new_state.name}")
         
         # MPC horizon 动态调整
+        # 注意: set_horizon() 有节流机制，可能返回 False 表示未更新
+        # 只有当 set_horizon() 返回 True 时才更新 _current_horizon，确保状态一致
         if new_state == ControllerState.MPC_DEGRADED:
             if self._current_horizon != self.horizon_degraded:
-                self._current_horizon = self.horizon_degraded
                 if self.mpc_tracker:
-                    self.mpc_tracker.set_horizon(self.horizon_degraded)
-                logger.info(f"MPC horizon reduced to {self.horizon_degraded}")
+                    if self.mpc_tracker.set_horizon(self.horizon_degraded):
+                        self._current_horizon = self.horizon_degraded
+                        logger.info(f"MPC horizon reduced to {self.horizon_degraded}")
+                    else:
+                        logger.debug(f"MPC horizon change to {self.horizon_degraded} throttled")
+                else:
+                    self._current_horizon = self.horizon_degraded
         elif new_state == ControllerState.NORMAL and old_state == ControllerState.MPC_DEGRADED:
             if self._current_horizon != self.horizon_normal:
-                self._current_horizon = self.horizon_normal
                 if self.mpc_tracker:
-                    self.mpc_tracker.set_horizon(self.horizon_normal)
-                logger.info(f"MPC horizon restored to {self.horizon_normal}")
+                    if self.mpc_tracker.set_horizon(self.horizon_normal):
+                        self._current_horizon = self.horizon_normal
+                        logger.info(f"MPC horizon restored to {self.horizon_normal}")
+                    else:
+                        logger.debug(f"MPC horizon change to {self.horizon_normal} throttled")
+                else:
+                    self._current_horizon = self.horizon_normal
         
         # 平滑过渡
         if (old_state in [ControllerState.NORMAL, ControllerState.SOFT_DISABLED, ControllerState.MPC_DEGRADED] and
@@ -507,41 +535,26 @@ class ControllerManager:
             这里只调用 check() 检查超时状态。
         """
         # 检查 notify_xxx_received() 是否被正确调用
-        # 使用计数检测：连续多次 update 调用但未收到 notify 调用
-        current_time = get_monotonic_time()
-        
-        # 分别检测 odom 和 trajectory 的 notify 调用
-        # 每个 notify 独立跟踪，避免相互干扰
-        # 只在检测完成前累积计数，避免无意义的内存增长
-        if not self._notify_warning_logged:
-            self._update_count_without_notify += 1
-        
-        if self._update_count_without_notify >= self._notify_update_count_thresh:
-            # 检查 odom notify
-            if self._last_odom_notify_time is None and not self._odom_notify_warned:
-                logger.warning(
-                    "notify_odom_received() has not been called after %d update() calls. "
-                    "Timeout detection may not work correctly. "
-                    "Please ensure notify_odom_received() is called in your odom callback.",
-                    self._update_count_without_notify
-                )
-                self._odom_notify_warned = True
-            
-            # 检查 trajectory notify
-            if self._last_traj_notify_time is None and not self._traj_notify_warned:
-                logger.warning(
-                    "notify_trajectory_received() has not been called after %d update() calls. "
-                    "Timeout detection may not work correctly. "
-                    "Please ensure notify_trajectory_received() is called in your trajectory callback.",
-                    self._update_count_without_notify
-                )
-                self._traj_notify_warned = True
-            
-            # 两个都已警告或已调用，停止计数累积
-            odom_ok = self._last_odom_notify_time is not None or self._odom_notify_warned
-            traj_ok = self._last_traj_notify_time is not None or self._traj_notify_warned
-            if odom_ok and traj_ok:
-                self._notify_warning_logged = True
+        # 简化设计：只在达到阈值时检查一次，之后不再检查
+        if not self._notify_check_done:
+            self._update_count += 1
+            if self._update_count >= self._notify_check_threshold:
+                self._notify_check_done = True
+                # 检查并警告未调用的 notify 方法
+                if not self._odom_notify_called:
+                    logger.warning(
+                        "notify_odom_received() has not been called after %d update() calls. "
+                        "Timeout detection may not work correctly. "
+                        "Please ensure notify_odom_received() is called in your odom callback.",
+                        self._update_count
+                    )
+                if not self._traj_notify_called:
+                    logger.warning(
+                        "notify_trajectory_received() has not been called after %d update() calls. "
+                        "Timeout detection may not work correctly. "
+                        "Please ensure notify_trajectory_received() is called in your trajectory callback.",
+                        self._update_count
+                    )
         
         return self.timeout_monitor.check()
     
@@ -987,10 +1000,11 @@ class ControllerManager:
         self._last_mpc_health = None
         self._last_attitude_cmd = None
         self._last_update_time = None  # 重置时间跟踪
-        self._last_odom_notify_time = None  # 重置 notify 跟踪
-        self._last_traj_notify_time = None
-        self._notify_warning_logged = False
-        self._update_count_without_notify = 0  # 重置 notify 计数
+        # 重置 notify 跟踪状态
+        self._odom_notify_called = False
+        self._traj_notify_called = False
+        self._notify_check_done = False
+        self._update_count = 0
         self._current_horizon = self.horizon_normal
         self._last_mpc_predicted_state = None  # 重置预测状态
         if self.mpc_tracker:

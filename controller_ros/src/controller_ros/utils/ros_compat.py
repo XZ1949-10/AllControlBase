@@ -11,6 +11,8 @@ ROS 兼容层
 """
 import time
 import logging
+import threading
+from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -98,31 +100,8 @@ def get_time_sec(node=None) -> float:
                 return time.time()
         else:
             # ROS2 需要节点实例来获取时钟，回退到系统时间
-            # 这在某些场景下是预期行为（如单元测试），不记录警告
             return time.time()
     return time.time()
-
-
-# 保留旧函数名作为别名，保持向后兼容
-def get_current_time() -> float:
-    """
-    获取当前 ROS 时间（秒）
-    
-    .. deprecated:: 1.0.0
-        此函数已废弃，请使用 :func:`get_time_sec` 替代。
-        将在未来版本中移除。
-    
-    Returns:
-        当前时间（秒）
-    """
-    import warnings
-    warnings.warn(
-        "get_current_time() is deprecated, use get_time_sec() instead. "
-        "This function will be removed in a future version.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return get_time_sec(None)
 
 
 def get_monotonic_time() -> float:
@@ -266,102 +245,91 @@ def log_warn_throttle(period: float, msg: str):
     if ROS_VERSION == 1:
         import rospy
         rospy.logwarn_throttle(period, msg)
-    elif ROS_VERSION == 2:
-        # ROS2 简单节流实现
-        _log_throttle('warn', period, msg)
     else:
-        print(f"[WARN] {msg}")
+        _log_throttle('warn', period, msg)
 
 
-# 节流日志的状态存储 - 使用线程安全的实现
-import threading
-from collections import OrderedDict
+class _ThrottleState:
+    """节流日志状态管理（单例）"""
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    # 配置常量
+    MAX_CACHE_SIZE = 100
+    CACHE_EXPIRE_SEC = 300.0
+    CLEANUP_INTERVAL_SEC = 60.0
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._init()
+        return cls._instance
+    
+    def _init(self):
+        self._cache: OrderedDict = OrderedDict()
+        self._last_cleanup = 0.0
+    
+    def should_log(self, key: tuple, period: float) -> bool:
+        """检查是否应该记录日志"""
+        now = time.monotonic()
+        
+        with self._lock:
+            # 定期清理
+            if now - self._last_cleanup > self.CLEANUP_INTERVAL_SEC:
+                self._cleanup(now)
+                self._last_cleanup = now
+            
+            last_time = self._cache.get(key, 0)
+            if now - last_time >= period:
+                self._cache[key] = now
+                self._cache.move_to_end(key)
+                
+                # LRU 清理
+                while len(self._cache) > self.MAX_CACHE_SIZE:
+                    self._cache.popitem(last=False)
+                
+                return True
+            return False
+    
+    def _cleanup(self, now: float):
+        """清理过期条目"""
+        expired = [k for k, t in self._cache.items() 
+                   if now - t > self.CACHE_EXPIRE_SEC]
+        for k in expired:
+            del self._cache[k]
 
-_throttle_lock = threading.Lock()
-_throttle_last_time: OrderedDict = OrderedDict()
-_THROTTLE_CACHE_MAX_SIZE = 100  # 最大缓存条目数
-_THROTTLE_CACHE_EXPIRE_SEC = 300.0  # 缓存条目过期时间（秒）
-_throttle_last_cleanup = 0.0  # 上次清理时间
-_THROTTLE_CLEANUP_INTERVAL = 60.0  # 清理间隔（秒）
+
+_throttle_state = _ThrottleState()
 
 
 def _log_throttle(level: str, period: float, msg: str):
     """
-    简单的节流日志实现（线程安全）
+    节流日志实现（线程安全）
     
-    使用 OrderedDict 实现 LRU 缓存，自动清理最旧的条目。
-    定期清理过期条目，避免长时间运行时内存泄漏。
-    
-    注意:
-    - 此函数主要用于非 ROS 环境的回退方案
-    - ROS1 节点应使用 rospy.logwarn_throttle
-    - ROS2 节点应使用 logger.warn(..., throttle_duration_sec=...)
+    使用单例 _ThrottleState 管理缓存状态。
     
     Args:
         level: 日志级别 ('info', 'warn', 'error')
         period: 节流周期（秒）
         msg: 日志消息
     """
-    import time
-    global _throttle_last_cleanup
-    
-    # 使用 (level, msg) 元组作为键，避免哈希碰撞
-    # 对于长消息，使用哈希以节省内存
+    # 生成缓存键
     if len(msg) > 200:
         import hashlib
         key = (level, hashlib.sha256(msg.encode()).hexdigest())
     else:
         key = (level, msg)
     
-    now = time.monotonic()
-    
-    should_log = False
-    
-    with _throttle_lock:
-        # 定期清理过期条目
-        if now - _throttle_last_cleanup > _THROTTLE_CLEANUP_INTERVAL:
-            _cleanup_expired_entries(now)
-            _throttle_last_cleanup = now
-        
-        last_time = _throttle_last_time.get(key, 0)
-        if now - last_time >= period:
-            # 更新时间戳并移动到末尾（最近使用）
-            _throttle_last_time[key] = now
-            _throttle_last_time.move_to_end(key)
-            
-            # LRU 缓存清理：当缓存过大时，删除最旧的条目
-            while len(_throttle_last_time) > _THROTTLE_CACHE_MAX_SIZE:
-                _throttle_last_time.popitem(last=False)  # 删除最旧的（第一个）
-            
-            should_log = True
-    
-    # 在锁外执行日志操作，避免持锁时间过长
-    if should_log:
+    if _throttle_state.should_log(key, period):
         if level == 'info':
             logger.info(msg)
         elif level == 'warn':
             logger.warning(msg)
         elif level == 'error':
             logger.error(msg)
-
-
-def _cleanup_expired_entries(now: float) -> None:
-    """
-    清理过期的节流缓存条目
-    
-    Args:
-        now: 当前时间（单调时钟）
-    
-    Note:
-        此函数应在持有 _throttle_lock 的情况下调用
-    """
-    expired_keys = []
-    for key, last_time in _throttle_last_time.items():
-        if now - last_time > _THROTTLE_CACHE_EXPIRE_SEC:
-            expired_keys.append(key)
-    
-    for key in expired_keys:
-        del _throttle_last_time[key]
 
 
 # ============================================================================

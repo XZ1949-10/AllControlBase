@@ -25,12 +25,17 @@ SYSTEM_CONFIG = {
 # - 如果配置了正数超时但数据源不存在，系统会立即报告超时
 # - 对于可选的数据源（如 IMU），如果硬件不存在，应配置为 -1 禁用
 # - 安全停止延迟 = traj_timeout_ms + traj_grace_ms
+# - IMU 默认禁用 (-1)，因为大多数地面平台没有 IMU，有 IMU 的平台需显式启用
+# - absolute_startup_timeout_ms: 从创建监控器开始的绝对超时，
+#   如果超过此时间仍未收到任何数据，将报告超时。设为 <= 0 表示禁用。
+#   默认值 -1 表示禁用（向后兼容），如需启用建议设为 startup_grace_ms * 2
 WATCHDOG_CONFIG = {
     'odom_timeout_ms': 500,       # 里程计超时 (ms)，<=0 禁用
     'traj_timeout_ms': 1000,      # 轨迹超时 (ms)，<=0 禁用
     'traj_grace_ms': 500,         # 轨迹宽限期 (ms)
-    'imu_timeout_ms': -1,         # IMU 超时 (ms)，<=0 禁用 (无 IMU 时设为 -1)
+    'imu_timeout_ms': -1,         # IMU 超时 (ms)，<=0 禁用 (默认禁用)
     'startup_grace_ms': 5000,     # 启动宽限期 (ms)，期间不检测超时
+    'absolute_startup_timeout_ms': -1,  # 绝对启动超时 (ms)，<=0 禁用
 }
 
 # 诊断配置
@@ -38,6 +43,10 @@ WATCHDOG_CONFIG = {
 # 在 controller_ros/config/ 中定义，不在核心库中定义
 DIAGNOSTICS_CONFIG = {
     'publish_rate': 10,                  # 诊断发布降频率 (每 N 次控制循环发布一次)
+    # 错误处理配置
+    'max_consecutive_errors_detail': 10, # 详细记录错误的最大次数
+    'error_summary_interval': 50,        # 摘要日志间隔（每 N 次错误记录一次）
+    'max_error_count': 1000,             # 错误计数上限（防止整数溢出）
 }
 
 # =============================================================================
@@ -76,6 +85,7 @@ SYSTEM_VALIDATION_RULES = {
     'watchdog.odom_timeout_ms': (None, 10000, '里程计超时 (ms)，<=0 禁用'),
     'watchdog.traj_timeout_ms': (None, 10000, '轨迹超时 (ms)，<=0 禁用'),
     'watchdog.imu_timeout_ms': (None, 10000, 'IMU 超时 (ms)，<=0 禁用'),
+    'watchdog.absolute_startup_timeout_ms': (None, 60000, '绝对启动超时 (ms)，<=0 禁用'),
     'diagnostics.publish_rate': (1, 100, '诊断发布降频率'),
     # 跟踪质量评估配置验证
     'tracking.lateral_thresh': (0.01, 10.0, '横向误差阈值 (m)'),

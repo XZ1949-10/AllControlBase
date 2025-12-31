@@ -72,7 +72,12 @@ class TrajectoryDefaults:
         从配置字典更新默认值
         
         Args:
-            config: 配置字典，应包含 'trajectory' 和 'transform' 键
+            config: 配置字典，应包含 'trajectory', 'transform', 'mpc' 键
+        
+        dt_sec 配置优先级:
+            1. trajectory.default_dt_sec (如果显式配置)
+            2. mpc.dt (自动继承，确保一致性)
+            3. 默认值 0.1
         
         Example:
             >>> from universal_controller.config import DEFAULT_CONFIG
@@ -80,10 +85,15 @@ class TrajectoryDefaults:
         """
         traj_config = config.get('trajectory', {})
         transform_config = config.get('transform', {})
+        mpc_config = config.get('mpc', {})
         
-        # 基本参数
+        # dt_sec 配置: 优先使用 trajectory.default_dt_sec，否则继承 mpc.dt
+        # 这确保了两者的一致性，用户只需配置 mpc.dt
         if 'default_dt_sec' in traj_config:
             cls.dt_sec = traj_config['default_dt_sec']
+        elif 'dt' in mpc_config:
+            cls.dt_sec = mpc_config['dt']
+        
         if 'low_speed_thresh' in traj_config:
             cls.low_speed_thresh = traj_config['low_speed_thresh']
         if 'default_confidence' in traj_config:
@@ -271,18 +281,31 @@ class Trajectory:
         return len(self.points)
     
     def _compute_cache_key(self) -> tuple:
-        """计算缓存键，用于检测 points 或 dt_sec 是否变化"""
-        # 使用 points 的长度和首尾点坐标作为快速检测
-        # 这是一个权衡：完整比较所有点太慢，但只比较长度可能漏检
-        # 首尾点 + 长度 + dt_sec 的组合在实际使用中足够可靠
-        if len(self.points) == 0:
+        """
+        计算缓存键，用于检测 points 或 dt_sec 是否变化
+        
+        使用首尾点 + 中间采样点 + 长度 + dt_sec 的组合进行检测。
+        这是性能和可靠性的权衡：
+        - 完整比较所有点 O(n) 太慢
+        - 只比较首尾点可能漏检中间点变化
+        - 采样中间点可以在 O(1) 时间内提高检测可靠性
+        """
+        n = len(self.points)
+        if n == 0:
             return (0, self.dt_sec)
-        elif len(self.points) == 1:
+        elif n == 1:
             p = self.points[0]
             return (1, p.x, p.y, p.z, self.dt_sec)
+        elif n == 2:
+            p0, p1 = self.points[0], self.points[1]
+            return (2, p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, self.dt_sec)
         else:
-            p0, p_last = self.points[0], self.points[-1]
-            return (len(self.points), p0.x, p0.y, p0.z, p_last.x, p_last.y, p_last.z, self.dt_sec)
+            # 采样首、中、尾三个点，提高中间点变化的检测率
+            p0 = self.points[0]
+            p_mid = self.points[n // 2]
+            p_last = self.points[-1]
+            return (n, p0.x, p0.y, p0.z, p_mid.x, p_mid.y, p_mid.z, 
+                    p_last.x, p_last.y, p_last.z, self.dt_sec)
     
     def copy(self) -> 'Trajectory':
         """

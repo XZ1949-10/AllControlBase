@@ -43,11 +43,9 @@ class TimeoutMonitor:
         self.startup_grace_ms = watchdog_config.get('startup_grace_ms', 5000)
         
         # 绝对启动超时：从创建监控器开始，如果超过此时间仍未收到任何数据，报告超时
-        # 默认为 startup_grace_ms * 2，设为 <= 0 表示禁用
-        self.absolute_startup_timeout_ms = watchdog_config.get(
-            'absolute_startup_timeout_ms', 
-            self.startup_grace_ms * 2 if self.startup_grace_ms > 0 else -1
-        )
+        # 默认 -1 表示禁用（与 WATCHDOG_CONFIG 一致）
+        # 如需启用，建议设为 startup_grace_ms * 2
+        self.absolute_startup_timeout_ms = watchdog_config.get('absolute_startup_timeout_ms', -1)
         
         # 记录监控器创建时间，用于绝对启动超时检测
         self._creation_time: float = get_monotonic_time()

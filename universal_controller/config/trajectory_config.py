@@ -5,6 +5,7 @@
 - 轨迹点数限制
 - 速度计算阈值
 - 轨迹验证参数
+- 轨迹适配器参数 (ROS 消息转换)
 
 坐标系配置说明:
 ===============
@@ -36,6 +37,12 @@ TRAJECTORY_CONFIG = {
     
     # 轨迹验证参数
     'max_point_distance': 10.0,       # 相邻点最大距离 (m)
+    'max_coord': 100.0,               # 最大合理坐标值 (米)，超出视为无效
+    
+    # 速度填充参数 (轨迹适配器使用)
+    'velocity_decay_threshold': 0.1,  # 速度衰减填充阈值 (m/s)
+                                      # 当速度点数少于位置点数时，如果最后速度大于此阈值，
+                                      # 使用线性衰减填充；否则使用零填充
     
     # 置信度参数
     'min_confidence': 0.0,            # 最小置信度 (用于 clip)
@@ -52,6 +59,8 @@ TRAJECTORY_VALIDATION_RULES = {
     'trajectory.min_points': (1, 100, '最小轨迹点数'),
     'trajectory.max_points': (2, 1000, '最大轨迹点数'),
     'trajectory.max_point_distance': (0.1, 100.0, '相邻点最大距离 (m)'),
+    'trajectory.max_coord': (1.0, 10000.0, '最大合理坐标值 (米)'),
+    'trajectory.velocity_decay_threshold': (0.0, 10.0, '速度衰减填充阈值 (m/s)'),
     'trajectory.min_confidence': (0.0, 1.0, '最小置信度'),
     'trajectory.max_confidence': (0.0, 1.0, '最大置信度'),
     'trajectory.default_confidence': (0.0, 1.0, '默认置信度'),

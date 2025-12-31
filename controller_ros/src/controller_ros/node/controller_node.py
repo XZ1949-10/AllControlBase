@@ -287,7 +287,8 @@ class ControllerNode(ControllerNodeBase, Node):
         6. 调用基类清理
         """
         # 1. 设置关闭标志 (基类会设置，但这里提前设置以阻止回调)
-        self._shutting_down = True
+        # 使用 Event.set() 确保线程安全
+        self._shutting_down.set()
         
         # 2. 取消控制定时器
         if hasattr(self, '_control_timer') and self._control_timer is not None:

@@ -1,0 +1,183 @@
+{
+  "timestamp": "2025-12-31T09:35:35.422364",
+  "sample_count": 500,
+  "summary": {
+    "total_samples": 500,
+    "platform": "differential",
+    "ctrl_freq": 20,
+    "mpc": {
+      "avg_solve_time_ms": 12.9,
+      "max_solve_time_ms": 17.79,
+      "p95_solve_time_ms": 15.67,
+      "success_rate": 89.0,
+      "backup_rate": 0.0,
+      "degradation_warning_count": 19,
+      "avg_kkt_residual": 0.00010082225092669597,
+      "max_kkt_residual": 0.0006381212055582757,
+      "avg_condition_number": 99920.62354298135,
+      "max_condition_number": 714006.4385260752
+    },
+    "tracking": {
+      "lateral": {
+        "avg_cm": 5.03,
+        "max_cm": 8.6,
+        "p95_cm": 7.95
+      },
+      "longitudinal": {
+        "avg_cm": 10.67,
+        "max_cm": 16.31,
+        "p95_cm": 15.31
+      },
+      "heading": {
+        "avg_deg": 2.94,
+        "max_deg": 4.85
+      },
+      "prediction": {
+        "avg_cm": 2.9,
+        "max_cm": 5.69
+      },
+      "quality": {
+        "avg_score": 76.7,
+        "min_score": 65.4,
+        "rating_distribution": {
+          "good": 84.8,
+          "fair": 15.2
+        }
+      }
+    },
+    "timeout": {
+      "odom_timeout_count": 12,
+      "traj_timeout_count": 35,
+      "traj_grace_exceeded_count": 3,
+      "imu_timeout_count": 5,
+      "startup_grace_samples": 10,
+      "avg_odom_age_ms": 49.1,
+      "max_odom_age_ms": 158.6,
+      "p95_odom_age_ms": 90.9,
+      "avg_traj_age_ms": 210.2,
+      "max_traj_age_ms": 470.5,
+      "p95_traj_age_ms": 345.7
+    },
+    "control": {
+      "avg_vx": 0.268,
+      "max_vx": 0.387,
+      "avg_omega": 0.133,
+      "max_omega": 0.313
+    },
+    "state_machine": {
+      "state_distribution": {
+        "1": 492,
+        "3": 8
+      },
+      "normal_rate": 98.4,
+      "backup_active_rate": 0.0,
+      "soft_disabled_rate": 0.0,
+      "mpc_degraded_rate": 1.6,
+      "stopping_rate": 0.0,
+      "stopped_rate": 0.0
+    },
+    "consistency": {
+      "avg_alpha": 0.593,
+      "min_alpha": 0.192,
+      "data_valid_rate": 98.2,
+      "avg_curvature_score": 0.696,
+      "avg_velocity_dir_score": 0.797,
+      "avg_temporal_score": 0.702
+    },
+    "estimator": {
+      "avg_covariance_norm": 0.1,
+      "max_covariance_norm": 0.64,
+      "avg_innovation_norm": 0.05,
+      "max_innovation_norm": 0.32,
+      "avg_slip_probability": 0.095,
+      "high_slip_rate": 0.2,
+      "imu_drift_detected_count": 8,
+      "imu_available_rate": 100.0
+    },
+    "transform": {
+      "tf2_fallback_count": 18,
+      "tf2_fallback_rate": 3.6,
+      "tf2_available_rate": 100.0,
+      "avg_fallback_duration_ms": 45.4,
+      "max_fallback_duration_ms": 120.0,
+      "max_accumulated_drift_m": 0.0854,
+      "source_frames": [
+        "base_link"
+      ],
+      "target_frames": [
+        "odom"
+      ],
+      "error_count": 8,
+      "error_rate": 1.6
+    },
+    "safety": {
+      "safety_check_failed_count": 12,
+      "emergency_stop_count": 2,
+      "consecutive_errors_max": 4,
+      "safety_check_failed_rate": 2.4,
+      "emergency_stop_rate": 0.4
+    }
+  },
+  "results": [
+    {
+      "category": "timeout",
+      "severity": "critical",
+      "parameter": "watchdog.traj_grace_ms",
+      "current_value": 600,
+      "suggested_value": 900,
+      "reason": "轨迹宽限期超时(0.6%)，可能导致安全停止。",
+      "confidence": 0.9,
+      "tuning_category": "tunable"
+    },
+    {
+      "category": "timeout",
+      "severity": "info",
+      "parameter": "watchdog.imu_timeout_ms",
+      "current_value": -1,
+      "suggested_value": 48,
+      "reason": "IMU可用但超时检测被禁用，建议启用。",
+      "confidence": 0.5,
+      "tuning_category": "tunable"
+    },
+    {
+      "category": "transform",
+      "severity": "info",
+      "parameter": "transform.source_frame",
+      "current_value": "base_footprint",
+      "suggested_value": "base_link",
+      "reason": "实际源坐标系(base_link)与配置(base_footprint)不一致。",
+      "confidence": 0.9,
+      "tuning_category": "diagnostic"
+    },
+    {
+      "category": "transform",
+      "severity": "info",
+      "parameter": "transform.error_analysis",
+      "current_value": "1.6% 错误率",
+      "suggested_value": "检查 TF2 配置",
+      "reason": "坐标变换错误率 1.6%，最常见错误: TF2 temporarily unavailable",
+      "confidence": 0.9,
+      "tuning_category": "diagnostic"
+    },
+    {
+      "category": "safety_status",
+      "severity": "info",
+      "parameter": "safety.emergency_decel",
+      "current_value": 1.0,
+      "suggested_value": null,
+      "reason": "[诊断信息] 紧急停止发生2次(0.4%)。紧急减速度是安全参数，不建议自动调整。",
+      "confidence": 0.0,
+      "tuning_category": "safety"
+    },
+    {
+      "category": "safety_status",
+      "severity": "info",
+      "parameter": "safety.check",
+      "current_value": "失败率 2.4%",
+      "suggested_value": null,
+      "reason": "[诊断信息] 安全检查失败12次(2.4%)。建议检查约束配置是否合理。",
+      "confidence": 0.0,
+      "tuning_category": "safety"
+    }
+  ]
+}

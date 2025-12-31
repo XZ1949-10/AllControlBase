@@ -73,6 +73,8 @@ class MockControllerNode:
             'trajectory': '/nn/local_trajectory',
         }
         self.node._initialize()
+        # 在测试中，假设轨迹消息类型可用
+        self.node._traj_msg_available = True
     
     def set_time(self, t: float):
         """设置当前时间"""
@@ -86,9 +88,9 @@ class MockControllerNode:
     
     def update_trajectory(self, traj):
         """更新轨迹数据"""
-        # 使用 DataManager 内部的键名 'traj'
-        self.node._data_manager._latest_data['traj'] = traj
-        self.node._data_manager._timestamps['traj'] = self.node._current_time
+        # 使用 DataManager 内部的键名 'trajectory'
+        self.node._data_manager._latest_data['trajectory'] = traj
+        self.node._data_manager._timestamps['trajectory'] = self.node._current_time
 
 
 def test_base_node_initialization():
@@ -362,15 +364,12 @@ def test_tf2_injection_blocking_timeout():
     mock = MockControllerNode()
     # 使用较短的超时时间进行测试
     params = DEFAULT_CONFIG.copy()
-    # tf 配置：ROS TF2 特有参数
-    params['tf'] = {
-        'buffer_warmup_timeout_sec': 0.2,  # 200ms 超时
-        'buffer_warmup_interval_sec': 0.05,  # 50ms 间隔
-    }
-    # transform 配置：坐标系名称
+    # transform 配置：统一包含坐标系名称和 ROS TF2 特有参数
     params['transform'] = params.get('transform', {}).copy()
     params['transform']['source_frame'] = 'base_link'
     params['transform']['target_frame'] = 'odom'
+    params['transform']['buffer_warmup_timeout_sec'] = 0.2  # 200ms 超时
+    params['transform']['buffer_warmup_interval_sec'] = 0.05  # 50ms 间隔
     mock.initialize(params)
     
     # 设置 TF bridge - can_transform 始终返回 False
@@ -580,15 +579,16 @@ def test_reset_clears_tf2_retry_state():
 #
 # 这些测试验证 _shutting_down 标志在 ROS1/ROS2 节点中的统一实现。
 # 该标志防止在关闭过程中继续发布消息到已关闭的话题。
+# 注意：_shutting_down 现在是 threading.Event 类型，使用 .is_set() 和 .set() 方法
 #
 
 
 def test_shutting_down_flag_initialized():
-    """测试 _shutting_down 标志在初始化时为 False"""
+    """测试 _shutting_down 标志在初始化时为 False (未设置)"""
     mock = MockControllerNode()
     
-    # 基类初始化后，_shutting_down 应该为 False
-    assert mock.node._shutting_down == False
+    # 基类初始化后，_shutting_down 应该是未设置状态
+    assert mock.node._shutting_down.is_set() == False
 
 
 def test_shutting_down_flag_set_on_shutdown():
@@ -597,13 +597,13 @@ def test_shutting_down_flag_set_on_shutdown():
     mock.initialize()
     
     # 关闭前
-    assert mock.node._shutting_down == False
+    assert mock.node._shutting_down.is_set() == False
     
     # 调用 shutdown
     mock.node.shutdown()
     
     # 关闭后
-    assert mock.node._shutting_down == True
+    assert mock.node._shutting_down.is_set() == True
 
 
 def test_control_loop_skips_when_shutting_down():
@@ -621,8 +621,8 @@ def test_control_loop_skips_when_shutting_down():
     result = mock.node._control_loop_core()
     assert result is not None
     
-    # 设置关闭标志
-    mock.node._shutting_down = True
+    # 设置关闭标志 (使用 Event.set())
+    mock.node._shutting_down.set()
     
     # 关闭时应该返回 None，不执行任何控制
     result = mock.node._control_loop_core()
@@ -672,7 +672,7 @@ def test_shutdown_idempotent():
     mock.node.shutdown()
     mock.node.shutdown()
     
-    assert mock.node._shutting_down == True
+    assert mock.node._shutting_down.is_set() == True
 
 
 def test_shutting_down_checked_before_emergency_stop():
@@ -696,8 +696,8 @@ def test_shutting_down_checked_before_emergency_stop():
     # 重置计数
     initial_stop_count = mock.node._stop_cmd_count
     
-    # 设置关闭标志
-    mock.node._shutting_down = True
+    # 设置关闭标志 (使用 Event.set())
+    mock.node._shutting_down.set()
     
     # 关闭时，即使有紧急停止也不应该发布
     mock.node._control_loop_core()

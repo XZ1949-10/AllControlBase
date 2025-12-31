@@ -20,13 +20,32 @@ def test_controller_bridge_initialization():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
     
-    assert bridge.is_running  # 使用新 API
+    # 测试工厂方法
+    bridge = ControllerBridge.create(config)
+    assert bridge is not None
+    assert bridge.is_running
     assert bridge.get_state() == ControllerState.INIT
     
     bridge.shutdown()
-    assert not bridge.is_running  # 使用新 API
+    assert not bridge.is_running
+
+
+def test_controller_bridge_explicit_init():
+    """测试显式初始化方式"""
+    from controller_ros.bridge.controller_bridge import ControllerBridge
+    
+    config = DEFAULT_CONFIG.copy()
+    bridge = ControllerBridge(config)
+    
+    # 构造后未初始化
+    assert not bridge.is_running
+    
+    # 显式初始化
+    assert bridge.initialize()
+    assert bridge.is_running
+    
+    bridge.shutdown()
 
 
 def test_controller_bridge_update():
@@ -34,7 +53,7 @@ def test_controller_bridge_update():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     odom = create_test_odom(vx=1.0)
     trajectory = create_test_trajectory()
@@ -53,7 +72,7 @@ def test_controller_bridge_reset():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     # 运行几次更新
     odom = create_test_odom(vx=1.0)
@@ -74,7 +93,7 @@ def test_controller_bridge_diagnostics():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     odom = create_test_odom(vx=1.0)
     trajectory = create_test_trajectory()
@@ -92,7 +111,7 @@ def test_controller_bridge_diagnostics_callback():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     callback_data = []
     
@@ -123,7 +142,8 @@ def test_controller_bridge_platform_types():
         config['system'] = DEFAULT_CONFIG['system'].copy()
         config['system']['platform'] = platform
         
-        bridge = ControllerBridge(config)
+        bridge = ControllerBridge.create(config)
+        assert bridge is not None, f"Failed to create bridge for platform {platform}"
         
         odom = create_test_odom(vx=1.0)
         trajectory = create_test_trajectory()
@@ -143,7 +163,7 @@ def test_controller_bridge_request_stop():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     # 先运行几次更新，让状态机进入 NORMAL 状态
     odom = create_test_odom(vx=1.0)
@@ -174,9 +194,8 @@ def test_controller_bridge_request_stop_not_initialized():
     
     config = DEFAULT_CONFIG.copy()
     bridge = ControllerBridge(config)
-    bridge.shutdown()  # 关闭后再测试
+    # 不调用 initialize()，直接测试
     
     success = bridge.request_stop()
     assert not success, "request_stop should return False when not initialized"
-    
     print("✓ test_controller_bridge_request_stop_not_initialized passed")

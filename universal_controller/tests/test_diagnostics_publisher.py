@@ -306,6 +306,99 @@ def test_diagnostics_publisher_get_last_published():
     print("✓ test_diagnostics_publisher_get_last_published passed")
 
 
+def test_diagnostics_publisher_prediction_error_nan():
+    """测试 prediction_error 的 NaN 语义保留"""
+    import math
+    publisher = DiagnosticsPublisher()
+    
+    received_data = []
+    publisher.add_callback(lambda d: received_data.append(d))
+    
+    cmd = ControlOutput(vx=1.0, vy=0.0, vz=0.0, omega=0.0, success=True)
+    timeout_status = TimeoutStatus(
+        odom_timeout=False, traj_timeout=False, traj_grace_exceeded=False,
+        imu_timeout=False, last_odom_age_ms=10.0, last_traj_age_ms=20.0,
+        last_imu_age_ms=15.0, in_startup_grace=False
+    )
+    
+    # 测试 1: tracking_error=None 时，prediction_error 应为 NaN
+    publisher.publish(
+        current_time=1000.0,
+        state=ControllerState.NORMAL,
+        cmd=cmd,
+        state_output=None,
+        consistency=None,
+        mpc_health=None,
+        timeout_status=timeout_status,
+        transform_status={'fallback_duration_ms': 0.0, 'accumulated_drift': 0.0},
+        tracking_error=None,  # 无跟踪误差数据
+        transition_progress=0.0,
+        tf2_critical=False
+    )
+    
+    assert len(received_data) == 1
+    assert math.isnan(received_data[0]['tracking']['prediction_error'])
+    
+    # 测试 2: tracking_error 存在但没有 prediction_error 时，应为 NaN
+    received_data.clear()
+    publisher.publish(
+        current_time=1001.0,
+        state=ControllerState.NORMAL,
+        cmd=cmd,
+        state_output=None,
+        consistency=None,
+        mpc_health=None,
+        timeout_status=timeout_status,
+        transform_status={'fallback_duration_ms': 0.0, 'accumulated_drift': 0.0},
+        tracking_error={'lateral_error': 0.1},  # 没有 prediction_error
+        transition_progress=0.0,
+        tf2_critical=False
+    )
+    
+    assert len(received_data) == 1
+    assert math.isnan(received_data[0]['tracking']['prediction_error'])
+    
+    # 测试 3: prediction_error 显式为 NaN 时，应保留 NaN
+    received_data.clear()
+    publisher.publish(
+        current_time=1002.0,
+        state=ControllerState.NORMAL,
+        cmd=cmd,
+        state_output=None,
+        consistency=None,
+        mpc_health=None,
+        timeout_status=timeout_status,
+        transform_status={'fallback_duration_ms': 0.0, 'accumulated_drift': 0.0},
+        tracking_error={'prediction_error': float('nan')},
+        transition_progress=0.0,
+        tf2_critical=False
+    )
+    
+    assert len(received_data) == 1
+    assert math.isnan(received_data[0]['tracking']['prediction_error'])
+    
+    # 测试 4: prediction_error 有有效值时，应正常传递
+    received_data.clear()
+    publisher.publish(
+        current_time=1003.0,
+        state=ControllerState.NORMAL,
+        cmd=cmd,
+        state_output=None,
+        consistency=None,
+        mpc_health=None,
+        timeout_status=timeout_status,
+        transform_status={'fallback_duration_ms': 0.0, 'accumulated_drift': 0.0},
+        tracking_error={'prediction_error': 0.05},
+        transition_progress=0.0,
+        tf2_critical=False
+    )
+    
+    assert len(received_data) == 1
+    assert received_data[0]['tracking']['prediction_error'] == 0.05
+    
+    print("✓ test_diagnostics_publisher_prediction_error_nan passed")
+
+
 if __name__ == '__main__':
     test_diagnostics_publisher_init()
     test_diagnostics_publisher_callback()
@@ -313,4 +406,5 @@ if __name__ == '__main__':
     test_diagnostics_publisher_clear_callbacks()
     test_diagnostics_publisher_with_full_data()
     test_diagnostics_publisher_get_last_published()
+    test_diagnostics_publisher_prediction_error_nan()
     print("\nAll DiagnosticsPublisher tests passed!")

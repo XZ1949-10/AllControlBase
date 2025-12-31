@@ -496,3 +496,109 @@ def test_state_machine_request_stop_clears_on_reset():
     assert not sm.is_stop_requested(), "reset should clear stop request"
     
     print("✓ test_state_machine_request_stop_clears_on_reset passed")
+
+
+def test_state_machine_stopped_recovery_to_mpc_degraded():
+    """测试 STOPPED 状态恢复时始终先进入 MPC_DEGRADED
+    
+    验证修复后的恢复策略:
+    - STOPPED 状态下 MPC 不运行，没有历史数据
+    - 恢复时应该先进入 MPC_DEGRADED 进行观察
+    - 这与 BACKUP_ACTIVE 的恢复策略一致
+    """
+    from universal_controller.safety.state_machine import StateMachine
+    from universal_controller.core.enums import ControllerState
+    from universal_controller.core.diagnostics_input import DiagnosticsInput
+    from universal_controller.core.data_types import MPCHealthStatus
+    
+    config = DEFAULT_CONFIG.copy()
+    sm = StateMachine(config)
+    
+    # 直接设置为 STOPPED 状态
+    sm.state = ControllerState.STOPPED
+    
+    # 场景 1: MPC 健康时恢复 - 应该进入 MPC_DEGRADED 而非 NORMAL
+    healthy_mpc = MPCHealthStatus(
+        healthy=True,
+        can_recover=True,
+        degradation_warning=False,
+        consecutive_near_timeout=0,
+        kkt_residual=0.0001,
+        condition_number=100.0
+    )
+    
+    diag_healthy = DiagnosticsInput(
+        mpc_success=True,
+        alpha=0.9,  # 高 alpha
+        data_valid=True,
+        has_valid_data=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        safety_failed=False,
+        v_horizontal=0.0,  # 已停止
+        vz=0.0,
+        mpc_health=healthy_mpc,
+    )
+    
+    new_state = sm.update(diag_healthy)
+    assert new_state == ControllerState.MPC_DEGRADED, \
+        f"STOPPED should recover to MPC_DEGRADED first, got {new_state}"
+    
+    # 场景 2: 重置并测试 MPC 不健康时恢复 - 也应该进入 MPC_DEGRADED
+    sm.reset()
+    sm.state = ControllerState.STOPPED
+    
+    unhealthy_mpc = MPCHealthStatus(
+        healthy=False,
+        can_recover=False,
+        degradation_warning=True,
+        consecutive_near_timeout=5,
+        kkt_residual=0.01,
+        condition_number=10000.0
+    )
+    
+    diag_unhealthy = DiagnosticsInput(
+        mpc_success=False,
+        alpha=0.3,  # 低 alpha
+        data_valid=True,
+        has_valid_data=True,
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        safety_failed=False,
+        v_horizontal=0.0,
+        vz=0.0,
+        mpc_health=unhealthy_mpc,
+    )
+    
+    new_state = sm.update(diag_unhealthy)
+    assert new_state == ControllerState.MPC_DEGRADED, \
+        f"STOPPED should recover to MPC_DEGRADED regardless of MPC health, got {new_state}"
+    
+    # 场景 3: 验证 MPC 历史在 STOPPED 状态下不被污染
+    # 需要使用不会触发恢复的诊断输入（无效数据）
+    sm.reset()
+    sm.state = ControllerState.STOPPED
+    
+    diag_no_data = DiagnosticsInput(
+        mpc_success=False,
+        alpha=0.3,
+        data_valid=False,
+        has_valid_data=False,  # 无有效数据，不会触发恢复
+        odom_timeout=False,
+        traj_timeout_exceeded=False,
+        safety_failed=False,
+        v_horizontal=0.0,
+        vz=0.0,
+        mpc_health=unhealthy_mpc,
+    )
+    
+    # 在 STOPPED 状态下多次 update（不会触发恢复）
+    for _ in range(5):
+        state = sm.update(diag_no_data)
+        assert state == ControllerState.STOPPED, f"Should stay in STOPPED, got {state}"
+    
+    # MPC 历史应该为空（STOPPED 状态下不追加历史）
+    assert len(sm._mpc_success_history) == 0, \
+        f"MPC history should be empty in STOPPED state, got {len(sm._mpc_success_history)}"
+    
+    print("✓ test_state_machine_stopped_recovery_to_mpc_degraded passed")

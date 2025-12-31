@@ -327,7 +327,7 @@ class DashboardDataSource:
             ctrl_freq=self.config.get('system', {}).get('ctrl_freq', 50),
             mpc_horizon=self.config.get('mpc', {}).get('horizon', 20),
             mpc_horizon_degraded=self.config.get('mpc', {}).get('horizon_degraded', 10),
-            mpc_dt=self.config.get('mpc', {}).get('dt', 0.02),
+            mpc_dt=self.config.get('mpc', {}).get('dt', 0.1),  # 默认值与 mpc_config.py 一致
         )
 
     def _build_controller_status(self, diag: Dict) -> ControllerStatus:
@@ -356,7 +356,7 @@ class DashboardDataSource:
             health = {}
 
         # 获取 MPC dt 和控制周期
-        mpc_dt = self.config.get('mpc', {}).get('dt', 0.02)
+        mpc_dt = self.config.get('mpc', {}).get('dt', 0.1)  # 默认值与 mpc_config.py 一致
         ctrl_freq = self.config.get('system', {}).get('ctrl_freq', 50)
         control_period = 1.0 / ctrl_freq if ctrl_freq > 0 else 0.02
         

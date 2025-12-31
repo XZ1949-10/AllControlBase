@@ -58,6 +58,8 @@ class MockControllerNode:
         self.node._params = params or DEFAULT_CONFIG.copy()
         self.node._topics = {'odom': '/odom', 'imu': '/imu', 'trajectory': '/traj'}
         self.node._initialize()
+        # 在测试中，假设轨迹消息类型可用
+        self.node._traj_msg_available = True
     
     def set_time(self, t: float):
         self.node._current_time = t
@@ -67,9 +69,9 @@ class MockControllerNode:
         self.node._data_manager._timestamps['odom'] = self.node._current_time
     
     def update_trajectory(self, traj):
-        # 使用 DataManager 内部的键名 'traj'
-        self.node._data_manager._latest_data['traj'] = traj
-        self.node._data_manager._timestamps['traj'] = self.node._current_time
+        # 使用 DataManager 内部的键名 'trajectory'
+        self.node._data_manager._latest_data['trajectory'] = traj
+        self.node._data_manager._timestamps['trajectory'] = self.node._current_time
 
 
 class TestEmergencyStop:
@@ -131,8 +133,14 @@ class TestEmergencyStop:
         assert mock.node._emergency_stop_time is None
         assert any('cleared' in msg.lower() for msg in mock.node._logs['info'])
     
-    def test_reset_clears_emergency_stop(self):
-        """测试重置清除紧急停止"""
+    def test_reset_preserves_emergency_stop(self):
+        """测试重置保留紧急停止状态（安全设计）
+        
+        设计说明：
+        - reset() 不清除紧急停止状态，这是安全设计
+        - 要从紧急停止恢复，必须显式调用 set_state(NORMAL) 服务
+        - 这防止了意外的紧急停止恢复
+        """
         mock = MockControllerNode()
         mock.initialize()
         
@@ -141,6 +149,24 @@ class TestEmergencyStop:
         
         mock.node._handle_reset()
         
+        # 紧急停止状态应该被保留
+        assert mock.node._is_emergency_stopped() == True
+        # 日志应该说明紧急停止状态被保留
+        assert any('preserved' in msg.lower() for msg in mock.node._logs['info'])
+    
+    def test_set_state_normal_clears_emergency_stop(self):
+        """测试通过 set_state(NORMAL) 清除紧急停止"""
+        mock = MockControllerNode()
+        mock.initialize()
+        
+        mock.node._handle_emergency_stop()
+        assert mock.node._is_emergency_stopped() == True
+        
+        # 通过 set_state 服务恢复
+        from universal_controller.core.enums import ControllerState
+        success = mock.node._handle_set_state(ControllerState.NORMAL.value)
+        
+        assert success == True
         assert mock.node._is_emergency_stopped() == False
     
     def test_control_loop_during_emergency_stop(self):

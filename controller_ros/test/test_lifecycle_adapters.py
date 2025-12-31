@@ -151,47 +151,6 @@ class TestLifecycleMixin:
         assert status['details']['custom'] == 'data'
 
 
-class TestDeprecatedAdapter:
-    """测试废弃的适配器（向后兼容）"""
-    
-    def test_adapter_deprecation_warning(self):
-        """测试适配器发出废弃警告"""
-        from controller_ros.lifecycle import LifecycleComponentAdapter
-        
-        class OldComponent:
-            def reset(self): pass
-            def shutdown(self): pass
-        
-        # 使用 pytest.warns 来捕获警告
-        with pytest.warns(DeprecationWarning, match="deprecated"):
-            adapter = LifecycleComponentAdapter(OldComponent(), 'old')
-    
-    def test_adapter_still_works(self):
-        """测试适配器仍然可用"""
-        from controller_ros.lifecycle import LifecycleComponentAdapter, HealthChecker
-        
-        class LegacyComponent:
-            def __init__(self):
-                self.reset_called = False
-            def reset(self):
-                self.reset_called = True
-            def shutdown(self):
-                pass
-        
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            
-            comp = LegacyComponent()
-            adapter = LifecycleComponentAdapter(comp, 'legacy')
-            
-            checker = HealthChecker()
-            checker.register('legacy', adapter)
-            
-            status = checker.check('legacy')
-            assert status['healthy'] == True
-            assert status['adapter'] == 'LifecycleComponentAdapter'
-
-
 class TestWithRealComponents:
     """使用真实组件的集成测试"""
     
@@ -225,7 +184,7 @@ class TestWithRealComponents:
         config = DEFAULT_CONFIG.copy()
         config['system'] = DEFAULT_CONFIG['system'].copy()
         config['system']['platform'] = 'differential'
-        bridge = ControllerBridge(config)
+        bridge = ControllerBridge.create(config)
         
         checker = HealthChecker()
         checker.register('bridge', bridge)

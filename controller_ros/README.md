@@ -222,37 +222,43 @@ system:
 
 # 话题配置
 topics:
-  odom: "/odom"
-  imu: "/imu"
-  trajectory: "/nn/local_trajectory"
-  cmd_unified: "/cmd_unified"
+  odom: "/controller/input/odom"
+  imu: ""                         # 默认禁用，需要时设置话题名
+  trajectory: "/controller/input/trajectory"
+  cmd_unified: "/controller/cmd"
   diagnostics: "/controller/diagnostics"
   emergency_stop: "/controller/emergency_stop"
   attitude_cmd: "/controller/attitude_cmd"
 
-# TF 配置
-tf:
+# 坐标变换配置 (统一配置入口)
+# 包含坐标系名称、算法参数和 ROS TF2 特有参数
+transform:
+  # 坐标系配置
   source_frame: "base_link"
   target_frame: "odom"
   timeout_ms: 10
+  
+  # ROS TF2 特有参数
+  buffer_warmup_timeout_sec: 2.0
+  buffer_warmup_interval_sec: 0.1
+  retry_interval_sec: 1.0
+  max_retries: -1
 
 # 超时配置
 watchdog:
   odom_timeout_ms: 200
   traj_timeout_ms: 500
-  imu_timeout_ms: 100
+  imu_timeout_ms: -1              # 默认禁用，有 IMU 的平台需显式启用
 
 # MPC 配置
 mpc:
   horizon: 20
   dt: 0.1
-
-# 姿态控制配置 (四旋翼)
-attitude:
-  mass: 1.5
-  roll_max: 0.5
-  pitch_max: 0.5
 ```
+
+**注意**: 
+- IMU 超时默认禁用 (`-1`)，因为大多数地面平台没有 IMU
+- 姿态控制配置 (`attitude`) 仅对四旋翼平台有效，应在 `quadrotor.yaml` 中配置
 
 ### 配置映射
 
@@ -265,7 +271,7 @@ ROS 参数与 `universal_controller` 配置的映射关系：
 | `watchdog.*` | `watchdog.*` |
 | `mpc.*` | `mpc.*` |
 | `attitude.*` | `attitude.*` |
-| `tf.*` | `transform.*` |
+| `transform.*` | `transform.*` |
 
 ## 平台适配
 

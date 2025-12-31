@@ -186,7 +186,7 @@ class TestTF2InjectionManager:
         assert result == False
     
     def test_try_reinjection_interval_time_based(self):
-        """测试基于时间的重试间隔"""
+        """测试基于时间的重试间隔（含指数退避）"""
         tf_bridge = MockTFBridge(initialized=True, can_transform_result=False)
         manager = MockControllerManager(has_coord_transformer=False)  # 让注入失败
         
@@ -198,31 +198,47 @@ class TestTF2InjectionManager:
         injection_manager = TF2InjectionManager(
             tf_bridge=tf_bridge,
             controller_manager=manager,
-            config={'retry_interval_sec': 1.0},  # 1 秒重试间隔
+            config={
+                'retry_interval_sec': 1.0,  # 初始 1 秒重试间隔
+                'backoff_multiplier': 2.0,  # 指数退避倍数
+                'max_retry_interval_sec': 10.0,  # 最大间隔
+            },
             get_time_func=get_mock_time,
         )
         
         # 手动设置状态（模拟初始注入失败后的状态）
-        # 使用 Event 的正确方法
         injection_manager._injection_attempted_event.set()
         injection_manager._injected_event.clear()
         
         # 第一次调用应该触发重试（因为 _last_retry_time 为 None）
+        # 重试后间隔变为 2.0s
         result = injection_manager.try_reinjection_if_needed()
         assert result == True
         assert injection_manager.retry_count == 1
         
-        # 时间未过，不应该重试
-        mock_time[0] = 0.5  # 0.5 秒后
+        # 时间未过（0.5s < 2.0s 当前间隔），不应该重试
+        mock_time[0] = 0.5
         result = injection_manager.try_reinjection_if_needed()
         assert result == False
         assert injection_manager.retry_count == 1
         
-        # 时间已过，应该重试
-        mock_time[0] = 1.5  # 1.5 秒后
+        # 时间已过当前间隔 2.0s，应该重试（间隔变为 4.0s）
+        mock_time[0] = 2.5  # 距上次 2.5s > 2.0s
         result = injection_manager.try_reinjection_if_needed()
         assert result == True
         assert injection_manager.retry_count == 2
+        
+        # 验证指数退避：3.0s 后（< 4.0s 新间隔），不应该重试
+        mock_time[0] = 5.0  # 距上次 2.5s < 4.0s
+        result = injection_manager.try_reinjection_if_needed()
+        assert result == False
+        assert injection_manager.retry_count == 2
+        
+        # 4.0s 后应该重试（间隔变为 8.0s）
+        mock_time[0] = 7.0  # 距上次 4.5s > 4.0s
+        result = injection_manager.try_reinjection_if_needed()
+        assert result == True
+        assert injection_manager.retry_count == 3
     
     def test_try_reinjection_max_retries(self):
         """测试最大重试次数"""
@@ -240,6 +256,7 @@ class TestTF2InjectionManager:
             config={
                 'retry_interval_sec': 0.1,  # 短间隔
                 'max_retries': 3,
+                'backoff_multiplier': 1.0,  # 禁用指数退避，保持固定间隔
             },
             get_time_func=get_mock_time,
         )
@@ -276,6 +293,7 @@ class TestTF2InjectionManager:
             config={
                 'retry_interval_sec': 0.1,
                 'max_retries': -1,  # 无限重试
+                'backoff_multiplier': 1.0,  # 禁用指数退避，保持固定间隔
             },
             get_time_func=get_mock_time,
         )
@@ -346,7 +364,7 @@ class TestTF2InjectionManager:
         assert status['injection_attempted'] == True
         assert status['source_frame'] == 'base_link'
         assert status['target_frame'] == 'odom'
-        assert status['retry_interval_sec'] == 2.0
+        assert status['current_retry_interval_sec'] == 2.0  # 成功注入后重置为初始值
     
     def test_custom_config(self):
         """测试自定义配置"""
@@ -360,6 +378,8 @@ class TestTF2InjectionManager:
                 'buffer_warmup_timeout_sec': 5.0,
                 'buffer_warmup_interval_sec': 0.2,
                 'retry_interval_sec': 2.0,
+                'max_retry_interval_sec': 60.0,
+                'backoff_multiplier': 1.5,
                 'max_retries': 10,
             },
             transform_config={
@@ -372,7 +392,9 @@ class TestTF2InjectionManager:
         assert injection_manager._target_frame == 'custom_odom'
         assert injection_manager._buffer_warmup_timeout_sec == 5.0
         assert injection_manager._buffer_warmup_interval_sec == 0.2
-        assert injection_manager._retry_interval_sec == 2.0
+        assert injection_manager._initial_retry_interval == 2.0
+        assert injection_manager._max_retry_interval == 60.0
+        assert injection_manager._backoff_multiplier == 1.5
         assert injection_manager._max_retries == 10
 
 

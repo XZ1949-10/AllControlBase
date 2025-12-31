@@ -42,6 +42,27 @@ class TestSafeFloat:
         assert safe_float(float('nan')) == 0.0
         assert safe_float(float('nan'), default=-1.0) == -1.0
     
+    def test_nan_preserve(self):
+        """测试 preserve_nan 参数"""
+        # preserve_nan=True 时保留 NaN
+        result = safe_float(float('nan'), preserve_nan=True)
+        assert math.isnan(result)
+        
+        # preserve_nan=True 时，正常值不受影响
+        assert safe_float(1.5, preserve_nan=True) == 1.5
+        assert safe_float(0.0, preserve_nan=True) == 0.0
+        
+        # preserve_nan=True 时，inf 仍然返回 default
+        assert safe_float(float('inf'), preserve_nan=True) == 0.0
+        assert safe_float(float('-inf'), preserve_nan=True) == 0.0
+        
+        # preserve_nan=True 时，None 仍然返回 default
+        assert safe_float(None, preserve_nan=True) == 0.0
+        
+        # preserve_nan=True 配合 default=nan
+        result = safe_float(None, default=float('nan'), preserve_nan=True)
+        assert math.isnan(result)
+    
     def test_inf_value(self):
         """测试 inf 值"""
         assert safe_float(float('inf')) == 0.0
@@ -441,6 +462,56 @@ class TestFillDiagnosticsMsg:
         fill_diagnostics_msg(msg2, diag2)
         
         assert msg2.emergency_stop == False
+    
+    def test_tracking_prediction_error_nan_preserved(self):
+        """测试 tracking_prediction_error 保留 NaN 语义"""
+        msg = MockDiagnosticsMsg()
+        
+        # 测试 NaN 值被保留（表示"无数据"）
+        diag = {
+            'state': 1,
+            'tracking': {
+                'lateral_error': 0.1,
+                'prediction_error': float('nan'),
+            },
+        }
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.tracking_lateral_error == 0.1
+        assert math.isnan(msg.tracking_prediction_error)
+    
+    def test_tracking_prediction_error_default_nan(self):
+        """测试 tracking_prediction_error 缺失时默认为 NaN"""
+        msg = MockDiagnosticsMsg()
+        
+        # tracking 字典存在但没有 prediction_error
+        diag = {
+            'state': 1,
+            'tracking': {
+                'lateral_error': 0.1,
+            },
+        }
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.tracking_lateral_error == 0.1
+        assert math.isnan(msg.tracking_prediction_error)
+    
+    def test_tracking_prediction_error_valid_value(self):
+        """测试 tracking_prediction_error 有效值正常传递"""
+        msg = MockDiagnosticsMsg()
+        
+        diag = {
+            'state': 1,
+            'tracking': {
+                'prediction_error': 0.05,
+            },
+        }
+        
+        fill_diagnostics_msg(msg, diag)
+        
+        assert msg.tracking_prediction_error == 0.05
 
 
 if __name__ == '__main__':

@@ -52,6 +52,7 @@ from .mock_config import MOCK_CONFIG, MOCK_VALIDATION_RULES, is_mock_allowed
 # 导入验证模块
 from .validation import (
     ConfigValidationError,
+    ValidationSeverity,
     get_config_value,
     validate_config as _validate_config,
     validate_logical_consistency,
@@ -133,6 +134,7 @@ __all__ = [
     'validate_config',
     'get_config_value',
     'ConfigValidationError',
+    'ValidationSeverity',
     'CONFIG_VALIDATION_RULES',
     # Mock 配置
     'MOCK_CONFIG',

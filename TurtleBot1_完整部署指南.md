@@ -663,8 +663,8 @@ source /opt/ros/noetic/setup.bash
 source ~/catkin_ws/devel/setup.bash
 export PYTHONPATH=$PYTHONPATH:/home/user/AllControlBase
 
-# 启动控制器
-roslaunch controller_ros turtlebot1.launch dashboard:=false
+# 启动控制器 (dashboard 和 visualizer 默认关闭)
+roslaunch controller_ros turtlebot1.launch
 ```
 
 ### 6.3 验证话题

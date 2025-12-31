@@ -4,10 +4,14 @@
 封装 ControllerManager 调用，隔离 ROS 层与算法库。
 
 生命周期说明：
-- 实现 ILifecycle 接口（通过 LifecycleMixin）
+- 实现 ILifecycleComponent 接口（通过 LifecycleMixin）
 - initialize(): 创建并初始化 ControllerManager
 - reset(): 重置控制器状态
 - shutdown(): 关闭控制器，释放资源
+
+使用方式：
+- 推荐: 使用 create() 工厂方法，失败时返回 None
+- 备选: 直接构造后调用 initialize()，需检查返回值
 """
 from typing import Dict, Any, Optional
 import logging
@@ -33,44 +37,59 @@ class ControllerBridge(LifecycleMixin):
     - 隔离 ROS 层与算法库
     
     生命周期:
-    - 实现 ILifecycle 接口（通过 LifecycleMixin）
-    - initialize(): 创建并初始化 ControllerManager（默认在构造时自动调用）
+    - 实现 ILifecycleComponent 接口（通过 LifecycleMixin）
+    - initialize(): 创建并初始化 ControllerManager
     - reset(): 重置控制器状态
     - shutdown(): 关闭控制器，释放资源
     
-    初始化行为:
-    - 默认 auto_initialize=True，构造时自动初始化，失败时抛出 RuntimeError
-    - 设置 auto_initialize=False 可延迟初始化，调用者需手动调用 initialize()
+    使用示例:
+        # 方式 1: 工厂方法 (推荐)
+        bridge = ControllerBridge.create(config)
+        if bridge is None:
+            handle_error()
+        
+        # 方式 2: 显式初始化
+        bridge = ControllerBridge(config)
+        if not bridge.initialize():
+            handle_error(bridge.last_error)
     """
     
-    def __init__(self, config: Dict[str, Any], auto_initialize: bool = True):
+    @classmethod
+    def create(cls, config: Dict[str, Any]) -> Optional['ControllerBridge']:
         """
-        初始化控制器桥接
+        工厂方法：创建并初始化 ControllerBridge
+        
+        Args:
+            config: 控制器配置字典
+        
+        Returns:
+            初始化成功的 ControllerBridge 实例，失败返回 None
+        
+        Example:
+            bridge = ControllerBridge.create(config)
+            if bridge is None:
+                logger.error("Failed to create controller bridge")
+                return
+        """
+        bridge = cls(config)
+        if bridge.initialize():
+            return bridge
+        logger.error(f"ControllerBridge initialization failed: {bridge.last_error}")
+        return None
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        初始化控制器桥接（不执行实际初始化）
         
         Args:
             config: 控制器配置字典，将传递给 ControllerManager
-            auto_initialize: 是否自动初始化（默认 True）
-                - True: 构造时自动初始化，失败时抛出 RuntimeError
-                - False: 延迟初始化，调用者需手动调用 initialize()
         
-        Raises:
-            RuntimeError: 当 auto_initialize=True 且初始化失败时
+        Note:
+            构造后需调用 initialize() 或使用 create() 工厂方法
         """
-        # 初始化 LifecycleMixin
         super().__init__()
-        
         self._config = config
         self._manager: Optional[ControllerManager] = None
-        
-        # 自动初始化
-        if auto_initialize:
-            if not self.initialize():
-                # 获取更详细的错误信息
-                error_msg = self._last_error if self._last_error else "Unknown error"
-                raise RuntimeError(
-                    f"Controller bridge initialization failed: {error_msg}. "
-                    f"Check configuration and ensure all dependencies are available."
-                )
     
     # ==================== LifecycleMixin 实现 ====================
     
@@ -191,22 +210,6 @@ class ControllerBridge(LifecycleMixin):
         """通知收到 IMU 数据（用于超时监控）"""
         if self._manager is not None:
             self._manager.notify_imu_received()
-    
-    @property
-    def is_initialized(self) -> bool:
-        """
-        控制器是否已初始化
-        
-        .. deprecated:: 3.18
-            使用 is_running 代替
-        """
-        import warnings
-        warnings.warn(
-            "is_initialized is deprecated, use is_running instead",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        return self.is_running
     
     @property
     def manager(self) -> Optional[ControllerManager]:

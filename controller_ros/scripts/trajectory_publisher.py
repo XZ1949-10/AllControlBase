@@ -1,186 +1,218 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-轨迹发布器 - 订阅 /waypoint 话题并转换为 LocalTrajectoryV4 消息
+Trajectory Publisher - Subscribe /waypoint and convert to LocalTrajectoryV4
 
-功能:
-- 订阅 /waypoint (std_msgs/Float32MultiArray)，包含 N 个点的 [x, y] 坐标
-- 转换为 controller_ros/LocalTrajectoryV4 格式
-- 发布到 /controller/input/trajectory 话题
+Features:
+- Subscribe /waypoint (std_msgs/Float32MultiArray) with N points [x, y] coordinates
+- Convert to controller_ros/LocalTrajectoryV4 format
+- Publish to /controller/input/trajectory
 
-使用方法:
+Usage:
     rosrun controller_ros trajectory_publisher.py
-    rosrun controller_ros trajectory_publisher.py --stop  # 发布停止轨迹
+    rosrun controller_ros trajectory_publisher.py --stop  # Publish stop trajectory
 
-话题:
-    订阅: /waypoint (std_msgs/Float32MultiArray)
-           data 格式: [x0, y0, x1, y1, x2, y2, ..., xN, yN]
-    发布: /controller/input/trajectory (controller_ros/LocalTrajectoryV4)
+Topics:
+    Subscribe: /waypoint (std_msgs/Float32MultiArray)
+               data format: [x0, y0, x1, y1, x2, y2, ..., xN, yN]
+    Publish: /controller/input/trajectory (controller_ros/LocalTrajectoryV4)
 
-重要:
-    - 输入轨迹坐标系假设为 base_link (机器人当前位置为原点，X轴朝前)
-    - 差速车只使用 x, y 坐标
+Note:
+    - Input trajectory coordinates assumed in base_link frame
+    - Differential drive only uses x, y coordinates
 """
-
-# 注意：不要在这里修改 sys.path！
-# PYTHONPATH 已经由 source devel/setup.bash 正确设置
-# 手动修改 sys.path 会导致 controller_ros.msg 找不到
 
 import rospy
 import numpy as np
+from typing import Optional, Dict, Any
 from geometry_msgs.msg import Point
 from std_msgs.msg import Header, Float32MultiArray
+
+from controller_ros.utils.param_loader import ParamLoader, TOPICS_DEFAULTS
+from controller_ros.lifecycle import LifecycleMixin
 
 try:
     from controller_ros.msg import LocalTrajectoryV4
 except ImportError:
-    rospy.logerr("无法导入 controller_ros.msg，请确保 controller_ros 已编译")
+    rospy.logerr("Cannot import controller_ros.msg, ensure controller_ros is built")
     raise
 
-# 导入轨迹模式枚举，保持与 universal_controller 一致
 try:
     from universal_controller.core.enums import TrajectoryMode
-    MODE_TRACK = TrajectoryMode.MODE_TRACK.value      # 跟踪模式 (正常跟踪轨迹)
-    MODE_STOP = TrajectoryMode.MODE_STOP.value        # 停止模式 (减速停车)
-    MODE_HOVER = TrajectoryMode.MODE_HOVER.value      # 悬停模式 (仅四旋翼)
-    MODE_EMERGENCY = TrajectoryMode.MODE_EMERGENCY.value  # 紧急模式 (立即停止)
+    MODE_TRACK = TrajectoryMode.MODE_TRACK.value
+    MODE_STOP = TrajectoryMode.MODE_STOP.value
+    MODE_HOVER = TrajectoryMode.MODE_HOVER.value
+    MODE_EMERGENCY = TrajectoryMode.MODE_EMERGENCY.value
 except ImportError:
-    # 如果 universal_controller 不可用，使用本地定义
     MODE_TRACK = 0
     MODE_STOP = 1
     MODE_HOVER = 2
     MODE_EMERGENCY = 3
 
 
-# =============================================================================
-# 轨迹发布器
-# =============================================================================
-class TrajectoryPublisher:
+class TrajectoryPublisher(LifecycleMixin):
     """
-    轨迹发布器类
+    Trajectory Publisher Class
     
-    订阅 /waypoint 话题，转换为 LocalTrajectoryV4 格式发布
+    Subscribe /waypoint topic and convert to LocalTrajectoryV4 format.
+    
+    Lifecycle:
+    - Implements ILifecycleComponent via LifecycleMixin
+    - initialize(): Setup ROS interfaces
+    - reset(): Reset statistics
+    - shutdown(): Publish stop trajectory and cleanup
     """
+    
+    # Validation constants
+    MAX_COORD = 100.0  # Maximum reasonable coordinate (meters)
     
     def __init__(self):
+        LifecycleMixin.__init__(self)
         rospy.init_node('trajectory_publisher', anonymous=False)
         
-        # 参数
-        self.dt = rospy.get_param('~dt', 0.1)  # 轨迹点时间间隔 (秒)
-        self.confidence = rospy.get_param('~confidence', 1.0)  # 默认置信度
-        self.soft_enabled = rospy.get_param('~soft_enabled', False)  # 是否启用 Soft 约束
+        # Load configuration using unified ParamLoader
+        config = ParamLoader.load(node=None, validate=False)
+        topics = ParamLoader.get_topics(node=None)
         
-        # 坐标系配置 - 使用统一的参数加载器
-        # 优先级: 私有参数 > transform 配置 > 默认值
+        # Get trajectory parameters from config
+        traj_config = config.get('trajectory', {})
+        transform_config = config.get('transform', {})
+        mpc_config = config.get('mpc', {})
+        
+        # dt_sec priority: trajectory.default_dt_sec > mpc.dt > default
+        self._dt = traj_config.get('default_dt_sec', mpc_config.get('dt', 0.1))
+        self._confidence = rospy.get_param('~confidence', 1.0)
+        self._soft_enabled = rospy.get_param('~soft_enabled', False)
+        
+        # Frame ID: use transform.source_frame for consistency
         private_frame = rospy.get_param('~frame_id', None)
         if private_frame:
-            self.frame_id = private_frame
+            self._frame_id = private_frame
         else:
-            # 从 transform 配置读取 source_frame
-            self.frame_id = rospy.get_param('transform/source_frame', 'base_footprint')
+            self._frame_id = transform_config.get('source_frame', 'base_link')
         
-        input_topic = rospy.get_param('~input_topic', '/waypoint')
-        output_topic = rospy.get_param('~output_topic', '/controller/input/trajectory')
+        # Topics: use unified topic configuration
+        self._input_topic = rospy.get_param('~input_topic', '/waypoint')
+        self._output_topic = rospy.get_param(
+            '~output_topic', 
+            topics.get('trajectory', TOPICS_DEFAULTS['trajectory'])
+        )
         
-        # 发布器
-        self.pub = rospy.Publisher(output_topic, LocalTrajectoryV4, queue_size=1)
+        # State
+        self._last_waypoint = None
+        self._publish_count = 0
+        self._receive_count = 0
+        self._invalid_count = 0
         
-        # 订阅器
-        self.sub = rospy.Subscriber(input_topic, Float32MultiArray, self.waypoint_callback)
+        # ROS interfaces
+        self._pub = None
+        self._sub = None
         
-        # 状态
-        self.last_waypoint = None
-        self.publish_count = 0
-        self.receive_count = 0
+        rospy.on_shutdown(self.shutdown)
         
-        rospy.loginfo("=" * 50)
-        rospy.loginfo("TrajectoryPublisher 已启动")
-        rospy.loginfo(f"  订阅话题: {input_topic} (Float32MultiArray)")
-        rospy.loginfo(f"  发布话题: {output_topic} (LocalTrajectoryV4)")
-        rospy.loginfo(f"  轨迹时间间隔: {self.dt} s")
-        rospy.loginfo(f"  坐标系: {self.frame_id}")
-        rospy.loginfo(f"  Soft 约束: {'启用' if self.soft_enabled else '禁用'}")
-        rospy.loginfo("=" * 50)
-
-    def waypoint_callback(self, msg: Float32MultiArray):
-        """
-        /waypoint 话题回调
+        if not self.initialize():
+            raise RuntimeError(f"Initialization failed: {self._last_error}")
+    
+    def _do_initialize(self) -> bool:
+        """Initialize ROS interfaces"""
+        try:
+            self._pub = rospy.Publisher(self._output_topic, LocalTrajectoryV4, queue_size=1)
+            self._sub = rospy.Subscriber(self._input_topic, Float32MultiArray, self._waypoint_callback)
+            
+            rospy.loginfo("=" * 50)
+            rospy.loginfo("TrajectoryPublisher initialized")
+            rospy.loginfo(f"  Subscribe: {self._input_topic} (Float32MultiArray)")
+            rospy.loginfo(f"  Publish: {self._output_topic} (LocalTrajectoryV4)")
+            rospy.loginfo(f"  dt: {self._dt} s")
+            rospy.loginfo(f"  Frame: {self._frame_id}")
+            rospy.loginfo(f"  Soft constraint: {'enabled' if self._soft_enabled else 'disabled'}")
+            rospy.loginfo("=" * 50)
+            return True
+        except Exception as e:
+            rospy.logerr(f"TrajectoryPublisher initialization error: {e}")
+            return False
+    
+    def _do_shutdown(self) -> None:
+        """Shutdown and publish stop trajectory"""
+        rospy.loginfo("TrajectoryPublisher shutting down...")
         
-        Args:
-            msg: Float32MultiArray，data 格式为 [x0, y0, x1, y1, ..., xN, yN]
-        """
-        self.receive_count += 1
+        # Publish stop trajectory for safety
+        try:
+            if self._pub is not None:
+                stop_msg = self._create_stop_trajectory()
+                self._pub.publish(stop_msg)
+                rospy.loginfo("Published stop trajectory on shutdown")
+        except Exception as e:
+            rospy.logwarn(f"Failed to publish stop trajectory: {e}")
         
-        # 解析数据
-        data = list(msg.data)  # 转换为 list 以便修改
+        if self._sub is not None:
+            self._sub.unregister()
+            self._sub = None
+    
+    def _do_reset(self) -> None:
+        """Reset statistics"""
+        self._last_waypoint = None
+        self._publish_count = 0
+        self._receive_count = 0
+        self._invalid_count = 0
+        rospy.loginfo("TrajectoryPublisher state reset")
+    
+    def _get_health_details(self) -> Dict[str, Any]:
+        """Get health details"""
+        return {
+            'publish_count': self._publish_count,
+            'receive_count': self._receive_count,
+            'invalid_count': self._invalid_count,
+            'has_waypoint': self._last_waypoint is not None,
+        }
+    
+    def _waypoint_callback(self, msg: Float32MultiArray):
+        """Waypoint topic callback"""
+        self._receive_count += 1
+        
+        data = list(msg.data)
         if len(data) < 2:
-            rospy.logwarn(f"收到空轨迹数据，忽略")
+            rospy.logwarn("Received empty trajectory data")
             return
         
-        # 检查数据长度是否为偶数 (每个点有 x, y)
         if len(data) % 2 != 0:
-            rospy.logwarn(f"轨迹数据长度 {len(data)} 不是偶数，忽略最后一个值")
+            rospy.logwarn(f"Trajectory data length {len(data)} not even, truncating")
             data = data[:-1]
         
-        # 解析为点列表
         num_points = len(data) // 2
         positions = np.array(data).reshape(num_points, 2)
         
-        # 验证数据有效性：检查 NaN 和 Inf
+        # Validate data
         if not np.all(np.isfinite(positions)):
-            invalid_mask = ~np.isfinite(positions)
-            invalid_count = np.sum(invalid_mask)
-            rospy.logwarn_throttle(
-                1.0,
-                f"轨迹数据包含 {invalid_count} 个无效值 (NaN/Inf)，忽略此帧"
-            )
+            self._invalid_count += 1
+            rospy.logwarn_throttle(1.0, "Trajectory contains NaN/Inf, ignoring")
             return
         
-        # 可选：检查坐标范围是否合理（防止异常大的值）
-        MAX_COORD = 100.0  # 最大合理坐标值 (米)
-        if np.any(np.abs(positions) > MAX_COORD):
-            rospy.logwarn_throttle(
-                1.0,
-                f"轨迹坐标超出合理范围 (>{MAX_COORD}m)，忽略此帧"
-            )
+        if np.any(np.abs(positions) > self.MAX_COORD):
+            self._invalid_count += 1
+            rospy.logwarn_throttle(1.0, f"Trajectory coordinates exceed {self.MAX_COORD}m")
             return
         
-        # 创建并发布消息
-        traj_msg = self.create_trajectory_msg(positions)
-        self.pub.publish(traj_msg)
+        # Create and publish message
+        traj_msg = self._create_trajectory_msg(positions)
+        self._pub.publish(traj_msg)
         
-        self.publish_count += 1
-        self.last_waypoint = positions
+        self._publish_count += 1
+        self._last_waypoint = positions
         
-        # 日志 (每 50 次打印一次)
-        if self.publish_count % 50 == 0:
-            rospy.loginfo(f"已转发 {self.publish_count} 条轨迹 (当前 {num_points} 个点)")
-
-    def create_trajectory_msg(self, positions: np.ndarray, 
+        if self._publish_count % 50 == 0:
+            rospy.loginfo(f"Published {self._publish_count} trajectories ({num_points} points)")
+    
+    def _create_trajectory_msg(self, positions: np.ndarray, 
                                velocities: np.ndarray = None,
                                mode: int = MODE_TRACK) -> LocalTrajectoryV4:
-        """
-        创建 LocalTrajectoryV4 消息
-        
-        Args:
-            positions: numpy array, shape (N, 2), [x, y] 坐标 (base_link 坐标系)
-            velocities: numpy array, shape (N, 2) 或 (N, 4), 可选
-            mode: 轨迹模式
-        
-        Returns:
-            LocalTrajectoryV4 消息
-        """
+        """Create LocalTrajectoryV4 message"""
         msg = LocalTrajectoryV4()
-        
-        # Header
         msg.header = Header()
         msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = self.frame_id  # 使用配置的坐标系
-        
-        # 轨迹模式
+        msg.header.frame_id = self._frame_id
         msg.mode = mode
         
-        # 轨迹点 (差速车只用 x, y，z 设为 0)
         msg.points = []
         for i in range(len(positions)):
             p = Point()
@@ -189,19 +221,17 @@ class TrajectoryPublisher:
             p.z = 0.0
             msg.points.append(p)
         
-        # 速度 (可选，差速车通常不需要)
-        if velocities is not None and len(velocities) > 0 and self.soft_enabled:
+        if velocities is not None and len(velocities) > 0 and self._soft_enabled:
             msg.velocities_flat = []
             for i in range(len(velocities)):
                 if velocities.shape[1] >= 4:
                     msg.velocities_flat.extend([
-                        float(velocities[i, 0]),  # vx
-                        float(velocities[i, 1]),  # vy
-                        float(velocities[i, 2]),  # vz
-                        float(velocities[i, 3]),  # wz
+                        float(velocities[i, 0]),
+                        float(velocities[i, 1]),
+                        float(velocities[i, 2]),
+                        float(velocities[i, 3]),
                     ])
                 else:
-                    # 只有 [vx, vy]，补零
                     msg.velocities_flat.extend([
                         float(velocities[i, 0]),
                         float(velocities[i, 1]),
@@ -212,47 +242,58 @@ class TrajectoryPublisher:
             msg.velocities_flat = []
             msg.soft_enabled = False
         
-        # 时间间隔
-        msg.dt_sec = self.dt
-        
-        # 置信度
-        msg.confidence = self.confidence
-        
+        msg.dt_sec = self._dt
+        msg.confidence = self._confidence
         return msg
-
-    def run(self):
-        """主循环 (spin)"""
-        rospy.loginfo("TrajectoryPublisher 正在运行，等待 /waypoint 数据...")
-        rospy.spin()
-
-
-# =============================================================================
-# 停止轨迹发布器 (用于紧急停止)
-# =============================================================================
-class StopTrajectoryPublisher:
-    """发布停止轨迹"""
     
-    def __init__(self):
-        rospy.init_node('stop_trajectory_publisher', anonymous=True)
-        output_topic = rospy.get_param('~output_topic', '/controller/input/trajectory')
-        
-        # 坐标系配置 - 使用统一的参数加载器
-        private_frame = rospy.get_param('~frame_id', None)
-        if private_frame:
-            self.frame_id = private_frame
-        else:
-            # 从 transform 配置读取 source_frame
-            self.frame_id = rospy.get_param('transform/source_frame', 'base_footprint')
-        
-        self.pub = rospy.Publisher(output_topic, LocalTrajectoryV4, queue_size=1)
-        rospy.sleep(0.5)  # 等待连接
-    
-    def publish_stop(self):
-        """发布停止轨迹"""
+    def _create_stop_trajectory(self) -> LocalTrajectoryV4:
+        """Create stop trajectory message"""
         msg = LocalTrajectoryV4()
         msg.header = Header()
         msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = self.frame_id  # 使用配置的坐标系
+        msg.header.frame_id = self._frame_id
+        msg.mode = MODE_STOP
+        msg.points = [Point(x=0.0, y=0.0, z=0.0)]
+        msg.velocities_flat = []
+        msg.soft_enabled = False
+        msg.dt_sec = self._dt
+        msg.confidence = 1.0
+        return msg
+    
+    def run(self):
+        """Main loop"""
+        rospy.loginfo("TrajectoryPublisher running...")
+        rospy.spin()
+
+
+class StopTrajectoryPublisher:
+    """Publish stop trajectory (one-shot)"""
+    
+    def __init__(self):
+        rospy.init_node('stop_trajectory_publisher', anonymous=True)
+        
+        # Use unified configuration
+        config = ParamLoader.load(node=None, validate=False)
+        topics = ParamLoader.get_topics(node=None)
+        transform_config = config.get('transform', {})
+        
+        self._output_topic = rospy.get_param(
+            '~output_topic',
+            topics.get('trajectory', TOPICS_DEFAULTS['trajectory'])
+        )
+        
+        private_frame = rospy.get_param('~frame_id', None)
+        self._frame_id = private_frame or transform_config.get('source_frame', 'base_link')
+        
+        self._pub = rospy.Publisher(self._output_topic, LocalTrajectoryV4, queue_size=1)
+        rospy.sleep(0.5)
+    
+    def publish_stop(self):
+        """Publish stop trajectory"""
+        msg = LocalTrajectoryV4()
+        msg.header = Header()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = self._frame_id
         msg.mode = MODE_STOP
         msg.points = [Point(x=0.0, y=0.0, z=0.0)]
         msg.velocities_flat = []
@@ -260,13 +301,10 @@ class StopTrajectoryPublisher:
         msg.dt_sec = 0.1
         msg.confidence = 1.0
         
-        self.pub.publish(msg)
-        rospy.loginfo("已发布停止轨迹")
+        self._pub.publish(msg)
+        rospy.loginfo("Published stop trajectory")
 
 
-# =============================================================================
-# 主函数
-# =============================================================================
 def main():
     try:
         publisher = TrajectoryPublisher()
@@ -274,26 +312,25 @@ def main():
     except rospy.ROSInterruptException:
         pass
     except Exception as e:
-        rospy.logerr(f"TrajectoryPublisher 异常: {e}")
+        rospy.logerr(f"TrajectoryPublisher exception: {e}")
         raise
 
 
 def main_stop():
-    """发布停止轨迹的入口函数"""
     try:
         publisher = StopTrajectoryPublisher()
         publisher.publish_stop()
     except rospy.ROSInterruptException:
         pass
     except Exception as e:
-        rospy.logerr(f"StopTrajectoryPublisher 异常: {e}")
+        rospy.logerr(f"StopTrajectoryPublisher exception: {e}")
         raise
 
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='轨迹发布器')
-    parser.add_argument('--stop', action='store_true', help='发布停止轨迹')
+    parser = argparse.ArgumentParser(description='Trajectory Publisher')
+    parser.add_argument('--stop', action='store_true', help='Publish stop trajectory')
     args = parser.parse_args()
     
     if args.stop:

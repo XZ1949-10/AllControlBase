@@ -56,130 +56,177 @@ class AnalysisResult:
 # 参数分类定义
 # =============================================================================
 # 明确哪些参数可以自动调优，哪些不应该
+# 
+# 参数来源说明:
+# - turtlebot1.yaml 只覆盖与默认值不同的配置项
+# - 未在 turtlebot1.yaml 中定义的参数使用 universal_controller/config/*.py 的默认值
+# - 调优工具可以分析所有参数，如果需要调整会在生成的配置中添加
 
 # 可调优参数：基于运行数据可以安全调整
 TUNABLE_PARAMS = {
+    # =========================================================================
     # 超时配置 - 基于实际延迟统计
-    'watchdog.odom_timeout_ms',
-    'watchdog.traj_timeout_ms',
-    'watchdog.traj_grace_ms',
-    'watchdog.imu_timeout_ms',
-    'watchdog.startup_grace_ms',
+    # 默认值: universal_controller/config/system_config.py WATCHDOG_CONFIG
+    # turtlebot1.yaml 覆盖: traj_grace_ms
+    # =========================================================================
+    'watchdog.odom_timeout_ms',      # 默认 500
+    'watchdog.traj_timeout_ms',      # 默认 1000
+    'watchdog.traj_grace_ms',        # 默认 500, turtlebot1: 600
+    'watchdog.imu_timeout_ms',       # 默认 -1 (禁用)
+    'watchdog.startup_grace_ms',     # 默认 5000
+    'watchdog.absolute_startup_timeout_ms',  # 默认 -1 (禁用)
     
+    # =========================================================================
     # MPC 健康监控阈值 - 基于求解时间统计
-    'mpc.health_monitor.time_warning_thresh_ms',
-    'mpc.health_monitor.time_critical_thresh_ms',
-    'mpc.health_monitor.time_recovery_thresh_ms',
-    'mpc.health_monitor.consecutive_warning_limit',
-    'mpc.health_monitor.kkt_residual_thresh',
-    'mpc.health_monitor.condition_number_thresh',
-    'mpc.health_monitor.condition_number_recovery',
+    # 默认值: universal_controller/config/mpc_config.py MPC_CONFIG['health_monitor']
+    # turtlebot1.yaml 覆盖: 全部
+    # =========================================================================
+    'mpc.health_monitor.time_warning_thresh_ms',   # 默认 8, turtlebot1: 20
+    'mpc.health_monitor.time_critical_thresh_ms',  # 默认 15, turtlebot1: 40
+    'mpc.health_monitor.time_recovery_thresh_ms',  # 默认 6, turtlebot1: 15
+    'mpc.health_monitor.consecutive_warning_limit', # 默认 3, turtlebot1: 10
     
+    # =========================================================================
     # MPC 预测时域 - 基于求解时间与控制周期关系
-    'mpc.horizon',
-    'mpc.horizon_degraded',
+    # 默认值: universal_controller/config/mpc_config.py MPC_CONFIG
+    # turtlebot1.yaml 覆盖: horizon, horizon_degraded
+    # =========================================================================
+    'mpc.horizon',           # 默认 20, turtlebot1: 7
+    'mpc.horizon_degraded',  # 默认 10, turtlebot1: 4
+    'mpc.dt',                # 默认 0.1
     
-    # MPC 权重 - 基于跟踪误差统计（需验证）
-    'mpc.weights.position',
-    'mpc.weights.velocity',
-    'mpc.weights.heading',
+    # =========================================================================
+    # MPC 权重 - 基于跟踪误差统计
+    # 默认值: universal_controller/config/mpc_config.py MPC_CONFIG['weights']
+    # turtlebot1.yaml 覆盖: position, velocity, heading
+    # =========================================================================
+    'mpc.weights.position',  # 默认 10.0, turtlebot1: 15.0
+    'mpc.weights.velocity',  # 默认 1.0, turtlebot1: 6.0
+    'mpc.weights.heading',   # 默认 5.0, turtlebot1: 8.0
     
+    # =========================================================================
     # 状态机参数 - 基于状态转换统计
-    'safety.state_machine.mpc_fail_thresh',
-    'safety.state_machine.mpc_fail_ratio_thresh',
-    'safety.state_machine.mpc_recovery_thresh',
-    'safety.state_machine.mpc_recovery_success_ratio',
+    # 默认值: universal_controller/config/safety_config.py SAFETY_CONFIG['state_machine']
+    # turtlebot1.yaml 覆盖: mpc_recovery_tolerance
+    # =========================================================================
+    'safety.state_machine.mpc_fail_thresh',          # 默认 3
+    'safety.state_machine.mpc_fail_ratio_thresh',    # 默认 0.5
+    'safety.state_machine.mpc_recovery_thresh',      # 默认 5
+    'safety.state_machine.mpc_recovery_tolerance',   # 默认 0, turtlebot1: 1
+    'safety.state_machine.mpc_recovery_success_ratio', # 默认 0.8
     
-    # 跟踪质量阈值 - 仅影响显示，不影响控制
-    'tracking.lateral_thresh',
-    'tracking.longitudinal_thresh',
-    'tracking.heading_thresh',
-    'tracking.prediction_thresh',
+    # =========================================================================
+    # 跟踪质量阈值 - 仅影响 Dashboard 显示，不影响控制
+    # 默认值: universal_controller/config/system_config.py TRACKING_CONFIG
+    # turtlebot1.yaml 覆盖: lateral_thresh, longitudinal_thresh
+    # =========================================================================
+    'tracking.lateral_thresh',       # 默认 0.3, turtlebot1: 0.25
+    'tracking.longitudinal_thresh',  # 默认 0.5, turtlebot1: 0.6
+    'tracking.heading_thresh',       # 默认 0.5 (rad)
+    'tracking.prediction_thresh',    # 默认 0.5
     
-    # 坐标变换降级阈值 - 基于 TF2 可用性统计
-    'transform.fallback_duration_limit_ms',
-    'transform.fallback_critical_limit_ms',
-    'transform.timeout_ms',
+    # =========================================================================
+    # 坐标变换配置
+    # 默认值: universal_controller/config/transform_config.py
+    # turtlebot1.yaml 覆盖: timeout_ms, buffer_warmup_*
+    # =========================================================================
+    'transform.timeout_ms',                  # 默认 10, turtlebot1: 50
+    'transform.buffer_warmup_timeout_sec',   # 默认 2.0, turtlebot1: 5.0
+    'transform.buffer_warmup_interval_sec',  # 默认 0.1, turtlebot1: 0.2
     
+    # =========================================================================
     # 备份控制器参数 - 基于备份激活时的表现
-    'backup.lookahead_dist',
-    'backup.kp_heading',
+    # 默认值: universal_controller/config/backup_config.py
+    # turtlebot1.yaml 覆盖: 全部
+    # =========================================================================
+    'backup.lookahead_dist',  # 默认 1.0, turtlebot1: 0.5
+    'backup.min_lookahead',   # 默认 0.5, turtlebot1: 0.3
+    'backup.max_lookahead',   # 默认 3.0, turtlebot1: 1.5
+    'backup.kp_heading',      # 默认 1.5, turtlebot1: 2.0
+    
+    # =========================================================================
+    # 轨迹配置
+    # 默认值: universal_controller/config/trajectory_config.py
+    # turtlebot1.yaml 覆盖: low_speed_thresh
+    # =========================================================================
+    'trajectory.low_speed_thresh',  # 默认 0.1, turtlebot1: 0.05
+    
+    # =========================================================================
+    # 诊断配置
+    # 默认值: universal_controller/config/system_config.py DIAGNOSTICS_CONFIG
+    # turtlebot1.yaml 覆盖: publish_rate
+    # =========================================================================
+    'diagnostics.publish_rate',  # 默认 10, turtlebot1: 5
+    
+    # =========================================================================
+    # 低速保护阈值 - 影响角速度限制的过渡
+    # 默认值: universal_controller/config/safety_config.py CONSTRAINTS_CONFIG
+    # turtlebot1.yaml 未覆盖
+    # =========================================================================
+    'constraints.v_low_thresh',  # 默认 0.1
 }
 
 # 设计参数：需要系统辨识或专业知识，不应自动调整
 DESIGN_PARAMS = {
-    # EKF 噪声参数 - 需要传感器规格或系统辨识
-    'ekf.process_noise.position',
-    'ekf.process_noise.velocity',
-    'ekf.process_noise.orientation',
-    'ekf.process_noise.angular_velocity',
-    'ekf.process_noise.imu_bias',
-    'ekf.measurement_noise.odom_position',
-    'ekf.measurement_noise.odom_velocity',
-    'ekf.measurement_noise.odom_orientation',
-    'ekf.measurement_noise.odom_angular_velocity',
-    'ekf.measurement_noise.imu_accel',
-    'ekf.measurement_noise.imu_gyro',
+    # =========================================================================
+    # 一致性检查权重 - 是设计参数，不应根据运行数据调整
+    # 默认值: universal_controller/config/consistency_config.py
+    # turtlebot1.yaml 覆盖: 全部
+    # =========================================================================
+    'consistency.weights.kappa',     # 默认 1.0, turtlebot1: 0.3
+    'consistency.weights.velocity',  # 默认 1.5, turtlebot1: 0.3
+    'consistency.weights.temporal',  # 默认 0.8, turtlebot1: 0.4
     
-    # EKF 自适应参数 - 与底盘特性相关
-    'ekf.adaptive.base_slip_thresh',
-    'ekf.adaptive.slip_velocity_factor',
-    'ekf.adaptive.slip_covariance_scale',
-    
-    # 一致性检查阈值 - 是设计参数，不应根据运行数据调整
-    'consistency.kappa_thresh',
-    'consistency.v_dir_thresh',
-    'consistency.temporal_smooth_thresh',
-    'consistency.alpha_min',
-    'consistency.invalid_data_confidence',
-    
-    # 过渡配置 - 是设计参数
-    'transition.tau',
-    'transition.max_duration',
-    'transition.completion_threshold',
-    
+    # =========================================================================
     # MPC 控制输入权重 - 需要控制理论知识
-    'mpc.weights.control_accel',
-    'mpc.weights.control_alpha',
+    # 默认值: universal_controller/config/mpc_config.py MPC_CONFIG['weights']
+    # turtlebot1.yaml 未覆盖
+    # =========================================================================
+    'mpc.weights.control_accel',  # 默认 0.1
+    'mpc.weights.control_alpha',  # 默认 0.1
 }
 
-# 安全参数：不应自动放宽
+# 安全参数：不应自动放宽，只检测配置错误
 SAFETY_PARAMS = {
+    # =========================================================================
     # 速度/加速度约束 - 安全限制
-    'constraints.v_max',
-    'constraints.v_min',
-    'constraints.omega_max',
-    'constraints.omega_max_low',
-    'constraints.a_max',
-    'constraints.alpha_max',
-    'constraints.vx_max',
-    'constraints.vy_max',
-    'constraints.vz_max',
+    # 默认值: universal_controller/config/safety_config.py CONSTRAINTS_CONFIG
+    # turtlebot1.yaml 覆盖: 全部
+    # =========================================================================
+    'constraints.v_max',        # 默认 2.0, turtlebot1: 0.5
+    'constraints.v_min',        # 默认 0.0, turtlebot1: -0.2
+    'constraints.omega_max',    # 默认 2.0, turtlebot1: 1.0
+    'constraints.omega_max_low', # 默认 1.0, turtlebot1: 0.5
+    'constraints.a_max',        # 默认 1.5, turtlebot1: 0.5
+    'constraints.alpha_max',    # 默认 3.0, turtlebot1: 1.5
     
+    # =========================================================================
     # 安全配置
-    'safety.emergency_decel',
-    'safety.velocity_margin',
-    'safety.accel_margin',
-    'safety.v_stop_thresh',
-    
-    # EKF 异常检测阈值 - 安全相关
-    'ekf.anomaly_detection.covariance_explosion_thresh',
-    'ekf.anomaly_detection.innovation_anomaly_thresh',
-    'ekf.anomaly_detection.drift_thresh',
-    'ekf.anomaly_detection.jump_thresh',
+    # 默认值: universal_controller/config/safety_config.py SAFETY_CONFIG
+    # turtlebot1.yaml 覆盖: emergency_decel
+    # =========================================================================
+    'safety.emergency_decel',  # 默认 3.0, turtlebot1: 1.0
 }
 
 # 差速车平台不使用的参数
 NON_DIFFERENTIAL_PARAMS = {
     'constraints.vy_max', 'constraints.vy_min',
     'constraints.vz_max', 'constraints.az_max',
-    'backup.kp_z', 'safety.vz_stop_thresh',
+    'backup.kp_z',
 }
 
 
 @dataclass
 class DiagnosticsStats:
-    """诊断统计数据"""
+    """诊断统计数据
+    
+    字段命名规范:
+    - xxx_count: 事件发生次数
+    - xxx_state_count: 处于某状态的样本数 (与 ControllerState 枚举对应)
+    
+    注意: 诊断消息中的 backup_active 布尔字段等价于 state == BACKUP_ACTIVE，
+    因此统一使用 backup_active_state_count，不再单独统计 backup_active 标志。
+    """
     # MPC 相关
     mpc_solve_times: List[float] = field(default_factory=list)
     mpc_success_count: int = 0
@@ -194,6 +241,10 @@ class DiagnosticsStats:
     longitudinal_errors: List[float] = field(default_factory=list)
     heading_errors: List[float] = field(default_factory=list)
     prediction_errors: List[float] = field(default_factory=list)
+    
+    # 跟踪质量评估
+    tracking_quality_scores: List[float] = field(default_factory=list)
+    tracking_quality_ratings: List[str] = field(default_factory=list)
     
     # 一致性
     alpha_values: List[float] = field(default_factory=list)
@@ -220,13 +271,16 @@ class DiagnosticsStats:
     cmd_omega: List[float] = field(default_factory=list)
     
     # 状态统计 (与 ControllerState 枚举对应)
+    # state_counts: 按状态值分组的计数字典
+    # xxx_state_count: 各状态的独立计数，便于快速访问
     state_counts: Dict[int, int] = field(default_factory=dict)
-    backup_active_count: int = 0
-    soft_disabled_count: int = 0
-    mpc_degraded_count: int = 0
-    stopping_count: int = 0
-    stopped_count: int = 0
-    normal_count: int = 0
+    init_state_count: int = 0           # ControllerState.INIT = 0
+    normal_state_count: int = 0         # ControllerState.NORMAL = 1
+    soft_disabled_state_count: int = 0  # ControllerState.SOFT_DISABLED = 2
+    mpc_degraded_state_count: int = 0   # ControllerState.MPC_DEGRADED = 3
+    backup_active_state_count: int = 0  # ControllerState.BACKUP_ACTIVE = 4
+    stopping_state_count: int = 0       # ControllerState.STOPPING = 5
+    stopped_state_count: int = 0        # ControllerState.STOPPED = 6
     
     # EKF/状态估计
     estimator_covariance_norms: List[float] = field(default_factory=list)
@@ -240,9 +294,9 @@ class DiagnosticsStats:
     tf2_fallback_count: int = 0
     tf2_available_count: int = 0
     accumulated_drifts: List[float] = field(default_factory=list)
-    transform_source_frames: List[str] = field(default_factory=list)  # 源坐标系记录
-    transform_target_frames: List[str] = field(default_factory=list)  # 目标坐标系记录
-    transform_error_messages: List[str] = field(default_factory=list)  # 错误信息记录
+    transform_source_frames: List[str] = field(default_factory=list)
+    transform_target_frames: List[str] = field(default_factory=list)
+    transform_error_messages: List[str] = field(default_factory=list)
     
     # 安全状态
     safety_check_failed_count: int = 0
@@ -291,9 +345,13 @@ class DiagnosticsAnalyzer:
         return self._platform
     
     def _get_ctrl_freq(self) -> float:
-        """获取控制频率"""
+        """获取控制频率
+        
+        默认值 50Hz 与 universal_controller 默认配置一致
+        turtlebot1.yaml 覆盖为 20Hz
+        """
         if self._ctrl_freq is None:
-            self._ctrl_freq = self.config.get('system', {}).get('ctrl_freq', 20)
+            self._ctrl_freq = self.config.get('system', {}).get('ctrl_freq', 50)
         return self._ctrl_freq
     
     def _get_ctrl_period_ms(self) -> float:
@@ -370,6 +428,14 @@ class DiagnosticsAnalyzer:
                     val = tracking[key]
                     if np.isfinite(val):
                         lst.append(val)
+            
+            # 跟踪质量评估
+            if 'quality_score' in tracking:
+                val = tracking['quality_score']
+                if np.isfinite(val):
+                    self.stats.tracking_quality_scores.append(val)
+            if 'quality_rating' in tracking:
+                self.stats.tracking_quality_ratings.append(tracking['quality_rating'])
         
         # 一致性
         consistency = diagnostics.get('consistency', {})
@@ -420,23 +486,31 @@ class DiagnosticsAnalyzer:
                 self.stats.cmd_omega.append(cmd['omega'])
         
         # 状态统计
-        state = diagnostics.get('state', 0)
-        self.stats.state_counts[state] = self.stats.state_counts.get(state, 0) + 1
+        # 将 state 转换为 ControllerState 枚举，确保类型一致性
+        state_value = diagnostics.get('state', 0)
+        try:
+            state = ControllerState(state_value)
+        except ValueError:
+            # 未知状态值，使用 INIT 作为默认
+            state = ControllerState.INIT
         
-        if diagnostics.get('backup_active', False):
-            self.stats.backup_active_count += 1
+        self.stats.state_counts[int(state)] = self.stats.state_counts.get(int(state), 0) + 1
         
         # 按状态类型分别统计
-        if state == ControllerState.NORMAL:
-            self.stats.normal_count += 1
-        elif state == ControllerState.SOFT_DISABLED:
-            self.stats.soft_disabled_count += 1
-        elif state == ControllerState.MPC_DEGRADED:
-            self.stats.mpc_degraded_count += 1
-        elif state == ControllerState.STOPPING:
-            self.stats.stopping_count += 1
-        elif state == ControllerState.STOPPED:
-            self.stats.stopped_count += 1
+        # 使用字典映射替代 if-elif 链，更简洁且易于维护
+        state_counter_map = {
+            ControllerState.INIT: 'init_state_count',
+            ControllerState.NORMAL: 'normal_state_count',
+            ControllerState.SOFT_DISABLED: 'soft_disabled_state_count',
+            ControllerState.MPC_DEGRADED: 'mpc_degraded_state_count',
+            ControllerState.BACKUP_ACTIVE: 'backup_active_state_count',
+            ControllerState.STOPPING: 'stopping_state_count',
+            ControllerState.STOPPED: 'stopped_state_count',
+        }
+        
+        counter_name = state_counter_map.get(state)
+        if counter_name:
+            setattr(self.stats, counter_name, getattr(self.stats, counter_name) + 1)
         
         # EKF/状态估计
         estimator = diagnostics.get('estimator_health', {})
@@ -535,6 +609,7 @@ class DiagnosticsAnalyzer:
         """分析配置错误 - 检测必须修复的硬性错误
         
         这些是配置错误，不是调优建议，必须修复。
+        注意：此方法只检测静态配置错误，不依赖运行数据的分析在其他方法中进行。
         """
         mpc_config = self.config.get('mpc', {})
         trajectory_config = self.config.get('trajectory', {})
@@ -602,24 +677,7 @@ class DiagnosticsAnalyzer:
                 tuning_category=TuningCategory.TUNABLE
             ))
         
-        # 5. 检查 MPC 求解时间与控制周期的关系
-        if self.stats.mpc_solve_times:
-            solve_arr = np.array(self.stats.mpc_solve_times)
-            max_solve = np.max(solve_arr)
-            
-            if max_solve > ctrl_period_ms:
-                self.results.append(AnalysisResult(
-                    category="config_error",
-                    severity="critical",
-                    parameter="mpc.horizon",
-                    current_value=horizon,
-                    suggested_value=max(horizon - 2, 3),
-                    reason=f"MPC最大求解时间({max_solve:.1f}ms)超过控制周期({ctrl_period_ms:.1f}ms)，需要减小预测时域。",
-                    confidence=0.95,
-                    tuning_category=TuningCategory.TUNABLE
-                ))
-        
-        # 6. 检查跟踪权重总和
+        # 5. 检查跟踪权重总和（静态配置检查）
         tracking_config = self.config.get('tracking', {})
         weights = tracking_config.get('weights', {})
         lateral_weight = weights.get('lateral', 0.4)
@@ -638,6 +696,9 @@ class DiagnosticsAnalyzer:
                 confidence=1.0,
                 tuning_category=TuningCategory.DIAGNOSTIC
             ))
+        
+        # 注意：MPC 求解时间与控制周期的关系检查移至 _analyze_mpc_performance，
+        # 因为它依赖运行数据，属于性能分析而非静态配置错误检测。
 
 
     def _analyze_timeout_config(self):
@@ -734,57 +795,76 @@ class DiagnosticsAnalyzer:
 
 
     def _analyze_mpc_performance(self):
-        """分析 MPC 性能"""
+        """分析 MPC 性能
+        
+        分析 MPC 成功率和求解时间，生成 horizon 调优建议。
+        注意：为避免重复建议，只在最严重的问题上生成一个 horizon 建议。
+        """
         if not self.stats.mpc_solve_times:
             return
         
         solve_times = np.array(self.stats.mpc_solve_times)
-        avg_time = np.mean(solve_times)
-        max_time = np.max(solve_times)
         p95_time = np.percentile(solve_times, 95)
         
         mpc_config = self.config.get('mpc', {})
         ctrl_period_ms = self._get_ctrl_period_ms()
+        current_horizon = mpc_config.get('horizon', 7)
         
         # 分析 MPC 成功率
         total = self.stats.mpc_success_count + self.stats.mpc_fail_count
-        if total > 0:
-            success_rate = self.stats.mpc_success_count / total
-            if success_rate < 0.9:
-                current_horizon = mpc_config.get('horizon', 7)
-                self.results.append(AnalysisResult(
-                    category="mpc",
-                    severity="warning",
-                    parameter="mpc.horizon",
-                    current_value=current_horizon,
-                    suggested_value=max(current_horizon - 1, 3),
-                    reason=f"MPC成功率({success_rate*100:.1f}%)较低，建议减小预测时域。",
-                    confidence=0.7,
-                    tuning_category=TuningCategory.TUNABLE
-                ))
+        success_rate = self.stats.mpc_success_count / total if total > 0 else 1.0
         
         # 分析求解时间与控制周期的关系
-        if p95_time > ctrl_period_ms * 0.5:
-            current_horizon = mpc_config.get('horizon', 7)
+        time_ratio = p95_time / ctrl_period_ms if ctrl_period_ms > 0 else 0
+        
+        # 综合判断是否需要减小 horizon（只生成一个建议，避免重复）
+        horizon_issue_severity = None
+        horizon_issue_reason = None
+        horizon_confidence = 0.0
+        
+        # 优先级：求解时间超过控制周期 > 成功率低 > 求解时间占用过高
+        if time_ratio > 1.0:
+            # 求解时间超过控制周期，严重问题
+            horizon_issue_severity = "critical"
+            horizon_issue_reason = f"MPC求解时间({p95_time:.1f}ms)超过控制周期({ctrl_period_ms:.1f}ms)，必须减小预测时域。"
+            horizon_confidence = 0.95
+        elif success_rate < 0.85:
+            # 成功率过低
+            horizon_issue_severity = "warning"
+            horizon_issue_reason = f"MPC成功率({success_rate*100:.1f}%)较低，建议减小预测时域。"
+            horizon_confidence = 0.8
+        elif time_ratio > 0.5:
+            # 求解时间占用控制周期过高
+            horizon_issue_severity = "warning"
+            horizon_issue_reason = f"MPC求解时间({p95_time:.1f}ms)占用控制周期({ctrl_period_ms:.1f}ms)>{time_ratio*100:.0f}%，建议减小预测时域。"
+            horizon_confidence = 0.7
+        
+        if horizon_issue_severity:
             self.results.append(AnalysisResult(
                 category="mpc",
-                severity="warning",
+                severity=horizon_issue_severity,
                 parameter="mpc.horizon",
                 current_value=current_horizon,
                 suggested_value=max(current_horizon - 1, 3),
-                reason=f"MPC求解时间({p95_time:.1f}ms)占用控制周期({ctrl_period_ms:.1f}ms)>50%，建议减小预测时域。",
-                confidence=0.7,
+                reason=horizon_issue_reason,
+                confidence=horizon_confidence,
                 tuning_category=TuningCategory.TUNABLE
             ))
 
     def _analyze_mpc_health_monitor(self):
-        """分析 MPC 健康监控参数"""
+        """分析 MPC 健康监控参数
+        
+        只分析 turtlebot1.yaml 中实际存在的参数:
+        - time_warning_thresh_ms
+        - time_critical_thresh_ms
+        - time_recovery_thresh_ms
+        - consecutive_warning_limit
+        """
         if not self.stats.mpc_solve_times:
             return
         
         solve_times = np.array(self.stats.mpc_solve_times)
         p95_time = np.percentile(solve_times, 95)
-        max_time = np.max(solve_times)
         p10_time = np.percentile(solve_times, 10)
         
         mpc_config = self.config.get('mpc', {})
@@ -837,42 +917,6 @@ class DiagnosticsAnalyzer:
                 tuning_category=TuningCategory.TUNABLE
             ))
         
-        # 分析 KKT 残差阈值
-        if self.stats.kkt_residuals:
-            kkt_arr = np.array(self.stats.kkt_residuals)
-            p99_kkt = np.percentile(kkt_arr, 99)
-            current_kkt_thresh = health_config.get('kkt_residual_thresh', 0.001)
-            
-            if p99_kkt > current_kkt_thresh:
-                self.results.append(AnalysisResult(
-                    category="mpc",
-                    severity="warning",
-                    parameter="mpc.health_monitor.kkt_residual_thresh",
-                    current_value=current_kkt_thresh,
-                    suggested_value=round(p99_kkt * 1.5, 6),
-                    reason=f"99%分位KKT残差({p99_kkt:.6f})超过阈值({current_kkt_thresh})。",
-                    confidence=0.7,
-                    tuning_category=TuningCategory.TUNABLE
-                ))
-        
-        # 分析条件数阈值
-        if self.stats.condition_numbers:
-            cond_arr = np.array(self.stats.condition_numbers)
-            p99_cond = np.percentile(cond_arr, 99)
-            current_cond_thresh = health_config.get('condition_number_thresh', 1e8)
-            
-            if p99_cond > current_cond_thresh * 0.5:
-                self.results.append(AnalysisResult(
-                    category="mpc",
-                    severity="warning",
-                    parameter="mpc.health_monitor.condition_number_thresh",
-                    current_value=current_cond_thresh,
-                    suggested_value=p99_cond * 2,
-                    reason=f"99%分位条件数({p99_cond:.2e})接近阈值({current_cond_thresh:.2e})。",
-                    confidence=0.6,
-                    tuning_category=TuningCategory.TUNABLE
-                ))
-        
         # 分析连续警告限制
         if self.stats.mpc_consecutive_near_timeouts:
             max_consecutive = max(self.stats.mpc_consecutive_near_timeouts)
@@ -898,6 +942,11 @@ class DiagnosticsAnalyzer:
         - 使用保守的调整策略，避免过度调整
         - 只在误差明显超过阈值时才建议调整
         - 保持权重之间的相对比例
+        
+        只分析 turtlebot1.yaml 中实际存在的参数:
+        - tracking.lateral_thresh
+        - tracking.longitudinal_thresh
+        - mpc.weights.position/velocity/heading
         """
         tracking_config = self.config.get('tracking', {})
         mpc_config = self.config.get('mpc', {})
@@ -984,11 +1033,13 @@ class DiagnosticsAnalyzer:
                 ))
         
         # 航向误差分析
+        # 默认值: universal_controller/config/system_config.py TRACKING_CONFIG['heading_thresh'] = 0.5
         if self.stats.heading_errors:
             head_arr = np.array(self.stats.heading_errors)
             avg_head = np.mean(head_arr)
             p95_head = np.percentile(head_arr, 95)
             
+            # 从配置读取阈值，默认 0.5 rad (约 28.6 度)
             current_thresh = tracking_config.get('heading_thresh', 0.5)
             
             if avg_head > current_thresh * 0.6:
@@ -1007,6 +1058,7 @@ class DiagnosticsAnalyzer:
                     tuning_category=TuningCategory.TUNABLE
                 ))
             
+            # 航向阈值调整（仅影响 Dashboard 显示）
             if p95_head > current_thresh:
                 suggested_thresh = round(p95_head * 1.2, 2)
                 self.results.append(AnalysisResult(
@@ -1015,127 +1067,136 @@ class DiagnosticsAnalyzer:
                     parameter="tracking.heading_thresh",
                     current_value=current_thresh,
                     suggested_value=suggested_thresh,
-                    reason=f"95%分位航向误差({np.degrees(p95_head):.1f}deg)超过阈值。",
+                    reason=f"95%分位航向误差({np.degrees(p95_head):.1f}deg)超过阈值({np.degrees(current_thresh):.0f}deg)。",
                     confidence=0.7,
                     tuning_category=TuningCategory.TUNABLE
                 ))
+        
+        # 预测误差分析
+        # 默认值: universal_controller/config/system_config.py TRACKING_CONFIG['prediction_thresh'] = 0.5
+        if self.stats.prediction_errors:
+            # 过滤掉 NaN 值（fallback 求解器不提供预测状态）
+            valid_pred_errors = [e for e in self.stats.prediction_errors if np.isfinite(e)]
+            if valid_pred_errors:
+                pred_arr = np.array(valid_pred_errors)
+                avg_pred = np.mean(pred_arr)
+                p95_pred = np.percentile(pred_arr, 95)
+                
+                # 从配置读取阈值
+                current_thresh = tracking_config.get('prediction_thresh', 0.5)
+                
+                # 预测误差较大可能表明：
+                # 1. MPC 时间步长与实际控制周期不匹配
+                # 2. 模型参数（如加速度限制）与实际不符
+                # 3. 状态估计器延迟较大
+                if avg_pred > 0.3:  # 30cm 作为参考阈值
+                    mpc_dt = mpc_config.get('dt', 0.1)
+                    ctrl_freq = self._get_ctrl_freq()
+                    expected_dt = 1.0 / ctrl_freq
+                    
+                    # 检查 MPC dt 与控制周期是否匹配
+                    if abs(mpc_dt - expected_dt) > 0.01:
+                        self.results.append(AnalysisResult(
+                            category="tracking",
+                            severity="warning",
+                            parameter="mpc.dt",
+                            current_value=mpc_dt,
+                            suggested_value=round(expected_dt, 3),
+                            reason=f"预测误差({avg_pred*100:.1f}cm)较大，MPC时间步长({mpc_dt}s)与控制周期({expected_dt:.3f}s)不匹配。",
+                            confidence=0.8,
+                            tuning_category=TuningCategory.TUNABLE
+                        ))
+                    else:
+                        # dt 匹配但预测误差仍然较大，仅报告诊断信息
+                        self.results.append(AnalysisResult(
+                            category="tracking",
+                            severity="info",
+                            parameter="mpc.model",
+                            current_value=f"预测误差 {avg_pred*100:.1f}cm",
+                            suggested_value=None,
+                            reason=f"[诊断信息] 预测误差({avg_pred*100:.1f}cm)较大，可能需要检查MPC模型参数或状态估计器延迟。",
+                            confidence=0.0,
+                            tuning_category=TuningCategory.DIAGNOSTIC
+                        ))
+                
+                # 预测阈值调整（仅影响 Dashboard 显示）
+                if p95_pred > current_thresh:
+                    suggested_thresh = round(p95_pred * 1.2, 2)
+                    self.results.append(AnalysisResult(
+                        category="tracking",
+                        severity="info",
+                        parameter="tracking.prediction_thresh",
+                        current_value=current_thresh,
+                        suggested_value=suggested_thresh,
+                        reason=f"95%分位预测误差({p95_pred*100:.1f}cm)超过阈值({current_thresh*100:.0f}cm)。",
+                        confidence=0.7,
+                        tuning_category=TuningCategory.TUNABLE
+                    ))
 
 
     def _analyze_state_machine(self):
-        """分析状态机配置"""
+        """分析状态机配置
+        
+        可调优参数:
+        - safety.state_machine.mpc_recovery_tolerance (turtlebot1.yaml 覆盖)
+        - safety.state_machine.mpc_fail_thresh (使用默认值)
+        - safety.state_machine.mpc_recovery_thresh (使用默认值)
+        - safety.state_machine.mpc_fail_ratio_thresh (使用默认值)
+        - safety.state_machine.mpc_recovery_success_ratio (使用默认值)
+        """
         safety_config = self.config.get('safety', {})
         state_machine = safety_config.get('state_machine', {})
         
         if self.stats.total_samples == 0:
             return
         
-        # 计算各种比率
-        degraded_rate = self.stats.mpc_degraded_count / self.stats.total_samples
-        backup_rate = self.stats.backup_active_count / self.stats.total_samples
+        # 计算各种比率（统一使用基于状态枚举的统计）
+        degraded_rate = self.stats.mpc_degraded_state_count / self.stats.total_samples
+        backup_rate = self.stats.backup_active_state_count / self.stats.total_samples
         
         total_mpc = self.stats.mpc_success_count + self.stats.mpc_fail_count
         mpc_success_rate = self.stats.mpc_success_count / total_mpc if total_mpc > 0 else 0
         
-        # 1. 如果 MPC 成功率高但降级频繁，说明阈值太敏感
+        # 1. 如果 MPC 成功率高但降级频繁，说明恢复容忍度可能需要调整
         if degraded_rate > 0.1 and mpc_success_rate > 0.8:
-            current_fail_thresh = state_machine.get('mpc_fail_thresh', 3)
+            current_tolerance = state_machine.get('mpc_recovery_tolerance', 1)
             self.results.append(AnalysisResult(
                 category="state_machine",
                 severity="warning",
-                parameter="safety.state_machine.mpc_fail_thresh",
-                current_value=current_fail_thresh,
-                suggested_value=min(current_fail_thresh + 2, 10),
-                reason=f"MPC成功率({mpc_success_rate*100:.1f}%)高但降级频繁({degraded_rate*100:.1f}%)，阈值过敏感。",
+                parameter="safety.state_machine.mpc_recovery_tolerance",
+                current_value=current_tolerance,
+                suggested_value=min(current_tolerance + 1, 3),
+                reason=f"MPC成功率({mpc_success_rate*100:.1f}%)高但降级频繁({degraded_rate*100:.1f}%)，可增加恢复容忍度。",
                 confidence=0.8,
                 tuning_category=TuningCategory.TUNABLE
             ))
         
-        # 2. 如果备用控制器激活率过高，可能恢复条件太严格
+        # 2. 如果备用控制器激活率过高，报告诊断信息
         if backup_rate > 0.15:
-            current_success_ratio = state_machine.get('mpc_recovery_success_ratio', 0.8)
             self.results.append(AnalysisResult(
                 category="state_machine",
                 severity="warning",
-                parameter="safety.state_machine.mpc_recovery_success_ratio",
-                current_value=current_success_ratio,
-                suggested_value=max(current_success_ratio - 0.1, 0.6),
-                reason=f"备用控制器激活率({backup_rate*100:.1f}%)过高，恢复条件可能太严格。",
-                confidence=0.7,
-                tuning_category=TuningCategory.TUNABLE
+                parameter="safety.state_machine",
+                current_value=f"备用控制器激活率 {backup_rate*100:.1f}%",
+                suggested_value=None,
+                reason=f"[诊断信息] 备用控制器激活率({backup_rate*100:.1f}%)过高，建议检查 MPC 配置或轨迹质量。",
+                confidence=0.0,
+                tuning_category=TuningCategory.DIAGNOSTIC
             ))
-            
-            current_recovery_thresh = state_machine.get('mpc_recovery_thresh', 5)
-            self.results.append(AnalysisResult(
-                category="state_machine",
-                severity="info",
-                parameter="safety.state_machine.mpc_recovery_thresh",
-                current_value=current_recovery_thresh,
-                suggested_value=max(current_recovery_thresh - 1, 3),
-                reason=f"备用控制器激活率高，可降低恢复阈值。",
-                confidence=0.5,
-                tuning_category=TuningCategory.TUNABLE
-            ))
-        
-        # 3. Alpha 禁用阈值分析（仅当 alpha 检查未被禁用时）
-        if self.stats.alpha_values and not self._is_alpha_check_disabled():
-            alpha_arr = np.array(self.stats.alpha_values)
-            avg_alpha = np.mean(alpha_arr)
-            alpha_disable_thresh = state_machine.get('alpha_disable_thresh', 0.0)
-            soft_disabled_rate = self.stats.soft_disabled_count / self.stats.total_samples
-            
-            if avg_alpha < 0.3 and soft_disabled_rate > 0.1:
-                self.results.append(AnalysisResult(
-                    category="state_machine",
-                    severity="warning",
-                    parameter="safety.state_machine.alpha_disable_thresh",
-                    current_value=alpha_disable_thresh,
-                    suggested_value=0.0,
-                    reason=f"平均alpha({avg_alpha:.2f})较低且SOFT_DISABLED频繁({soft_disabled_rate*100:.1f}%)，建议禁用alpha检查。",
-                    confidence=0.7,
-                    tuning_category=TuningCategory.TUNABLE
-                ))
 
 
     def _analyze_transform(self):
-        """分析坐标变换配置"""
+        """分析坐标变换配置
+        
+        只分析 turtlebot1.yaml 中实际存在的参数:
+        - transform.timeout_ms
+        - transform.buffer_warmup_timeout_sec
+        - transform.buffer_warmup_interval_sec
+        """
         transform_config = self.config.get('transform', {})
         
         if self.stats.total_samples == 0:
             return
-        
-        # 分析 TF2 降级
-        if self.stats.tf2_fallback_count > 0:
-            fallback_rate = self.stats.tf2_fallback_count / self.stats.total_samples
-            
-            if fallback_rate > 0.05 and self.stats.tf2_fallback_durations:
-                p95_duration = np.percentile(self.stats.tf2_fallback_durations, 95)
-                
-                current_limit = transform_config.get('fallback_duration_limit_ms', 500)
-                current_critical = transform_config.get('fallback_critical_limit_ms', 1000)
-                
-                if p95_duration > current_limit * 0.8:
-                    self.results.append(AnalysisResult(
-                        category="transform",
-                        severity="warning",
-                        parameter="transform.fallback_duration_limit_ms",
-                        current_value=current_limit,
-                        suggested_value=int(p95_duration * 1.5),
-                        reason=f"TF2降级频繁({fallback_rate*100:.1f}%)，95%分位持续{p95_duration:.0f}ms。",
-                        confidence=0.7,
-                        tuning_category=TuningCategory.TUNABLE
-                    ))
-                
-                if p95_duration > current_critical * 0.8:
-                    self.results.append(AnalysisResult(
-                        category="transform",
-                        severity="warning",
-                        parameter="transform.fallback_critical_limit_ms",
-                        current_value=current_critical,
-                        suggested_value=int(p95_duration * 2),
-                        reason=f"TF2降级持续时间({p95_duration:.0f}ms)接近临界限制。",
-                        confidence=0.7,
-                        tuning_category=TuningCategory.TUNABLE
-                    ))
         
         # 分析 TF2 可用率
         tf2_available_rate = self.stats.tf2_available_count / self.stats.total_samples if self.stats.total_samples > 0 else 1.0
@@ -1151,6 +1212,22 @@ class DiagnosticsAnalyzer:
                 confidence=0.6,
                 tuning_category=TuningCategory.TUNABLE
             ))
+        
+        # 分析 TF2 降级情况 - 仅报告诊断信息
+        if self.stats.tf2_fallback_count > 0:
+            fallback_rate = self.stats.tf2_fallback_count / self.stats.total_samples
+            
+            if fallback_rate > 0.05:
+                self.results.append(AnalysisResult(
+                    category="transform",
+                    severity="warning" if fallback_rate > 0.1 else "info",
+                    parameter="transform.fallback",
+                    current_value=f"降级率 {fallback_rate*100:.1f}%",
+                    suggested_value=None,
+                    reason=f"[诊断信息] TF2降级频繁({fallback_rate*100:.1f}%)，建议检查 TF2 发布频率和网络延迟。",
+                    confidence=0.0,
+                    tuning_category=TuningCategory.DIAGNOSTIC
+                ))
         
         # 分析坐标系配置一致性
         self._analyze_transform_frames()
@@ -1263,14 +1340,21 @@ class DiagnosticsAnalyzer:
                 ))
 
     def _analyze_backup_controller(self):
-        """分析备份控制器配置"""
+        """分析备份控制器配置
+        
+        只分析 turtlebot1.yaml 中实际存在的参数:
+        - backup.lookahead_dist
+        - backup.min_lookahead
+        - backup.max_lookahead
+        - backup.kp_heading
+        """
         backup_config = self.config.get('backup', {})
         constraints_config = self.config.get('constraints', {})
         
         if self.stats.total_samples == 0:
             return
         
-        backup_rate = self.stats.backup_active_count / self.stats.total_samples
+        backup_rate = self.stats.backup_active_state_count / self.stats.total_samples
         
         # 只有当备用控制器激活频繁时才分析
         if backup_rate > 0.05:
@@ -1278,6 +1362,8 @@ class DiagnosticsAnalyzer:
             
             # 检查前瞻距离
             lookahead = backup_config.get('lookahead_dist', 0.5)
+            min_lookahead = backup_config.get('min_lookahead', 0.3)
+            max_lookahead = backup_config.get('max_lookahead', 1.5)
             suggested_lookahead = v_max * 1.0  # 约1秒的前瞻
             
             if lookahead < suggested_lookahead * 0.5:
@@ -1286,7 +1372,7 @@ class DiagnosticsAnalyzer:
                     severity="info",
                     parameter="backup.lookahead_dist",
                     current_value=lookahead,
-                    suggested_value=round(suggested_lookahead, 2),
+                    suggested_value=round(min(suggested_lookahead, max_lookahead), 2),
                     reason=f"备用控制器激活率({backup_rate*100:.1f}%)较高，前瞻距离可能过小。",
                     confidence=0.5,
                     tuning_category=TuningCategory.TUNABLE
@@ -1317,42 +1403,19 @@ class DiagnosticsAnalyzer:
         这些参数需要系统辨识或专业知识，不应自动调整。
         这里只报告当前状态，供用户参考。
         """
-        # EKF 状态报告
-        if self.stats.estimator_covariance_norms:
-            cov_arr = np.array(self.stats.estimator_covariance_norms)
-            max_cov = np.max(cov_arr)
-            avg_cov = np.mean(cov_arr)
-            
-            ekf_config = self.config.get('ekf', {})
-            anomaly_config = ekf_config.get('anomaly_detection', {})
-            cov_thresh = anomaly_config.get('covariance_explosion_thresh', 1000.0)
-            
-            if max_cov > cov_thresh * 0.5:
-                self.results.append(AnalysisResult(
-                    category="ekf_status",
-                    severity="info",
-                    parameter="ekf.anomaly_detection.covariance_explosion_thresh",
-                    current_value=cov_thresh,
-                    suggested_value=None,  # 不建议调优
-                    reason=f"[诊断信息] 协方差范数(max={max_cov:.1f})接近阈值。此为设计参数，不建议自动调整。",
-                    confidence=0.0,  # 置信度为0表示不应采纳
-                    tuning_category=TuningCategory.DESIGN
-                ))
-        
         # 一致性检查状态报告
-        if self.stats.alpha_values and not self._is_alpha_check_disabled():
+        if self.stats.alpha_values:
             alpha_arr = np.array(self.stats.alpha_values)
             avg_alpha = np.mean(alpha_arr)
-            min_alpha = np.min(alpha_arr)
             
             if avg_alpha < 0.5:
                 self.results.append(AnalysisResult(
                     category="consistency_status",
                     severity="info",
-                    parameter="consistency.alpha_min",
-                    current_value=self.config.get('consistency', {}).get('alpha_min', 0.1),
+                    parameter="consistency.weights",
+                    current_value=self.config.get('consistency', {}).get('weights', {}),
                     suggested_value=None,
-                    reason=f"[诊断信息] 平均alpha值({avg_alpha:.2f})较低。一致性阈值是设计参数，不建议自动调整。",
+                    reason=f"[诊断信息] 平均alpha值({avg_alpha:.2f})较低。一致性权重是设计参数，不建议自动调整。",
                     confidence=0.0,
                     tuning_category=TuningCategory.DESIGN
                 ))
@@ -1365,10 +1428,10 @@ class DiagnosticsAnalyzer:
             
             if high_slip_rate > 0.1:
                 self.results.append(AnalysisResult(
-                    category="ekf_status",
+                    category="estimator_status",
                     severity="info",
-                    parameter="ekf.adaptive.base_slip_thresh",
-                    current_value=self.config.get('ekf', {}).get('adaptive', {}).get('base_slip_thresh', 2.0),
+                    parameter="estimator.slip_detection",
+                    current_value=f"高打滑率 {high_slip_rate*100:.1f}%",
                     suggested_value=None,
                     reason=f"[诊断信息] 打滑检测频繁({high_slip_rate*100:.1f}%)。打滑阈值与底盘特性相关，不建议自动调整。",
                     confidence=0.0,
@@ -1379,13 +1442,13 @@ class DiagnosticsAnalyzer:
         """报告安全状态 - 仅诊断，不自动放宽安全参数
         
         安全参数不应自动放宽，这里只报告当前状态。
+        只报告 turtlebot1.yaml 中实际存在的参数相关信息。
         """
         constraints_config = self.config.get('constraints', {})
         
         # 速度约束使用情况
         if self.stats.cmd_vx:
             vx_arr = np.array(self.stats.cmd_vx)
-            max_vx = np.max(np.abs(vx_arr))
             current_v_max = constraints_config.get('v_max', 0.5)
             
             at_limit_count = np.sum(np.abs(vx_arr) > current_v_max * 0.95)
@@ -1406,7 +1469,6 @@ class DiagnosticsAnalyzer:
         # 角速度约束使用情况
         if self.stats.cmd_omega:
             omega_arr = np.array(self.stats.cmd_omega)
-            max_omega = np.max(np.abs(omega_arr))
             current_omega_max = constraints_config.get('omega_max', 1.0)
             
             if current_omega_max > 0:
@@ -1442,18 +1504,13 @@ class DiagnosticsAnalyzer:
         # 安全检查失败统计
         if self.stats.safety_check_failed_count > 0:
             fail_rate = self.stats.safety_check_failed_count / self.stats.total_samples * 100
-            safety_config = self.config.get('safety', {})
-            margins_info = {
-                'velocity_margin': safety_config.get('velocity_margin', 1.1),
-                'accel_margin': safety_config.get('accel_margin', 1.5)
-            }
             self.results.append(AnalysisResult(
                 category="safety_status",
                 severity="warning" if fail_rate > 5 else "info",
-                parameter="safety.velocity_margin",
-                current_value=margins_info,
+                parameter="safety.check",
+                current_value=f"失败率 {fail_rate:.1f}%",
                 suggested_value=None,
-                reason=f"[诊断信息] 安全检查失败{self.stats.safety_check_failed_count}次({fail_rate:.1f}%)。安全裕度是安全参数，不建议自动调整。",
+                reason=f"[诊断信息] 安全检查失败{self.stats.safety_check_failed_count}次({fail_rate:.1f}%)。建议检查约束配置是否合理。",
                 confidence=0.0,
                 tuning_category=TuningCategory.SAFETY
             ))
@@ -1489,7 +1546,7 @@ class DiagnosticsAnalyzer:
                 'max_solve_time_ms': float(round(np.max(solve_times), 2)),
                 'p95_solve_time_ms': float(round(np.percentile(solve_times, 95), 2)),
                 'success_rate': float(round(self.stats.mpc_success_count / total * 100, 1)) if total > 0 else 0,
-                'backup_rate': float(round(self.stats.backup_active_count / self.stats.total_samples * 100, 1)) if self.stats.total_samples > 0 else 0,
+                'backup_rate': float(round(self.stats.backup_active_state_count / self.stats.total_samples * 100, 1)) if self.stats.total_samples > 0 else 0,
                 'degradation_warning_count': int(self.stats.mpc_degradation_warnings)
             }
             if self.stats.kkt_residuals:
@@ -1522,6 +1579,21 @@ class DiagnosticsAnalyzer:
                 'avg_cm': float(round(np.mean(self.stats.prediction_errors) * 100, 2)),
                 'max_cm': float(round(np.max(self.stats.prediction_errors) * 100, 2))
             }
+        # 跟踪质量评估
+        if self.stats.tracking_quality_scores:
+            summary['tracking']['quality'] = {
+                'avg_score': float(round(np.mean(self.stats.tracking_quality_scores), 1)),
+                'min_score': float(round(np.min(self.stats.tracking_quality_scores), 1))
+            }
+            if self.stats.tracking_quality_ratings:
+                # 统计各等级占比
+                rating_counts = {}
+                for rating in self.stats.tracking_quality_ratings:
+                    rating_counts[rating] = rating_counts.get(rating, 0) + 1
+                total = len(self.stats.tracking_quality_ratings)
+                summary['tracking']['quality']['rating_distribution'] = {
+                    k: float(round(v / total * 100, 1)) for k, v in rating_counts.items()
+                }
         
         # 超时摘要
         summary['timeout'] = {
@@ -1548,17 +1620,17 @@ class DiagnosticsAnalyzer:
             summary['control']['avg_omega'] = float(round(np.mean(np.abs(self.stats.cmd_omega)), 3))
             summary['control']['max_omega'] = float(round(np.max(np.abs(self.stats.cmd_omega)), 3))
         
-        # 状态机摘要
+        # 状态机摘要（统一使用基于状态枚举的统计）
         state_dist = {int(k): int(v) for k, v in self.stats.state_counts.items()}
         
         summary['state_machine'] = {
             'state_distribution': state_dist,
-            'normal_rate': float(round(self.stats.normal_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
-            'backup_active_rate': float(round(self.stats.backup_active_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
-            'soft_disabled_rate': float(round(self.stats.soft_disabled_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
-            'mpc_degraded_rate': float(round(self.stats.mpc_degraded_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
-            'stopping_rate': float(round(self.stats.stopping_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
-            'stopped_rate': float(round(self.stats.stopped_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0
+            'normal_rate': float(round(self.stats.normal_state_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
+            'backup_active_rate': float(round(self.stats.backup_active_state_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
+            'soft_disabled_rate': float(round(self.stats.soft_disabled_state_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
+            'mpc_degraded_rate': float(round(self.stats.mpc_degraded_state_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
+            'stopping_rate': float(round(self.stats.stopping_state_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
+            'stopped_rate': float(round(self.stats.stopped_state_count / self.stats.total_samples * 100, 2)) if self.stats.total_samples > 0 else 0,
         }
         
         # 一致性摘要

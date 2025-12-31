@@ -455,6 +455,7 @@ def generate_demo_data() -> list:
     3. 周期性波动 - 模拟轨迹跟踪的周期性误差
     """
     import numpy as np
+    from universal_controller.core.enums import ControllerState
     
     samples = []
     np.random.seed(42)
@@ -465,7 +466,7 @@ def generate_demo_data() -> list:
     current_heading_error = 0.05
     current_solve_time = 10.0
     mpc_fail_streak = 0
-    state = 1  # NORMAL
+    state = ControllerState.NORMAL
     
     for i in range(500):
         # 模拟 MPC 求解时间的时间相关性（带随机扰动）
@@ -483,15 +484,15 @@ def generate_demo_data() -> list:
         else:
             mpc_fail_streak = 0
         
-        # 状态转换逻辑
-        if mpc_fail_streak >= 3:
-            state = 3  # MPC_DEGRADED
-        elif mpc_fail_streak >= 5:
-            state = 4  # BACKUP_ACTIVE
-        elif mpc_fail_streak == 0 and state != 1:
-            state = 1  # 恢复到 NORMAL
+        # 状态转换逻辑 (使用枚举)
+        if mpc_fail_streak >= 5:
+            state = ControllerState.BACKUP_ACTIVE
+        elif mpc_fail_streak >= 3:
+            state = ControllerState.MPC_DEGRADED
+        elif mpc_fail_streak == 0 and state != ControllerState.NORMAL:
+            state = ControllerState.NORMAL
         
-        backup_active = state == 4
+        backup_active = (state == ControllerState.BACKUP_ACTIVE)
         
         # 模拟跟踪误差的时间相关性（带周期性波动）
         phase = i * 0.1  # 模拟轨迹周期
@@ -510,6 +511,17 @@ def generate_demo_data() -> list:
             current_lateral_error *= 1.5
             current_longitudinal_error *= 1.5
         
+        # 计算跟踪质量评分 (简化版)
+        tracking_quality_score = max(0, 100 - current_lateral_error * 200 - current_longitudinal_error * 100 - current_heading_error * 50)
+        if tracking_quality_score >= 90:
+            tracking_quality_rating = 'excellent'
+        elif tracking_quality_score >= 70:
+            tracking_quality_rating = 'good'
+        elif tracking_quality_score >= 50:
+            tracking_quality_rating = 'fair'
+        else:
+            tracking_quality_rating = 'poor'
+        
         # 模拟超时事件（偶发）
         odom_timeout = np.random.random() > 0.98
         traj_timeout = np.random.random() > 0.94
@@ -527,7 +539,7 @@ def generate_demo_data() -> list:
                 'stamp': i * 0.05,  # 20Hz
                 'frame_id': ''
             },
-            'state': state,
+            'state': int(state),  # 转换为 int 以匹配 ROS 消息格式
             'mpc_success': mpc_success,
             'mpc_solve_time_ms': current_solve_time,
             'backup_active': backup_active,
@@ -560,12 +572,14 @@ def generate_demo_data() -> list:
                 'imu_available': True
             },
             
-            # 跟踪误差
+            # 跟踪误差和质量评估
             'tracking': {
                 'lateral_error': current_lateral_error,
                 'longitudinal_error': current_longitudinal_error,
                 'heading_error': current_heading_error,
-                'prediction_error': abs(np.random.normal(0.03, 0.01))
+                'prediction_error': abs(np.random.normal(0.03, 0.01)),
+                'quality_score': tracking_quality_score,
+                'quality_rating': tracking_quality_rating
             },
             
             # 坐标变换状态
@@ -601,7 +615,7 @@ def generate_demo_data() -> list:
             },
             
             # 过渡进度
-            'transition_progress': 1.0 if state == 1 else np.clip(0.5 + np.random.normal(0, 0.1), 0, 1),
+            'transition_progress': 1.0 if state == ControllerState.NORMAL else np.clip(0.5 + np.random.normal(0, 0.1), 0, 1),
             
             # 安全状态 (顶层字段，与 DiagnosticsV2.to_ros_msg() 一致)
             'safety_check_passed': np.random.random() > 0.02,

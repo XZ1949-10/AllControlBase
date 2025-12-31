@@ -43,8 +43,12 @@ def ros_msg_to_dict(msg) -> Dict[str, Any]:
     
     Returns:
         嵌套格式的字典，与 DiagnosticsV2.to_ros_msg() 输出一致
+    
+    Note:
+        此函数的输出格式必须与 DiagnosticsV2.to_ros_msg() 完全一致。
+        ROS 节点层可能添加额外字段，但核心字段必须匹配。
     """
-    return {
+    result = {
         'header': {
             'stamp': msg.header.stamp.to_sec() if hasattr(msg.header.stamp, 'to_sec') else msg.header.stamp,
             'frame_id': msg.header.frame_id
@@ -79,7 +83,9 @@ def ros_msg_to_dict(msg) -> Dict[str, Any]:
             'lateral_error': msg.tracking_lateral_error,
             'longitudinal_error': msg.tracking_longitudinal_error,
             'heading_error': msg.tracking_heading_error,
-            'prediction_error': msg.tracking_prediction_error
+            'prediction_error': msg.tracking_prediction_error,
+            'quality_score': getattr(msg, 'tracking_quality_score', 0.0),
+            'quality_rating': getattr(msg, 'tracking_quality_rating', 'unknown')
         },
         'transform': {
             'tf2_available': msg.transform_tf2_available,
@@ -108,13 +114,18 @@ def ros_msg_to_dict(msg) -> Dict[str, Any]:
             'frame_id': msg.cmd_frame_id
         },
         'transition_progress': msg.transition_progress,
-        # 安全状态 (顶层字段，与 DiagnosticsV2.to_ros_msg() 一致)
         'safety_check_passed': msg.safety_check_passed,
-        'emergency_stop': msg.emergency_stop,
-        # 错误信息
-        'error_message': msg.error_message,
-        'consecutive_errors': msg.consecutive_errors
+        'emergency_stop': msg.emergency_stop
     }
+    
+    # ROS 节点层可能添加的额外字段（可选）
+    # 这些字段不在 DiagnosticsV2 核心数据类中，但 ROS 节点可能会添加
+    if hasattr(msg, 'error_message'):
+        result['error_message'] = msg.error_message
+    if hasattr(msg, 'consecutive_errors'):
+        result['consecutive_errors'] = msg.consecutive_errors
+    
+    return result
 
 
 class DataCollector:

@@ -130,7 +130,7 @@ class VisualizerNode:
         self._window: Optional[VisualizerMainWindow] = None
         self._ros_thread: Optional[threading.Thread] = None
         self._running = False
-        self._shutting_down = False
+        self._shutting_down = threading.Event()  # 使用 Event 确保线程安全
         
         # 发布器
         self._cmd_vel_pub = None
@@ -161,9 +161,9 @@ class VisualizerNode:
     
     def shutdown(self):
         """关闭可视化器节点"""
-        if self._shutting_down:
+        if self._shutting_down.is_set():
             return
-        self._shutting_down = True
+        self._shutting_down.set()
         
         self._ros.log_info("Visualizer node shutting down...")
         
@@ -214,6 +214,9 @@ class VisualizerNode:
             'display': {
                 'update_rate': 30,
                 'velocity_history_sec': 10,
+                'trajectory_color': [0, 255, 0],   # 绿色
+                'robot_color': [255, 0, 0],        # 红色
+                'target_color': [255, 255, 0],     # 黄色
             },
             'joystick': {
                 'enable_button': 4,
@@ -231,7 +234,7 @@ class VisualizerNode:
             },
             'camera': {
                 'use_camera': False,
-                'calibration_file': '',  # 单应性标定文件路径
+                'calibration_file': '',
             },
         }
 
@@ -321,7 +324,7 @@ class VisualizerNode:
         
         在手柄模式下，持续发布最后的手柄命令。
         """
-        if self._shutting_down:
+        if self._shutting_down.is_set():
             return
         
         # 只在手柄模式下发布

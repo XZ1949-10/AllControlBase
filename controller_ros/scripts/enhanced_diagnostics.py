@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-增强诊断模块 v2.1 - 统一架构重构版
+增强诊断模块 v2.2 - 统一架构重构版
 
 此模块提供额外的诊断功能，用于分析影响轨迹跟踪但未被标准诊断覆盖的参数：
 1. MPC 权重分析（position, velocity, heading, control_accel, control_alpha）
 2. 一致性检查性能分析（alpha 拒绝率，kappa/v_dir 阈值）
 3. 状态机切换分析（切换频率，MPC 失败检测）
 
-架构改进 (v2.1):
+架构改进 (v2.2):
 - 统一时间戳处理：调用方必须提供 timestamp 字段，不再从 header 中提取
 - 统一状态码处理：state 字段为整数，与 ControllerState 枚举一致
 - window_size 根据 duration 动态计算，避免数据丢失
 - 移除 header 字段依赖，简化数据契约
+- 诊断阈值从配置中读取，不再硬编码
 
 数据契约：
 - timestamp: float, 消息时间戳（秒），必须由调用方提供
@@ -48,6 +49,17 @@ if sys.platform == 'win32':
     if hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8')
     os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+# 导入配置默认值
+try:
+    from universal_controller.config.system_config import TRACKING_CONFIG
+except ImportError:
+    # 如果无法导入，使用内置默认值
+    TRACKING_CONFIG = {
+        'lateral_thresh': 0.3,
+        'longitudinal_thresh': 0.5,
+        'heading_thresh': 0.5,
+    }
 
 
 @dataclass
@@ -102,48 +114,64 @@ class ControllerState:
 
 
 # ============================================================================
-# 诊断阈值配置 (与 unified_diagnostics.py 保持一致)
+# 诊断阈值配置
 # ============================================================================
 
 class DiagnosticsThresholds:
     """
     诊断阈值配置 - 统一管理所有诊断判断阈值
     
-    此类与 unified_diagnostics.py 中的 DiagnosticsThresholds 保持一致，
-    确保增强诊断模块使用相同的阈值标准。
+    跟踪误差阈值从 TRACKING_CONFIG 读取，确保与配置文件一致。
+    其他阈值为诊断专用，不影响控制器行为。
     """
     
-    # ===== 跟踪误差阈值 (来自 system_config.py -> TRACKING_CONFIG) =====
-    TRACKING_LATERAL_THRESH = 0.3        # 横向误差阈值 (m)
-    TRACKING_LONGITUDINAL_THRESH = 0.5   # 纵向误差阈值 (m)
-    TRACKING_HEADING_THRESH = 0.5        # 航向误差阈值 (rad, ~28.6°)
+    # ===== 跟踪误差阈值 (从 TRACKING_CONFIG 读取) =====
+    TRACKING_LATERAL_THRESH = TRACKING_CONFIG.get('lateral_thresh', 0.3)
+    TRACKING_LONGITUDINAL_THRESH = TRACKING_CONFIG.get('longitudinal_thresh', 0.5)
+    TRACKING_HEADING_THRESH = TRACKING_CONFIG.get('heading_thresh', 0.5)
     
-    # 运行时调优阈值
+    # 运行时调优阈值 (诊断专用，触发调优建议)
     TUNING_LATERAL_ERROR_HIGH = 0.15     # 触发权重调整建议
     TUNING_LONGITUDINAL_ERROR_HIGH = 0.20  # 触发权重调整建议
     TUNING_HEADING_ERROR_HIGH = 0.3      # 触发权重调整建议 (rad)
     
-    # 控制平滑性阈值
+    # 控制平滑性阈值 (诊断专用)
     MAX_ACCEL_SMOOTH = 3.0               # 加速度平滑阈值 (m/s²)
     MAX_ACCEL_JITTER = 8.0               # 加速度抖动阈值 (m/s²)
     MAX_ANGULAR_ACCEL_SMOOTH = 5.0       # 角加速度平滑阈值 (rad/s²)
     MAX_ANGULAR_ACCEL_JITTER = 15.0      # 角加速度抖动阈值 (rad/s²)
     
-    # 一致性检查阈值
+    # 一致性检查阈值 (诊断专用)
     ALPHA_WARN = 0.5                     # Alpha 警告值
     ALPHA_CRITICAL = 0.3                 # Alpha 临界值
     ALPHA_VERY_LOW = 0.2                 # Alpha 极低值
     CONSISTENCY_REJECTION_HIGH = 0.1     # 一致性拒绝率高阈值
     CONSISTENCY_REJECTION_MED = 0.05     # 一致性拒绝率中阈值
     
-    # 状态机切换阈值
+    # 状态机切换阈值 (诊断专用)
     STATE_TRANSITION_RATE_HIGH = 0.5     # 状态切换频率高阈值 (次/秒)
     STATE_TRANSITION_RATE_MED = 0.1      # 状态切换频率中阈值 (次/秒)
+    
+    @classmethod
+    def update_from_config(cls, config: Dict[str, Any]) -> None:
+        """
+        从配置字典更新阈值
+        
+        Args:
+            config: 配置字典，应包含 'tracking' 键
+        """
+        tracking = config.get('tracking', {})
+        if 'lateral_thresh' in tracking:
+            cls.TRACKING_LATERAL_THRESH = tracking['lateral_thresh']
+        if 'longitudinal_thresh' in tracking:
+            cls.TRACKING_LONGITUDINAL_THRESH = tracking['longitudinal_thresh']
+        if 'heading_thresh' in tracking:
+            cls.TRACKING_HEADING_THRESH = tracking['heading_thresh']
 
 
 class EnhancedDiagnostics:
     """
-    增强诊断分析器 v2.1
+    增强诊断分析器 v2.2
     
     统一架构，避免重复计算，提供完整的参数诊断
     
@@ -156,16 +184,21 @@ class EnhancedDiagnostics:
     - mpc_success: bool, MPC 求解是否成功
     """
     
-    def __init__(self, window_size: int = 1000):
+    def __init__(self, window_size: int = 1000, config: Optional[Dict[str, Any]] = None):
         """
         初始化
         
         Args:
             window_size: 滑动窗口大小，应根据 duration * 诊断频率 设置
                         默认 1000 支持 50 秒 @ 20Hz
+            config: 可选的配置字典，用于更新诊断阈值
         """
         self.window_size = window_size
         self.samples = deque(maxlen=window_size)
+        
+        # 从配置更新阈值
+        if config is not None:
+            DiagnosticsThresholds.update_from_config(config)
         
         # 统计数据
         self.state_transitions = []  # (timestamp, from_state, to_state)

@@ -41,10 +41,21 @@ class ConfigGenerator:
 """
     
     # 配置节顺序（与 turtlebot1.yaml 保持一致）
+    # 只包含 turtlebot1.yaml 中实际存在的节
     SECTION_ORDER = [
-        'system', 'node', 'topics', 'tf', 'watchdog', 'diagnostics',
-        'mpc', 'constraints', 'trajectory', 'consistency', 'tracking',
-        'safety', 'backup', 'transform', 'transition', 'ekf', 'cmd_vel_adapter'
+        'system',           # 系统配置
+        'topics',           # 话题配置
+        'watchdog',         # 超时配置
+        'diagnostics',      # 诊断配置
+        'mpc',              # MPC 配置
+        'constraints',      # 速度约束
+        'trajectory',       # 轨迹配置
+        'consistency',      # 一致性检查配置
+        'tracking',         # 跟踪质量评估配置
+        'safety',           # 安全配置
+        'backup',           # 备份控制器配置
+        'transform',        # 坐标变换配置
+        'cmd_vel_adapter',  # cmd_vel 适配器配置
     ]
 
     def __init__(self, base_config: Dict[str, Any], base_config_path: str = ""):
@@ -166,12 +177,26 @@ class ConfigGenerator:
             return False
     
     def _convert_value(self, value: Any) -> Any:
-        """转换值为 Python 原生类型"""
-        # 处理 numpy 类型
+        """转换值为 Python 原生类型
+        
+        处理以下类型转换:
+        - numpy 标量 -> Python 原生类型
+        - IntEnum -> int
+        - 列表/元组 -> 递归转换
+        - 字典 -> 递归转换
+        """
+        from enum import IntEnum
+        
+        # 处理 numpy 标量类型
         if hasattr(value, 'item'):
             return value.item()
+        # 处理 IntEnum 类型
+        elif isinstance(value, IntEnum):
+            return int(value)
+        # 处理列表和元组
         elif isinstance(value, (list, tuple)):
             return [self._convert_value(v) for v in value]
+        # 处理字典
         elif isinstance(value, dict):
             return {k: self._convert_value(v) for k, v in value.items()}
         return value
@@ -282,12 +307,10 @@ class ConfigGenerator:
         
         CustomDumper.add_representer(str, str_representer)
         
-        # 添加分节注释
+        # 添加分节注释（与 turtlebot1.yaml 保持一致）
         sections = {
             'system': '系统配置',
-            'node': 'ROS 节点配置',
             'topics': '话题配置',
-            'tf': 'TF 配置',
             'watchdog': '超时配置',
             'diagnostics': '诊断配置',
             'mpc': 'MPC 配置',
@@ -298,8 +321,6 @@ class ConfigGenerator:
             'safety': '安全配置',
             'backup': '备份控制器配置',
             'transform': '坐标变换配置',
-            'transition': '平滑过渡配置',
-            'ekf': 'EKF 状态估计配置',
             'cmd_vel_adapter': 'cmd_vel 适配器配置'
         }
         

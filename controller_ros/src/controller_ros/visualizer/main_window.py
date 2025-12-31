@@ -108,8 +108,9 @@ class VisualizerMainWindow(QMainWindow):
         # 上半部分: 轨迹 + 速度
         top_splitter = QSplitter(Qt.Horizontal)
         
-        # 轨迹可视化
-        self._trajectory_view = TrajectoryView()
+        # 轨迹可视化 (传递 display 配置)
+        display_config = self._config.get('display', {})
+        self._trajectory_view = TrajectoryView(display_config=display_config)
         top_splitter.addWidget(self._trajectory_view)
         
         # 右侧面板

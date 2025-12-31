@@ -9,9 +9,6 @@
 - ControllerNodeBase 提供共享逻辑
 """
 
-# 注意：不要在这里修改 sys.path！
-# PYTHONPATH 已经由 source devel/setup.bash 正确设置
-
 import rospy
 from typing import Dict, Any, Optional
 
@@ -19,15 +16,12 @@ from nav_msgs.msg import Odometry as RosOdometry
 from sensor_msgs.msg import Imu as RosImu
 from std_msgs.msg import Empty
 
-# 尝试导入自定义消息，记录可用性
-_CUSTOM_MSGS_AVAILABLE = True
-_CUSTOM_MSGS_ERROR = None
-try:
-    from controller_ros.msg import LocalTrajectoryV4
-except ImportError as e:
-    _CUSTOM_MSGS_AVAILABLE = False
-    _CUSTOM_MSGS_ERROR = str(e)
-    LocalTrajectoryV4 = None
+# 统一的消息可用性检查
+from controller_ros.utils.msg_availability import (
+    CUSTOM_MSGS_AVAILABLE, 
+    get_msg_import_error,
+    LocalTrajectoryV4,
+)
 
 # 导入 universal_controller
 from universal_controller.core.data_types import ControlOutput, AttitudeCommand
@@ -74,14 +68,19 @@ class ControllerNodeROS1(ControllerNodeBase):
         super().__init__()
         
         # 0. 检查自定义消息是否可用
-        if not _CUSTOM_MSGS_AVAILABLE:
+        if not CUSTOM_MSGS_AVAILABLE:
             rospy.logfatal(
-                f"Custom messages not available! Error: {_CUSTOM_MSGS_ERROR}. "
-                f"Please build the package with 'catkin_make' or 'catkin build'."
+                f"Custom messages not available! Error: {get_msg_import_error()}. "
+                f"Please build the package with 'catkin_make' or 'catkin build'. "
+                f"Node will exit."
             )
-            self._traj_msg_available = False
-        else:
-            self._traj_msg_available = True
+            rospy.sleep(2.0)
+            raise RuntimeError(
+                f"Cannot start controller: custom messages not available. "
+                f"Build the package first."
+            )
+        
+        self._traj_msg_available = True
         
         # 1. 加载参数
         self._params = ParamLoader.load(None)
@@ -283,7 +282,8 @@ class ControllerNodeROS1(ControllerNodeBase):
         6. 调用基类关闭
         """
         # 1. 设置关闭标志 (基类会设置，但这里提前设置以阻止回调)
-        self._shutting_down = True
+        # 使用 Event.set() 确保线程安全
+        self._shutting_down.set()
         
         # 2. 停止定时器
         if hasattr(self, '_timer') and self._timer is not None:

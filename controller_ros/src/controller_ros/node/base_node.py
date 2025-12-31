@@ -11,7 +11,7 @@
 - 姿态控制接口 (四旋翼平台)
 
 生命周期说明：
-- 实现 ILifecycle 接口（通过 LifecycleMixin）
+- 实现 ILifecycleComponent 接口（通过 LifecycleMixin）
 - initialize(): 初始化所有组件（由 _initialize() 调用）
 - reset(): 重置控制器和数据管理器
 - shutdown(): 关闭所有组件，释放资源
@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
 import logging
 import time
+import threading
 
 import numpy as np
 
@@ -51,7 +52,7 @@ class ControllerNodeBase(LifecycleMixin, ABC):
     - 姿态控制接口 (四旋翼平台)
     
     生命周期:
-    - 实现 ILifecycle 接口（通过 LifecycleMixin）
+    - 实现 ILifecycleComponent 接口（通过 LifecycleMixin）
     - _initialize(): 初始化所有组件（调用 LifecycleMixin.initialize()）
     - reset(): 重置控制器和数据管理器（通过 _handle_reset()）
     - shutdown(): 关闭所有组件，释放资源
@@ -71,9 +72,8 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 初始化 LifecycleMixin
         LifecycleMixin.__init__(self)
         
-        # 关闭状态标志 - 防止关闭过程中发布到已关闭的话题
-        # 必须在最前面初始化，确保任何回调都能检查此标志
-        self._shutting_down: bool = False
+        # 关闭状态标志 - 使用 Event 确保线程安全和内存可见性
+        self._shutting_down = threading.Event()
         
         # 配置属性（由子类在调用 _initialize() 前设置）
         self._params: Dict[str, Any] = {}
@@ -93,8 +93,14 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 状态
         self._waiting_for_data = True
         self._consecutive_errors = 0
-        self._max_consecutive_errors = 10
-        self._traj_msg_available = True
+        # 轨迹消息可用性标志 - 默认为 False（悲观默认，fail-safe）
+        # 子类在确认消息类型可用后应设为 True
+        self._traj_msg_available = False
+        
+        # 错误处理配置（由 _initialize() 从配置中读取）
+        self._max_consecutive_errors_detail = 10
+        self._error_summary_interval = 50
+        self._max_error_count = 1000
         
         # 紧急停止状态
         self._emergency_stop_requested = False
@@ -136,16 +142,26 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 检查是否为四旋翼平台
         self._is_quadrotor = platform_config.get('type') == PlatformType.QUADROTOR
         
-        # 2. 创建数据管理器（带时钟跳变回调）
+        # 1.1 读取错误处理配置
+        diag_config = self._params.get('diagnostics', {})
+        self._max_consecutive_errors_detail = diag_config.get('max_consecutive_errors_detail', 10)
+        self._error_summary_interval = diag_config.get('error_summary_interval', 50)
+        self._max_error_count = diag_config.get('max_error_count', 1000)
+        
+        # 2. 创建数据管理器（带时钟跳变回调和轨迹配置）
+        trajectory_config = self._params.get('trajectory', {})
+        clock_config = self._params.get('clock', {})
         self._data_manager = DataManager(
             get_time_func=self._get_time,
-            on_clock_jump=self._on_clock_jump
+            on_clock_jump=self._on_clock_jump,
+            trajectory_config=trajectory_config,
+            clock_config=clock_config
         )
         
         # 3. 创建控制器桥接
-        # ControllerBridge 在初始化失败时会抛出 RuntimeError，
-        # 异常会传播到 LifecycleMixin.initialize() 中处理
-        self._controller_bridge = ControllerBridge(self._params)
+        self._controller_bridge = ControllerBridge.create(self._params)
+        if self._controller_bridge is None:
+            raise RuntimeError("Failed to create ControllerBridge")
         
         # 4. 设置诊断回调
         self._controller_bridge.set_diagnostics_callback(self._on_diagnostics)
@@ -201,6 +217,9 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         实际的重置逻辑
         
         由 LifecycleMixin.reset() 调用。
+        
+        注意: reset() 不会清除紧急停止状态，这是安全设计。
+        要从紧急停止恢复，必须显式调用 set_state(NORMAL) 服务。
         """
         if self._controller_bridge is not None:
             self._controller_bridge.reset()
@@ -210,9 +229,10 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             self._tf2_injection_manager.reset()
         self._waiting_for_data = True
         self._consecutive_errors = 0
-        self._clear_emergency_stop()
+        # 注意: 不清除紧急停止状态，这是安全设计
+        # self._clear_emergency_stop()
         self._last_attitude_cmd = None
-        self._log_info('Controller node reset complete')
+        self._log_info('Controller node reset complete (emergency stop state preserved)')
     
     def _get_health_details(self) -> Dict[str, Any]:
         """获取详细健康信息"""
@@ -287,15 +307,13 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             return
         
         # 创建 TF2 注入管理器
-        # tf 配置：ROS TF2 特有参数（buffer 预热、重试等）
-        # transform 配置：坐标变换配置（坐标系名称等）
-        tf_config = self._params.get('tf', {})
+        # transform 配置包含所有坐标变换相关参数（包括 ROS TF2 扩展参数）
         transform_config = self._params.get('transform', {})
         
         self._tf2_injection_manager = TF2InjectionManager(
             tf_bridge=self._tf_bridge,
             controller_manager=self._controller_bridge.manager,
-            config=tf_config,
+            config=transform_config,
             transform_config=transform_config,
             log_info=self._log_info,
             log_warn=self._log_warn,
@@ -499,7 +517,7 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             控制输出，如果无法执行控制则返回 None
         """
         # 0. 检查关闭状态 - 防止在关闭过程中继续执行
-        if self._shutting_down:
+        if self._shutting_down.is_set():
             return None
         
         # 0.1 检查紧急停止
@@ -590,14 +608,15 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         self._consecutive_errors += 1
         
         # 限制连续错误计数的上限，避免无限增长
-        # 上限设为 max_consecutive_errors 的 100 倍，足够记录长时间错误
-        max_error_count = self._max_consecutive_errors * 100
-        if self._consecutive_errors > max_error_count:
-            self._consecutive_errors = max_error_count
+        if self._consecutive_errors > self._max_error_count:
+            self._consecutive_errors = self._max_error_count
         
-        if self._consecutive_errors <= self._max_consecutive_errors:
+        # 日志策略：
+        # - 前 N 次详细记录（N = max_consecutive_errors_detail）
+        # - 之后每 M 次记录一次摘要（M = error_summary_interval）
+        if self._consecutive_errors <= self._max_consecutive_errors_detail:
             self._log_error(f'Controller update failed ({self._consecutive_errors}): {error}')
-        elif self._consecutive_errors % 50 == 0:
+        elif self._consecutive_errors % self._error_summary_interval == 0:
             self._log_error(
                 f'Controller update still failing ({self._consecutive_errors} consecutive errors): {error}'
             )
@@ -692,6 +711,11 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         - NORMAL: 从紧急停止恢复 (需要先清除紧急停止标志)
         
         其他状态转换出于安全考虑不允许外部直接设置。
+        
+        紧急停止恢复安全机制:
+        - 恢复前会记录警告日志
+        - 恢复后会有短暂的安全延迟（通过 _waiting_for_data 标志）
+        - 需要收到新的传感器数据后才会恢复控制
         """
         if target_state == ControllerState.STOPPING.value:
             if self._controller_bridge is not None:
@@ -703,8 +727,18 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         elif target_state == ControllerState.NORMAL.value:
             # 允许从紧急停止恢复到正常状态
             if self._emergency_stop_requested:
+                # 安全警告
+                self._log_warn(
+                    'Emergency stop recovery requested via set_state service. '
+                    'Ensure the emergency condition has been resolved before resuming operation.'
+                )
                 self._clear_emergency_stop()
-                self._log_info('Emergency stop cleared via set_state service, resuming normal operation')
+                # 设置等待数据标志，确保收到新数据后才恢复控制
+                # 这提供了一个隐式的安全延迟
+                self._waiting_for_data = True
+                self._log_info(
+                    'Emergency stop cleared. Waiting for fresh sensor data before resuming control.'
+                )
                 return True
             else:
                 self._log_warn('Set state to NORMAL requested but not in emergency stop state')
@@ -725,7 +759,7 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         关闭标志确保控制循环不会在关闭过程中继续发布消息。
         """
         # 设置关闭标志，阻止控制循环继续执行
-        self._shutting_down = True
+        self._shutting_down.set()
         
         # 使用 LifecycleMixin 的 shutdown 方法
         LifecycleMixin.shutdown(self)

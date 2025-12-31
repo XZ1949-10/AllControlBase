@@ -5,7 +5,7 @@
 将数据缓存逻辑从节点实现中抽离，避免代码重复。
 
 生命周期说明：
-- 实现 ILifecycle 接口（通过 LifecycleMixin）
+- 实现 ILifecycleComponent 接口（通过 LifecycleMixin）
 - reset(): 清除所有缓存数据，重置时钟状态
 - shutdown(): 清除数据并释放回调引用
 - 支持健康状态查询
@@ -24,22 +24,39 @@ logger = logging.getLogger(__name__)
 
 
 class ClockJumpEvent:
-    """时钟跳变事件"""
+    """时钟跳变事件
     
-    def __init__(self, old_time: float, new_time: float, jump_delta: float):
+    包含时钟跳变的详细信息，用于通知上层处理。
+    
+    Attributes:
+        old_time: 跳变前的时间
+        new_time: 跳变后的时间
+        jump_delta: 跳变量（负值表示回退）
+        timestamp: 事件发生的单调时钟时间
+        invalidated_data: 被标记为无效的数据类型列表
+    """
+    
+    def __init__(self, old_time: float, new_time: float, jump_delta: float,
+                 invalidated_data: Optional[List[str]] = None):
         self.old_time = old_time
         self.new_time = new_time
         self.jump_delta = jump_delta  # 负值表示回退
         self.timestamp = time.monotonic()  # 使用单调时钟记录事件时间
+        self.invalidated_data = invalidated_data or []  # 被标记为无效的数据类型
     
     @property
     def is_backward(self) -> bool:
         """是否为时钟回退"""
         return self.jump_delta < 0
     
+    @property
+    def is_forward(self) -> bool:
+        """是否为时钟前跳"""
+        return self.jump_delta > 0
+    
     def __repr__(self) -> str:
         direction = "backward" if self.is_backward else "forward"
-        return f"ClockJumpEvent({direction}, delta={self.jump_delta:.3f}s)"
+        return f"ClockJumpEvent({direction}, delta={self.jump_delta:.3f}s, invalidated={self.invalidated_data})"
 
 
 class DataManager(LifecycleMixin):
@@ -54,7 +71,7 @@ class DataManager(LifecycleMixin):
     - 检测时钟回退并安全处理
     
     生命周期:
-    - 实现 ILifecycle 接口（通过 LifecycleMixin）
+    - 实现 ILifecycleComponent 接口（通过 LifecycleMixin）
     - initialize(): 自动在构造时调用
     - reset(): 清除所有缓存数据，重置时钟状态（原 clear() 方法）
     - shutdown(): 清除数据并释放回调引用
@@ -72,15 +89,16 @@ class DataManager(LifecycleMixin):
     支持 ROS1 和 ROS2，通过注入时间获取函数实现。
     """
     
-    # 时钟抖动容忍度（秒）
-    CLOCK_JITTER_TOLERANCE = 0.001  # 1ms
-    
-    # 时钟大幅跳变阈值（秒）- 超过此值认为是仿真重置
-    CLOCK_JUMP_THRESHOLD = 1.0
+    # 默认时钟配置
+    DEFAULT_CLOCK_JITTER_TOLERANCE = 0.001  # 1ms
+    DEFAULT_CLOCK_JUMP_THRESHOLD = 1.0      # 1s
+    DEFAULT_MAX_CLOCK_JUMP_EVENTS = 10
     
     def __init__(self, get_time_func: Optional[Callable[[], float]] = None,
                  on_clock_jump: Optional[Callable[[ClockJumpEvent], None]] = None,
-                 invalidate_on_forward_jump: bool = False):
+                 invalidate_on_forward_jump: bool = False,
+                 trajectory_config: Optional[Dict[str, Any]] = None,
+                 clock_config: Optional[Dict[str, Any]] = None):
         """
         初始化数据管理器
         
@@ -95,14 +113,32 @@ class DataManager(LifecycleMixin):
             invalidate_on_forward_jump: 是否在大幅前跳时使数据无效。
                           默认 False (适合仿真快进场景)。
                           设为 True 可用于需要严格时间同步的场景。
+            trajectory_config: 轨迹配置字典，传递给 TrajectoryAdapter。
+                          如果为 None，使用 TRAJECTORY_CONFIG 默认值。
+            clock_config: 时钟配置字典，包含:
+                          - jitter_tolerance: 时钟抖动容忍度（秒），默认 0.001
+                          - jump_threshold: 时钟大幅跳变阈值（秒），默认 1.0
+                          - max_events: 最多保留的时钟跳变事件数，默认 10
         """
         # 初始化 LifecycleMixin
         super().__init__()
         
+        # 时钟配置
+        clock_config = clock_config or {}
+        self._clock_jitter_tolerance = clock_config.get(
+            'jitter_tolerance', self.DEFAULT_CLOCK_JITTER_TOLERANCE
+        )
+        self._clock_jump_threshold = clock_config.get(
+            'jump_threshold', self.DEFAULT_CLOCK_JUMP_THRESHOLD
+        )
+        self._max_clock_jump_events = clock_config.get(
+            'max_events', self.DEFAULT_MAX_CLOCK_JUMP_EVENTS
+        )
+        
         # 适配器
         self._odom_adapter = OdomAdapter()
         self._imu_adapter = ImuAdapter()
-        self._traj_adapter = TrajectoryAdapter()
+        self._traj_adapter = TrajectoryAdapter(config=trajectory_config)
         
         # 时间获取函数
         self._get_time_func = get_time_func or time.time
@@ -123,16 +159,14 @@ class DataManager(LifecycleMixin):
         self._last_time: float = 0.0
         self._clock_jumped_back: bool = False
         self._clock_jump_events: List[ClockJumpEvent] = []
-        self._max_clock_jump_events = 10  # 最多保留的事件数
         
         # 数据有效性标记 - 时钟回退后各数据分别标记为无效
         # 设计说明：使用分离的有效性标记，确保每种数据只有在收到新数据后才恢复有效
         # 这避免了"只收到 odom 就恢复所有数据有效性"的问题
-        self._data_invalidated: Dict[str, bool] = {'odom': False, 'imu': False, 'traj': False}
+        self._data_invalidated: Dict[str, bool] = {'odom': False, 'imu': False, 'trajectory': False}
         
         # 统计信息
-        # 注意：键名统一使用简短形式 'odom', 'imu', 'traj'
-        self._update_counts: Dict[str, int] = {'odom': 0, 'imu': 0, 'traj': 0}
+        self._update_counts: Dict[str, int] = {'odom': 0, 'imu': 0, 'trajectory': 0}
         
         # 自动初始化
         self.initialize()
@@ -190,14 +224,16 @@ class DataManager(LifecycleMixin):
         delta = now - self._last_time
         
         # 检测时钟回退
-        if delta < -self.CLOCK_JITTER_TOLERANCE:
-            event = ClockJumpEvent(self._last_time, now, delta)
-            self._clock_jumped_back = True
-            # 只标记已收到过数据的类型为无效
-            # 从未收到过的数据不需要标记（它们本来就没有有效数据）
+        if delta < -self._clock_jitter_tolerance:
+            # 收集将被标记为无效的数据类型
+            invalidated = []
             for key in self._data_invalidated:
                 if key in self._latest_data:
                     self._data_invalidated[key] = True
+                    invalidated.append(key)
+            
+            event = ClockJumpEvent(self._last_time, now, delta, invalidated)
+            self._clock_jumped_back = True
             
             # 记录事件
             self._clock_jump_events.append(event)
@@ -207,19 +243,14 @@ class DataManager(LifecycleMixin):
             logger.warning(
                 f"Clock jumped backward by {abs(delta):.3f}s "
                 f"(from {self._last_time:.3f} to {now:.3f}). "
-                f"All cached data marked as stale."
+                f"Data marked as stale: {invalidated}"
             )
             
             return event
         
         # 检测时钟大幅前跳（可能是仿真快进）
-        if delta > self.CLOCK_JUMP_THRESHOLD:
-            event = ClockJumpEvent(self._last_time, now, delta)
-            
-            # 记录事件
-            self._clock_jump_events.append(event)
-            if len(self._clock_jump_events) > self._max_clock_jump_events:
-                self._clock_jump_events.pop(0)
+        if delta > self._clock_jump_threshold:
+            invalidated = []
             
             # 根据配置决定是否使数据无效
             if self._invalidate_on_forward_jump:
@@ -227,16 +258,24 @@ class DataManager(LifecycleMixin):
                 for key in self._data_invalidated:
                     if key in self._latest_data:
                         self._data_invalidated[key] = True
+                        invalidated.append(key)
                 logger.warning(
                     f"Clock jumped forward by {delta:.3f}s "
                     f"(from {self._last_time:.3f} to {now:.3f}). "
-                    f"All cached data marked as stale (invalidate_on_forward_jump=True)."
+                    f"Data marked as stale: {invalidated} (invalidate_on_forward_jump=True)."
                 )
             else:
                 logger.info(
                     f"Clock jumped forward by {delta:.3f}s "
                     f"(from {self._last_time:.3f} to {now:.3f})"
                 )
+            
+            event = ClockJumpEvent(self._last_time, now, delta, invalidated)
+            
+            # 记录事件
+            self._clock_jump_events.append(event)
+            if len(self._clock_jump_events) > self._max_clock_jump_events:
+                self._clock_jump_events.pop(0)
             
             return event
         
@@ -275,17 +314,25 @@ class DataManager(LifecycleMixin):
         """
         调用时钟跳变回调
         
-        在锁外调用，避免死锁。包含超时警告检测。
+        线程安全说明:
+        - 在锁内复制回调引用，避免调用过程中回调被修改
+        - 在锁外执行回调，避免死锁
+        - 包含超时警告检测
         
         Args:
             event: 时钟跳变事件
         """
-        if self._on_clock_jump is None:
+        # 在锁内复制回调引用，确保线程安全
+        # 这避免了在检查和调用之间回调被另一个线程修改的竞态条件
+        with self._lock:
+            callback = self._on_clock_jump
+        
+        if callback is None:
             return
         
         try:
             start_time = time.monotonic()
-            self._on_clock_jump(event)
+            callback(event)
             elapsed_ms = (time.monotonic() - start_time) * 1000
             
             # 警告慢回调（超过 10ms）
@@ -364,10 +411,10 @@ class DataManager(LifecycleMixin):
         
         with self._lock:
             now = self._get_time_func()
-            self._latest_data['traj'] = uc_traj
-            self._timestamps['traj'] = now
-            self._update_counts['traj'] += 1
-            callback_event = self._on_new_data('traj', now)
+            self._latest_data['trajectory'] = uc_traj
+            self._timestamps['trajectory'] = now
+            self._update_counts['trajectory'] += 1
+            callback_event = self._on_new_data('trajectory', now)
         
         # 在锁外调用回调，避免死锁
         if callback_event is not None:
@@ -388,20 +435,20 @@ class DataManager(LifecycleMixin):
     def get_latest_trajectory(self) -> Optional[Trajectory]:
         """获取最新轨迹数据"""
         with self._lock:
-            return self._latest_data.get('traj')
+            return self._latest_data.get('trajectory')
     
     def get_all_latest(self) -> Dict[str, Any]:
         """
         获取所有最新数据
         
         Returns:
-            包含 'odom', 'imu', 'traj' 键的字典
+            包含 'odom', 'imu', 'trajectory' 键的字典
         """
         with self._lock:
             return {
                 'odom': self._latest_data.get('odom'),
                 'imu': self._latest_data.get('imu'),
-                'traj': self._latest_data.get('traj'),
+                'trajectory': self._latest_data.get('trajectory'),
             }
     
     def get_data_ages(self) -> Dict[str, float]:
@@ -409,14 +456,13 @@ class DataManager(LifecycleMixin):
         获取各数据的年龄（秒）
         
         Returns:
-            字典，键为数据名 ('odom', 'imu', 'traj')，
+            字典，键为数据名 ('odom', 'imu', 'trajectory')，
             值为距上次更新的秒数。未收到的数据返回 float('inf')。
             
         Note:
             - 如果时钟回退（如仿真时间重置），被标记为无效的数据年龄返回 inf
             - 每种数据独立跟踪有效性，只有收到该类型的新数据才恢复
             - 时钟跳变（回退或大幅前跳）会触发回调通知上层
-            - 键名统一使用简短形式: 'odom', 'imu', 'traj'
         """
         now = self._get_time_func()
         callback_event = None
@@ -431,8 +477,7 @@ class DataManager(LifecycleMixin):
             self._last_time = now
             
             ages = {}
-            # 统一使用简短键名: odom, imu, traj
-            for key in ('odom', 'imu', 'traj'):
+            for key in ('odom', 'imu', 'trajectory'):
                 if self._data_invalidated.get(key, False):
                     # 该数据被标记为无效，返回 inf
                     ages[key] = float('inf')
@@ -475,24 +520,9 @@ class DataManager(LifecycleMixin):
         return True
     
     def has_required_data(self) -> bool:
-        """检查是否有必需的数据（odom 和 traj）"""
+        """检查是否有必需的数据（odom 和 trajectory）"""
         with self._lock:
-            return 'odom' in self._latest_data and 'traj' in self._latest_data
-    
-    def clear(self):
-        """
-        清除所有缓存数据
-        
-        .. deprecated:: 3.18
-            使用 reset() 代替，clear() 将在未来版本中移除
-        """
-        import warnings
-        warnings.warn(
-            "clear() is deprecated, use reset() instead",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        self.reset()
+            return 'odom' in self._latest_data and 'trajectory' in self._latest_data
     
     # ==================== LifecycleMixin 实现 ====================
     
@@ -534,12 +564,12 @@ class DataManager(LifecycleMixin):
             return {
                 'has_odom': 'odom' in self._latest_data,
                 'has_imu': 'imu' in self._latest_data,
-                'has_traj': 'traj' in self._latest_data,
+                'has_trajectory': 'trajectory' in self._latest_data,
                 'data_valid': all_data_valid,
                 'data_invalidated': self._data_invalidated.copy(),
                 'clock_jumped_back': self._clock_jumped_back,
                 'odom_age_ms': ages.get('odom', float('inf')) * 1000,
-                'traj_age_ms': ages.get('traj', float('inf')) * 1000,
+                'trajectory_age_ms': ages.get('trajectory', float('inf')) * 1000,
                 'update_counts': self._update_counts.copy(),
             }
     

@@ -60,9 +60,9 @@ def test_full_integration_pipeline():
     from universal_controller.tests.fixtures import create_test_odom, create_test_trajectory
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
-    # 1. 创建桥接层
+    # 1. 创建桥接层 (使用工厂方法)
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     assert bridge.is_running  # 使用新 API
     
@@ -137,7 +137,7 @@ def test_platform_specific_output():
         config['system'] = DEFAULT_CONFIG['system'].copy()
         config['system']['platform'] = platform
         
-        bridge = ControllerBridge(config)
+        bridge = ControllerBridge.create(config)
         
         odom = create_test_odom(vx=1.0, vy=0.5)
         trajectory = create_test_trajectory()
@@ -260,7 +260,7 @@ def test_diagnostics_callback():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     callback_data = []
     
@@ -296,7 +296,7 @@ def test_tf2_injection_mechanism():
     from controller_ros.bridge.controller_bridge import ControllerBridge
     
     config = DEFAULT_CONFIG.copy()
-    bridge = ControllerBridge(config)
+    bridge = ControllerBridge.create(config)
     
     # 验证 manager 和 coord_transformer 存在
     assert bridge.manager is not None
