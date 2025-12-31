@@ -2,6 +2,8 @@
 自定义进度条控件 - 支持动态颜色和多种显示模式
 """
 
+import math
+
 from PyQt5.QtWidgets import QProgressBar, QWidget, QHBoxLayout, QLabel
 from PyQt5.QtCore import Qt
 from ..styles import get_progress_color, COLORS
@@ -53,6 +55,10 @@ class ColorProgressBar(QWidget):
     
     def set_value(self, value: float, max_value: float = None, threshold: float = None):
         """设置值"""
+        # 处理 NaN 和 Inf 值
+        if math.isnan(value) or math.isinf(value):
+            value = 0.0
+        
         self._value = value
         if max_value is not None:
             self._max_value = max_value
@@ -64,6 +70,10 @@ class ColorProgressBar(QWidget):
             ratio = min(value / self._max_value, 1.0)
         else:
             ratio = 0
+        
+        # 确保 ratio 是有效数值
+        if math.isnan(ratio) or math.isinf(ratio):
+            ratio = 0.0
         
         # 更新进度条
         self.progress.setMaximum(1000)
@@ -128,8 +138,16 @@ class SimpleProgressBar(QProgressBar):
     
     def set_value_with_color(self, value: float, max_value: float = 100):
         """设置值并更新颜色"""
+        # 处理 NaN 和 Inf 值
+        if math.isnan(value) or math.isinf(value):
+            value = 0.0
+        
         ratio = value / max_value if max_value > 0 else 0
         ratio = min(ratio, 1.0)
+        
+        # 确保 ratio 是有效数值
+        if math.isnan(ratio) or math.isinf(ratio):
+            ratio = 0.0
         
         self.setMaximum(int(max_value * 10))
         self.setValue(int(value * 10))
