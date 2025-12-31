@@ -2,7 +2,7 @@
 # TurtleBot1 + ROS Noetic 专用配置
 #
 # 使用方法:
-#   roslaunch controller_ros turtlebot1.launch
+#   roslaunch controller_ros platforms/turtlebot1.launch
 #
 # 本配置针对 TurtleBot1 的特性进行了优化:
 # - 较低的控制频率 (20Hz)
@@ -66,12 +66,13 @@ diagnostics:
 # MPC 配置 - 针对 TurtleBot1 优化
 #
 # 预测时域: 必须 < 轨迹点数(8)，留1点余量
-# 时间步长: mpc.dt 会自动被 trajectory 模块继承，确保一致性
+# 时间步长: mpc.dt 是时间步长的主配置 (单一真相源)
+#           trajectory.default_dt_sec 会自动继承此值
 # =============================================================================
 mpc:
   horizon: 7                      # MPC 预测时域 (默认 20)
   horizon_degraded: 4             # 降级模式预测时域 (默认 10)
-  dt: 0.1                         # MPC 时间步长 (秒) - trajectory.default_dt_sec 自动继承此值
+  dt: 0.1                         # MPC 时间步长 (秒) - 主配置，trajectory 自动继承
   
   # 代价函数权重 - 基于诊断结果调优
   weights:
@@ -100,7 +101,10 @@ constraints:
 # =============================================================================
 # 轨迹配置
 #
-# 注意: default_dt_sec 自动继承 mpc.dt，无需重复配置
+# dt 配置说明 (单一真相源原则):
+# - mpc.dt 是时间步长的主配置，用户只需配置这一个
+# - trajectory.default_dt_sec 会自动从 mpc.dt 继承
+# - 继承在 ParamLoader 加载配置时自动完成，无需手动配置
 # =============================================================================
 trajectory:
   low_speed_thresh: 0.05          # 低速阈值 (默认 0.1) - 诊断建议降低

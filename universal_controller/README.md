@@ -249,12 +249,12 @@ python -m universal_controller.dashboard.run_dashboard
 **ROS 模式 (订阅控制器话题)**
 ```bash
 # 需要先启动控制器
-roslaunch controller_ros controller.launch
+roslaunch controller_ros core/controller.launch
 
 # 然后启动 Dashboard
-roslaunch controller_ros dashboard.launch
+roslaunch controller_ros tools/dashboard.launch
 # 或
-roslaunch controller_ros controller.launch dashboard:=true
+roslaunch controller_ros core/controller.launch dashboard:=true
 ```
 
 Dashboard 提供实时监控界面，显示：

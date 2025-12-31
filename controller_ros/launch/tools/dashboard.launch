@@ -4,11 +4,11 @@
     Dashboard 独立启动文件
     
     用法:
-      roslaunch controller_ros dashboard.launch
-      roslaunch controller_ros dashboard.launch platform:=quadrotor
+      roslaunch controller_ros tools/dashboard.launch
+      roslaunch controller_ros tools/dashboard.launch platform:=quadrotor
     
     注意:
-      - 需要先启动控制器节点 (controller.launch)
+      - 需要先启动控制器节点 (core/controller.launch)
       - Dashboard 订阅 /controller/diagnostics 话题
   -->
   
@@ -17,10 +17,10 @@
   
   <!-- ========== 加载配置文件 (用于 Dashboard 显示) ========== -->
   <!-- 基础配置 -->
-  <rosparam file="$(find controller_ros)/config/controller_params.yaml" command="load"/>
+  <rosparam file="$(find controller_ros)/config/base/controller_params.yaml" command="load"/>
   
   <!-- 平台特定配置 -->
-  <rosparam file="$(find controller_ros)/config/$(arg platform).yaml" command="load"/>
+  <rosparam file="$(find controller_ros)/config/platforms/$(arg platform).yaml" command="load"/>
   
   <!-- 覆盖平台参数 -->
   <param name="system/platform" value="$(arg platform)"/>

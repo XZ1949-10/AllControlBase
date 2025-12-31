@@ -43,19 +43,19 @@ source ~/.bashrc
 roslaunch turtlebot_bringup minimal.launch
 
 # 终端 2: 启动控制器
-roslaunch controller_ros turtlebot1.launch
+roslaunch controller_ros platforms/turtlebot1.launch
 
 # 终端 3: 启动你的轨迹发布器
 rosrun your_package trajectory_publisher.py
 
 # (可选) 带 Dashboard 监控启动
-roslaunch controller_ros turtlebot1.launch dashboard:=true
+roslaunch controller_ros platforms/turtlebot1.launch dashboard:=true
 
 # (可选) 带运行可视化界面启动 (轨迹、速度、手柄控制)
-roslaunch controller_ros turtlebot1.launch visualizer:=true
+roslaunch controller_ros platforms/turtlebot1.launch visualizer:=true
 
 # (可选) 同时启动 Dashboard 和运行可视化
-roslaunch controller_ros turtlebot1.launch dashboard:=true visualizer:=true
+roslaunch controller_ros platforms/turtlebot1.launch dashboard:=true visualizer:=true
 ```
 
 ---
@@ -641,13 +641,13 @@ roslaunch turtlebot_bringup minimal.launch
 # 终端 2: 启动控制器
 source ~/catkin_ws/devel/setup.bash
 export PYTHONPATH=$PYTHONPATH:/home/user/AllControlBase
-roslaunch controller_ros turtlebot1.launch
+roslaunch controller_ros platforms/turtlebot1.launch
 
 # 终端 3: 启动你的神经网络轨迹发布器
 rosrun your_package trajectory_publisher.py
 
 # (可选) 终端 4: 启动 Dashboard 监控
-roslaunch controller_ros turtlebot1.launch dashboard:=true
+roslaunch controller_ros platforms/turtlebot1.launch dashboard:=true
 ```
 
 ### 6.2 一键启动脚本
@@ -664,7 +664,7 @@ source ~/catkin_ws/devel/setup.bash
 export PYTHONPATH=$PYTHONPATH:/home/user/AllControlBase
 
 # 启动控制器 (dashboard 和 visualizer 默认关闭)
-roslaunch controller_ros turtlebot1.launch
+roslaunch controller_ros platforms/turtlebot1.launch
 ```
 
 ### 6.3 验证话题
@@ -704,7 +704,7 @@ rosrun controller_ros trajectory_publisher_example.py
 
 ### 7.1 TurtleBot1 专用配置
 
-配置文件: `controller_ros/config/turtlebot1.yaml`
+配置文件: `controller_ros/config/platforms/turtlebot1.yaml`
 
 | 参数 | 推荐值 | 说明 |
 |------|--------|------|
@@ -857,7 +857,7 @@ rostopic pub /cmd_vel geometry_msgs/Twist "linear: {x: 0.0}" -1
 
 ```bash
 # 查看控制器日志
-roslaunch controller_ros turtlebot1.launch 2>&1 | tee controller.log
+roslaunch controller_ros platforms/turtlebot1.launch 2>&1 | tee controller.log
 
 # 过滤警告和错误
 grep -E "WARN|ERROR" controller.log
@@ -881,8 +881,8 @@ grep -E "WARN|ERROR" controller.log
 
 | 文件 | 说明 |
 |------|------|
-| `config/turtlebot1.yaml` | TurtleBot1 专用配置 |
-| `config/controller_params.yaml` | 基础配置 |
+| `config/platforms/turtlebot1.yaml` | TurtleBot1 专用配置 |
+| `config/base/controller_params.yaml` | 基础配置 |
 | `launch/turtlebot1.launch` | TurtleBot1 启动文件 |
 | `launch/controller.launch` | 通用启动文件 |
 | `scripts/controller_node.py` | 控制器主节点 |

@@ -3,7 +3,7 @@
 Dashboard 模拟数据测试脚本
 
 仅用于测试和开发目的，使用模拟数据运行 Dashboard。
-生产环境请使用 ROS 模式：roslaunch controller_ros controller.launch dashboard:=true
+生产环境请使用 ROS 模式：roslaunch controller_ros core/controller.launch dashboard:=true
 
 用法:
     python -m universal_controller.tests.run_dashboard_mock
@@ -268,7 +268,7 @@ def main():
     print("=" * 60)
     print()
     print("⚠️  警告: 当前使用模拟数据，仅用于界面测试！")
-    print("    生产环境请使用: roslaunch controller_ros controller.launch dashboard:=true")
+    print("    生产环境请使用: roslaunch controller_ros core/controller.launch dashboard:=true")
     print()
     print("📋 模拟数据说明:")
     print("    - 诊断数据: 模拟生成")

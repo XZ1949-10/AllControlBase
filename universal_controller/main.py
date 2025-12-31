@@ -149,7 +149,7 @@ def run_dashboard():
     print("请使用: python -m universal_controller.tests.run_dashboard_mock")
     print()
     print("或者在 ROS 环境中使用:")
-    print("  roslaunch controller_ros controller.launch dashboard:=true")
+    print("  roslaunch controller_ros core/controller.launch dashboard:=true")
     sys.exit(1)
 
 

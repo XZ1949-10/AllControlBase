@@ -4,9 +4,9 @@
 启动 universal_controller 控制器节点。
 
 使用方法:
-    ros2 launch controller_ros controller.launch.py
-    ros2 launch controller_ros controller.launch.py platform:=omni
-    ros2 launch controller_ros controller.launch.py dashboard:=true
+    ros2 launch controller_ros core/controller.launch.py
+    ros2 launch controller_ros core/controller.launch.py platform:=omni
+    ros2 launch controller_ros core/controller.launch.py dashboard:=true
 """
 import os
 from launch import LaunchDescription
@@ -48,7 +48,7 @@ def generate_launch_description():
     
     # 配置文件路径
     base_config = PathJoinSubstitution([
-        pkg_share, 'config', 'controller_params.yaml'
+        pkg_share, 'config', 'base', 'controller_params.yaml'
     ])
     
     # 控制器节点

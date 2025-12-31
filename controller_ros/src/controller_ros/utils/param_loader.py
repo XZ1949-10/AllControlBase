@@ -175,12 +175,15 @@ class ParamLoader:
         # 4. 加载 ROS TF2 扩展参数，合并到 transform 配置中
         ParamLoader._load_transform_ros_params(config, strategy)
         
-        # 5. 配置验证
+        # 5. 统一处理 dt 配置继承 (单一真相源)
+        ParamLoader._sync_dt_config(config)
+        
+        # 6. 配置验证
         if validate:
             errors = ParamLoader._validate_config(config, strict=strict)
             # 错误已在 _validate_config 中处理（记录日志或抛出异常）
         
-        # 6. 日志
+        # 7. 日志
         platform = config.get('system', {}).get('platform', 'unknown')
         ctrl_freq = config.get('system', {}).get('ctrl_freq', 50)
         v_max = config.get('constraints', {}).get('v_max', 'N/A')
@@ -265,6 +268,41 @@ class ParamLoader:
             param_path = f"transform/{key}"
             value = strategy.get_param(param_path, default)
             transform_config[key] = convert_param_type(value, default)
+    
+    @staticmethod
+    def _sync_dt_config(config: Dict[str, Any]) -> None:
+        """
+        统一处理 dt 配置继承 (单一真相源原则)
+        
+        设计原则:
+        - mpc.dt 是时间步长的主配置 (用户只需配置这一个)
+        - trajectory.default_dt_sec 自动继承 mpc.dt
+        - 如果用户显式配置了 trajectory.default_dt_sec，则使用用户配置
+        
+        继承规则:
+        1. 如果 trajectory.default_dt_sec 未被显式配置，则从 mpc.dt 继承
+        2. 如果两者都被显式配置且不一致，验证阶段会发出警告
+        3. 继承完成后，下游模块无需再处理继承逻辑
+        
+        这样设计的好处:
+        - 用户只需配置 mpc.dt，减少配置复杂度
+        - 确保 MPC 和轨迹处理使用相同的时间步长
+        - 下游模块代码更简洁，无需重复继承逻辑
+        """
+        mpc_config = config.get('mpc', {})
+        traj_config = config.setdefault('trajectory', {})
+        
+        mpc_dt = mpc_config.get('dt')
+        
+        # 检查 trajectory.default_dt_sec 是否被显式配置
+        # 注意: 这里检查的是用户是否在 YAML 中配置了此项
+        # 如果 traj_config 中没有 'default_dt_sec' 键，说明使用的是默认值
+        traj_dt_explicitly_set = 'default_dt_sec' in traj_config
+        
+        if not traj_dt_explicitly_set and mpc_dt is not None:
+            # trajectory.default_dt_sec 未显式配置，从 mpc.dt 继承
+            traj_config['default_dt_sec'] = mpc_dt
+            logger.debug(f"trajectory.default_dt_sec inherited from mpc.dt: {mpc_dt}")
     
     @staticmethod
     def get_topics(node=None) -> Dict[str, str]:

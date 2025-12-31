@@ -3,7 +3,7 @@
 
 配置来源: 
 - universal_controller/config/safety_config.py -> CONSTRAINTS_CONFIG, SAFETY_CONFIG
-YAML 覆盖: controller_ros/config/turtlebot1.yaml -> constraints, safety 节
+YAML 覆盖: controller_ros/config/platforms/turtlebot1.yaml -> constraints, safety 节
 
 显示：
 - 速度/加速度约束

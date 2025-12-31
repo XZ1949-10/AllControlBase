@@ -9,10 +9,10 @@ Dashboard ROS 节点 - 可视化监控界面
     rosrun controller_ros dashboard_node.py
     
     # 通过 launch 文件启动
-    roslaunch controller_ros controller.launch dashboard:=true
+    roslaunch controller_ros core/controller.launch dashboard:=true
     
     # 单独启动 dashboard
-    roslaunch controller_ros dashboard.launch
+    roslaunch controller_ros tools/dashboard.launch
 """
 
 # 注意：不要在这里修改 sys.path！

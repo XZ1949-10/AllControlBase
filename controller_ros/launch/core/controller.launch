@@ -11,10 +11,10 @@
   
   <!-- ========== 加载配置文件 ========== -->
   <!-- 基础配置 -->
-  <rosparam file="$(find controller_ros)/config/controller_params.yaml" command="load"/>
+  <rosparam file="$(find controller_ros)/config/base/controller_params.yaml" command="load"/>
   
   <!-- 平台特定配置 (覆盖基础配置) -->
-  <rosparam file="$(find controller_ros)/config/$(arg platform).yaml" command="load"/>
+  <rosparam file="$(find controller_ros)/config/platforms/$(arg platform).yaml" command="load"/>
   
   <!-- ========== 覆盖参数 ========== -->
   <!-- 允许通过 launch 参数覆盖配置文件中的值 -->

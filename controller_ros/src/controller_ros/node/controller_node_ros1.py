@@ -6,7 +6,7 @@ Inherits from ControllerNodeBase for shared logic.
 
 Usage:
     rosrun controller_ros controller_node_ros1.py
-    roslaunch controller_ros controller.launch
+    roslaunch controller_ros core/controller.launch
 """
 from typing import Dict, Any, Optional
 import threading

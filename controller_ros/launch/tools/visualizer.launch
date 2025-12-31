@@ -10,23 +10,23 @@
 
 使用方法:
     # 基本启动 (俯视图模式)
-    roslaunch controller_ros visualizer.launch
+    roslaunch controller_ros tools/visualizer.launch
     
     # 使用相机图像 + 轨迹叠加 (需要先标定)
-    roslaunch controller_ros visualizer.launch \
+    roslaunch controller_ros tools/visualizer.launch \
         camera_image:=/usb_cam/image_raw \
         calibration_file:=$(rospack find controller_ros)/config/homography_calib.yaml
     
     # 使用自定义配置
-    roslaunch controller_ros visualizer.launch config_file:=/path/to/config.yaml
+    roslaunch controller_ros tools/visualizer.launch config_file:=/path/to/config.yaml
 
 标定说明:
     如需在相机图像上显示轨迹，需要先进行单应性标定:
-    roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
+    roslaunch controller_ros tools/trajectory_visualizer.launch calibration_mode:=true
 -->
 <launch>
     <!-- 参数 -->
-    <arg name="config_file" default="$(find controller_ros)/config/visualizer_params.yaml"/>
+    <arg name="config_file" default="$(find controller_ros)/config/tools/visualizer_params.yaml"/>
     <arg name="camera_image" default="" doc="相机图像话题 (留空使用俯视图)"/>
     <arg name="calibration_file" default="" doc="单应性标定文件路径"/>
     

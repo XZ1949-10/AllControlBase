@@ -74,10 +74,12 @@ class TrajectoryDefaults:
         Args:
             config: 配置字典，应包含 'trajectory', 'transform', 'mpc' 键
         
-        dt_sec 配置优先级:
-            1. trajectory.default_dt_sec (如果显式配置)
-            2. mpc.dt (自动继承，确保一致性)
-            3. 默认值 0.1
+        配置说明:
+            dt_sec 继承已在 ParamLoader._sync_dt_config() 中统一处理。
+            传入的 config['trajectory']['default_dt_sec'] 已经是最终值。
+            
+            为了兼容直接使用 DEFAULT_CONFIG 的场景（不经过 ParamLoader），
+            此处保留了 mpc.dt 的 fallback 逻辑。
         
         Example:
             >>> from universal_controller.config import DEFAULT_CONFIG
@@ -87,8 +89,8 @@ class TrajectoryDefaults:
         transform_config = config.get('transform', {})
         mpc_config = config.get('mpc', {})
         
-        # dt_sec 配置: 优先使用 trajectory.default_dt_sec，否则继承 mpc.dt
-        # 这确保了两者的一致性，用户只需配置 mpc.dt
+        # dt_sec 配置: 优先使用 trajectory.default_dt_sec
+        # 如果未配置，则 fallback 到 mpc.dt (兼容直接使用 DEFAULT_CONFIG 的场景)
         if 'default_dt_sec' in traj_config:
             cls.dt_sec = traj_config['default_dt_sec']
         elif 'dt' in mpc_config:

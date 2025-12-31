@@ -2,7 +2,7 @@
 跟踪误差面板
 
 配置来源: universal_controller/config/system_config.py -> TRACKING_CONFIG
-YAML 覆盖: controller_ros/config/turtlebot1.yaml -> tracking 节
+YAML 覆盖: controller_ros/config/platforms/turtlebot1.yaml -> tracking 节
 
 显示：
 - 横向/纵向/航向/预测误差

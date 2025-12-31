@@ -56,10 +56,10 @@ visualizer/
 
 ```bash
 # 使用 launch 文件
-roslaunch controller_ros visualizer.launch
+roslaunch controller_ros tools/visualizer.launch
 
 # 或通过 turtlebot1.launch
-roslaunch controller_ros turtlebot1.launch visualizer:=true
+roslaunch controller_ros platforms/turtlebot1.launch visualizer:=true
 ```
 
 ### 相机轨迹叠加模式
@@ -68,12 +68,12 @@ roslaunch controller_ros turtlebot1.launch visualizer:=true
 
 ```bash
 # 1. 运行标定工具
-roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
+roslaunch controller_ros tools/trajectory_visualizer.launch calibration_mode:=true
 
 # 2. 按照提示完成标定 (点击4个地面标记点，输入坐标)
 
 # 3. 启动带相机的可视化器
-roslaunch controller_ros turtlebot1.launch \
+roslaunch controller_ros platforms/turtlebot1.launch \
     visualizer:=true \
     camera_image:=/usb_cam/image_raw
 ```
@@ -138,7 +138,7 @@ pip install opencv-python
 
 ## 配置
 
-配置文件: `config/visualizer_params.yaml`
+配置文件: `config/tools/visualizer_params.yaml`
 
 ```yaml
 # 话题配置
@@ -166,5 +166,5 @@ display:
 |------|------|
 | `visualizer.launch` | 独立启动可视化器 |
 | `trajectory_visualizer.launch` | 单应性标定工具 |
-| `config/visualizer_params.yaml` | 可视化器配置 |
+| `config/tools/visualizer_params.yaml` | 可视化器配置 |
 | `config/homography_calib.yaml` | 单应性标定结果 |

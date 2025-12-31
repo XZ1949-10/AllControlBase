@@ -267,7 +267,7 @@ class TestConfigKeyMatching:
         # 读取 turtlebot1.yaml
         yaml_path = os.path.join(
             os.path.dirname(__file__), 
-            '..', 'config', 'turtlebot1.yaml'
+            '..', 'config', 'platforms', 'turtlebot1.yaml'
         )
         
         if not os.path.exists(yaml_path):
@@ -307,3 +307,83 @@ class TestConfigKeyMatching:
         # 检查 backup (不是 safety.backup_*)
         if 'backup' in yaml_config:
             assert 'backup' in DEFAULT_CONFIG, "backup should be in DEFAULT_CONFIG"
+
+
+class TestDtConfigInheritance:
+    """测试 dt 配置继承 (单一真相源原则)
+    
+    验证 trajectory.default_dt_sec 自动从 mpc.dt 继承的机制。
+    """
+    
+    def test_dt_inheritance_from_mpc(self):
+        """测试 trajectory.default_dt_sec 从 mpc.dt 继承"""
+        from controller_ros.utils.param_loader import ParamLoader
+        
+        config = ParamLoader.load(None)
+        
+        # 验证两者一致
+        mpc_dt = config['mpc']['dt']
+        traj_dt = config['trajectory']['default_dt_sec']
+        
+        assert mpc_dt == traj_dt, \
+            f"mpc.dt ({mpc_dt}) should equal trajectory.default_dt_sec ({traj_dt})"
+    
+    def test_sync_dt_config_inherits_when_not_set(self):
+        """测试 _sync_dt_config 在 trajectory.default_dt_sec 未设置时继承"""
+        from controller_ros.utils.param_loader import ParamLoader
+        
+        # 模拟配置：只有 mpc.dt，没有 trajectory.default_dt_sec
+        config = {
+            'mpc': {'dt': 0.05},
+            'trajectory': {'low_speed_thresh': 0.1}  # 没有 default_dt_sec
+        }
+        
+        ParamLoader._sync_dt_config(config)
+        
+        # 验证继承
+        assert config['trajectory']['default_dt_sec'] == 0.05
+    
+    def test_sync_dt_config_preserves_explicit_value(self):
+        """测试 _sync_dt_config 保留显式配置的值"""
+        from controller_ros.utils.param_loader import ParamLoader
+        
+        # 模拟配置：两者都有值
+        config = {
+            'mpc': {'dt': 0.05},
+            'trajectory': {'default_dt_sec': 0.2}  # 显式配置
+        }
+        
+        ParamLoader._sync_dt_config(config)
+        
+        # 验证保留显式值
+        assert config['trajectory']['default_dt_sec'] == 0.2
+    
+    def test_sync_dt_config_handles_missing_mpc(self):
+        """测试 _sync_dt_config 处理缺少 mpc 配置的情况"""
+        from controller_ros.utils.param_loader import ParamLoader
+        
+        # 模拟配置：没有 mpc
+        config = {
+            'trajectory': {'low_speed_thresh': 0.1}
+        }
+        
+        # 不应该抛出异常
+        ParamLoader._sync_dt_config(config)
+        
+        # trajectory 应该保持不变（没有 default_dt_sec）
+        assert 'default_dt_sec' not in config['trajectory']
+    
+    def test_sync_dt_config_handles_missing_trajectory(self):
+        """测试 _sync_dt_config 处理缺少 trajectory 配置的情况"""
+        from controller_ros.utils.param_loader import ParamLoader
+        
+        # 模拟配置：没有 trajectory
+        config = {
+            'mpc': {'dt': 0.05}
+        }
+        
+        ParamLoader._sync_dt_config(config)
+        
+        # 应该创建 trajectory 并设置 default_dt_sec
+        assert 'trajectory' in config
+        assert config['trajectory']['default_dt_sec'] == 0.05

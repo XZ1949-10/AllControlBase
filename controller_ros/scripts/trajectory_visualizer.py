@@ -11,10 +11,10 @@
 
 使用方法:
     # 正常运行 (需要先标定)
-    roslaunch controller_ros trajectory_visualizer.launch
+    roslaunch controller_ros tools/trajectory_visualizer.launch
     
     # 标定模式
-    roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
+    roslaunch controller_ros tools/trajectory_visualizer.launch calibration_mode:=true
     
 标定步骤:
     1. 在机器人前方地面放置4个标记点，测量其相对于 base_footprint 的坐标 (x, y)

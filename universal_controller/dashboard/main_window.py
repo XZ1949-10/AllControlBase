@@ -275,6 +275,6 @@ def run_dashboard(controller_manager, config: dict = None):
 if __name__ == '__main__':
     print("错误: 此模块不能直接运行")
     print("请使用以下方式之一:")
-    print("  1. ROS 模式: roslaunch controller_ros controller.launch dashboard:=true")
+    print("  1. ROS 模式: roslaunch controller_ros core/controller.launch dashboard:=true")
     print("  2. 测试模式: python -m universal_controller.tests.run_dashboard_mock")
     sys.exit(1)

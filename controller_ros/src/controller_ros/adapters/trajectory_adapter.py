@@ -71,10 +71,10 @@ class TrajectoryAdapter(IMsgConverter):
             config: 配置字典，可选。会与 TRAJECTORY_CONFIG 合并，
                    传入的配置优先级更高。
                    
-        dt_sec 配置优先级:
-            1. config['trajectory']['default_dt_sec'] (如果显式配置)
-            2. config['mpc']['dt'] (自动继承，确保一致性)
-            3. TRAJECTORY_CONFIG['default_dt_sec'] (默认值)
+        配置说明:
+            dt_sec 继承已在 ParamLoader._sync_dt_config() 中统一处理。
+            传入的 config['trajectory']['default_dt_sec'] 已经是最终值，
+            无需在此处再次处理继承逻辑。
         """
         super().__init__()
         
@@ -84,13 +84,7 @@ class TrajectoryAdapter(IMsgConverter):
             # 合并 trajectory 配置
             traj_config = config.get('trajectory', {})
             self._config.update(traj_config)
-            
-            # dt_sec 优先级: trajectory.default_dt_sec > mpc.dt > 默认值
-            # 如果 trajectory.default_dt_sec 未显式配置，则继承 mpc.dt
-            if 'default_dt_sec' not in traj_config and 'mpc' in config:
-                mpc_dt = config['mpc'].get('dt')
-                if mpc_dt is not None:
-                    self._config['default_dt_sec'] = mpc_dt
+            # 注意: dt 继承已在 ParamLoader 中处理，此处无需重复
         
         # 缓存常用配置值
         self._max_coord = self._config.get('max_coord', 100.0)

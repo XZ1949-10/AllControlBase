@@ -2,7 +2,7 @@
 # TurtleBot1 运行可视化配置
 #
 # 使用方法:
-#   roslaunch controller_ros turtlebot1.launch visualizer:=true
+#   roslaunch controller_ros platforms/turtlebot1.launch visualizer:=true
 #
 # =============================================================================
 # 配置统一性说明

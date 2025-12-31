@@ -99,7 +99,7 @@ python -m tools.tuning.run_diagnostics --json /path/to/diagnostics.json
 
 ```bash
 # 需要先启动 ROS 和控制器
-roslaunch controller_ros turtlebot1.launch
+roslaunch controller_ros platforms/turtlebot1.launch
 
 # 在另一个终端运行诊断工具
 python -m tools.tuning.run_diagnostics --live --duration 60
@@ -119,7 +119,7 @@ python -m tools.tuning.run_diagnostics --demo
 | `--json` | JSON 诊断数据文件路径 | - |
 | `--live` | 从实时 ROS 话题收集 | - |
 | `--demo` | 使用演示数据运行 | - |
-| `--config` | 配置文件路径 | `controller_ros/config/turtlebot1.yaml` |
+| `--config` | 配置文件路径 | `controller_ros/config/platforms/turtlebot1.yaml` |
 | `--output` | 输出目录 | `./tuning_output` |
 | `--duration` | 实时收集持续时间（秒） | 60 |
 | `--topic` | 诊断话题名称 | `/controller/diagnostics` |

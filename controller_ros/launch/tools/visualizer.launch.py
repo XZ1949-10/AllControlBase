@@ -4,10 +4,10 @@
 启动 TurtleBot1 运行可视化界面。
 
 使用方法:
-    ros2 launch controller_ros visualizer.launch.py
+    ros2 launch controller_ros tools/visualizer.launch.py
     
     # 使用自定义配置
-    ros2 launch controller_ros visualizer.launch.py config_file:=/path/to/config.yaml
+    ros2 launch controller_ros tools/visualizer.launch.py config_file:=/path/to/config.yaml
 """
 import os
 from launch import LaunchDescription
@@ -24,7 +24,7 @@ def generate_launch_description():
     # 声明参数
     config_file_arg = DeclareLaunchArgument(
         'config_file',
-        default_value=os.path.join(pkg_dir, 'config', 'visualizer_params.yaml'),
+        default_value=os.path.join(pkg_dir, 'config', 'tools', 'visualizer_params.yaml'),
         description='Path to visualizer configuration file'
     )
     

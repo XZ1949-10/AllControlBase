@@ -2,7 +2,7 @@
 一致性分析面板
 
 配置来源: universal_controller/config/modules_config.py -> CONSISTENCY_CONFIG
-YAML 覆盖: controller_ros/config/turtlebot1.yaml -> consistency 节
+YAML 覆盖: controller_ros/config/platforms/turtlebot1.yaml -> consistency 节
 
 显示：
 - 融合权重 α_soft

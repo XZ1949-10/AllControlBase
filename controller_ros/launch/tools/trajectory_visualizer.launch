@@ -7,13 +7,13 @@
   
   使用方法:
     # 标定模式 (交互式标定)
-    roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true
+    roslaunch controller_ros tools/trajectory_visualizer.launch calibration_mode:=true
     
     # 验证模式 (查看标定效果)
-    roslaunch controller_ros trajectory_visualizer.launch
+    roslaunch controller_ros tools/trajectory_visualizer.launch
     
     # 不显示窗口 (仅发布叠加图像)
-    roslaunch controller_ros trajectory_visualizer.launch show_window:=false
+    roslaunch controller_ros tools/trajectory_visualizer.launch show_window:=false
   
   标定步骤:
     1. 在机器人前方地面放置 4 个标记点
@@ -25,7 +25,7 @@
     7. 标定文件保存在 config/homography_calib.yaml
   
   标定完成后:
-    roslaunch controller_ros turtlebot1.launch visualizer:=true camera_image:=/usb_cam/image_raw
+    roslaunch controller_ros platforms/turtlebot1.launch visualizer:=true camera_image:=/usb_cam/image_raw
 -->
 <launch>
   <!-- ========== 参数 ========== -->

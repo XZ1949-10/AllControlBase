@@ -11,7 +11,7 @@
 MPC_CONFIG = {
     'horizon': 20,                # MPC 预测时域
     'horizon_degraded': 10,       # 降级时的预测时域
-    'dt': 0.1,                    # 时间步长 (秒) - 应与 trajectory.default_dt_sec 一致
+    'dt': 0.1,                    # 时间步长 (秒) - 主配置，trajectory.default_dt_sec 自动继承
     'horizon_change_min_interval': 1.0,  # Horizon 调整节流间隔 (秒) - 防止频繁重新初始化求解器
     
     # 代价函数权重

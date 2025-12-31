@@ -122,15 +122,15 @@ source devel/setup.bash
 
 ```bash
 # 默认配置 (差速车)
-roslaunch controller_ros controller.launch
+roslaunch controller_ros core/controller.launch
 
 # 指定平台
-roslaunch controller_ros controller.launch platform:=omni
-roslaunch controller_ros controller.launch platform:=quadrotor
-roslaunch controller_ros controller.launch platform:=ackermann
+roslaunch controller_ros core/controller.launch platform:=omni
+roslaunch controller_ros core/controller.launch platform:=quadrotor
+roslaunch controller_ros core/controller.launch platform:=ackermann
 
 # 使用仿真时间
-roslaunch controller_ros controller.launch use_sim_time:=true
+roslaunch controller_ros core/controller.launch use_sim_time:=true
 ```
 
 ### 话题
@@ -212,7 +212,7 @@ TFBridge.inject_to_transformer(coord_transformer)
 
 ### 参数文件
 
-配置文件位于 `config/controller_params.yaml`：
+配置文件位于 `config/base/controller_params.yaml`：
 
 ```yaml
 # 系统配置
@@ -342,16 +342,16 @@ from controller_ros.dashboard import ROSDashboardDataSource
 | 数据源 | 控制器诊断数据 | ROS 话题 (odom, trajectory, joy) |
 | 主要功能 | MPC 健康、状态机、超时监控、一致性分析 | 轨迹显示、手柄控制、相机叠加 |
 | 目标用户 | 开发者 | 操作员 |
-| 启动方式 | `roslaunch controller_ros dashboard.launch` | `roslaunch controller_ros visualizer.launch` |
+| 启动方式 | `roslaunch controller_ros tools/dashboard.launch` | `roslaunch controller_ros tools/visualizer.launch` |
 
 ### 启动方式
 
 ```bash
 # 方式 1: 控制器 + Dashboard 一起启动
-roslaunch controller_ros controller.launch dashboard:=true
+roslaunch controller_ros core/controller.launch dashboard:=true
 
 # 方式 2: 单独启动 Dashboard (需要先启动控制器)
-roslaunch controller_ros dashboard.launch
+roslaunch controller_ros tools/dashboard.launch
 
 # 方式 3: 直接运行 Dashboard 节点
 rosrun controller_ros dashboard_node.py
@@ -392,15 +392,27 @@ controller_ros/
 ├── CMakeLists.txt           # catkin 构建配置
 ├── setup.py                 # Python 包配置
 ├── config/
-│   ├── controller_params.yaml
-│   ├── differential.yaml
-│   ├── omni.yaml
-│   ├── quadrotor.yaml
-│   └── ackermann.yaml
+│   ├── base/
+│   │   └── controller_params.yaml    # 基础配置
+│   ├── platforms/                    # 平台特定配置
+│   │   ├── differential.yaml
+│   │   ├── omni.yaml
+│   │   ├── quadrotor.yaml
+│   │   ├── ackermann.yaml
+│   │   └── turtlebot1.yaml
+│   └── tools/                        # 工具节点配置
+│       └── visualizer_params.yaml
 ├── launch/
-│   ├── controller.launch    # ROS1 launch 文件 (支持 dashboard:=true)
-│   ├── dashboard.launch     # Dashboard 独立启动
-│   └── controller.launch.py # ROS2 launch 文件 (备用)
+│   ├── core/                    # 核心启动文件
+│   │   ├── controller.launch
+│   │   └── controller.launch.py
+│   ├── platforms/               # 平台特定启动文件
+│   │   └── turtlebot1.launch
+│   └── tools/                   # 工具启动文件
+│       ├── dashboard.launch
+│       ├── visualizer.launch
+│       ├── visualizer.launch.py
+│       └── trajectory_visualizer.launch
 ├── msg/
 │   ├── LocalTrajectoryV4.msg
 │   ├── UnifiedCmd.msg

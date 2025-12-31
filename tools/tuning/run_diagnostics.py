@@ -52,7 +52,7 @@ from tools.tuning.data_collector import (
 
 
 # 默认配置文件路径
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "controller_ros" / "config" / "turtlebot1.yaml"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "controller_ros" / "config" / "platforms" / "turtlebot1.yaml"
 
 
 def print_banner():

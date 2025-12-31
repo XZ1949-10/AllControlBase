@@ -315,7 +315,7 @@ class TrajectoryView(QWidget):
         font = QFont()
         font.setPointSize(10)
         painter.setFont(font)
-        hint = "相机模式需要单应性标定\n运行: roslaunch controller_ros trajectory_visualizer.launch calibration_mode:=true"
+        hint = "相机模式需要单应性标定\n运行: roslaunch controller_ros tools/trajectory_visualizer.launch calibration_mode:=true"
         painter.drawText(10, self.height() - 40, hint)
     
     def _draw_trajectory_on_birdview(self, painter: QPainter):
