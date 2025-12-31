@@ -154,7 +154,7 @@ backup:
   default_turn_direction: "left"      # 正后方默认转向方向
   
   # 角速度变化率限制
-  omega_rate_limit: null              # null: 自动计算为 alpha_max * dt
+  omega_rate_limit: -1                # -1: 自动计算为 alpha_max * dt
 
 
 # =============================================================================

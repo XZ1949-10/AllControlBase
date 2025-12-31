@@ -102,8 +102,9 @@ class PurePursuitController(ITrajectoryTracker):
         
         # 角速度变化率限制 (用于防止目标点在正后方时的跳变)
         # 默认使用 alpha_max * dt，但可以单独配置
+        # -1 或 None 表示自动计算
         omega_rate_config = backup_config.get('omega_rate_limit')
-        if omega_rate_config is not None:
+        if omega_rate_config is not None and omega_rate_config > 0:
             self.omega_rate_limit = omega_rate_config
         else:
             self.omega_rate_limit = self.alpha_max * self.dt

@@ -27,7 +27,7 @@ tmux send-keys -t ${SESSION}:0.1 'cd ~/visualnav-transformer/deployment/src' Ent
 tmux send-keys -t ${SESSION}:0.1 'python explore_new.py'
 
 # 窗格2: controller
-tmux send-keys -t ${SESSION}:0.2 'roslaunch controller_ros platforms/turtlebot1.launch'
+tmux send-keys -t ${SESSION}:0.2 'roslaunch controller_ros platforms/turtlebot1.launch dashboard:=true'
 
 # 窗格3: trajectory
 tmux send-keys -t ${SESSION}:0.3 'rosrun controller_ros trajectory_publisher.py'

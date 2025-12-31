@@ -65,9 +65,9 @@ BACKUP_CONFIG = {
     'min_distance_thresh': 0.1,       # 最小距离阈值 (m)
     
     # 角速度变化率限制
-    # null/None: 自动计算为 alpha_max * dt
+    # -1 或 None: 自动计算为 alpha_max * dt
     # 正数: 使用指定值 (rad/s per step)
-    'omega_rate_limit': None,
+    'omega_rate_limit': -1,
     
     # 正后方处理参数
     # 注意: REAR_ANGLE_THRESH 是几何常量，定义在 core/constants.py 中

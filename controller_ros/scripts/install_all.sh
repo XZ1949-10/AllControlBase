@@ -539,6 +539,36 @@ print('消息导入成功: UnifiedCmd, LocalTrajectoryV4, DiagnosticsV2')
     exit 1
 }
 
+# 验证 launch 文件是否正确安装
+print_info "验证 launch 文件安装..."
+LAUNCH_PATH="$CATKIN_WS/devel/share/controller_ros/launch"
+if [ -d "$LAUNCH_PATH/platforms" ] && [ -f "$LAUNCH_PATH/platforms/turtlebot1.launch" ]; then
+    print_success "launch 文件已安装: $LAUNCH_PATH ✓"
+else
+    print_warning "launch 文件未在 devel 中找到，检查源目录..."
+    # 对于符号链接模式，catkin 可能直接使用源目录
+    SRC_LAUNCH="$CATKIN_WS/src/controller_ros/launch"
+    if [ -d "$SRC_LAUNCH/platforms" ] && [ -f "$SRC_LAUNCH/platforms/turtlebot1.launch" ]; then
+        print_success "launch 文件在源目录中存在 ✓"
+        print_info "catkin 将通过符号链接访问 launch 文件"
+    else
+        print_error "launch 文件不存在!"
+        print_error "请检查: $ALLCONTROLBASE_PATH/controller_ros/launch/"
+        exit 1
+    fi
+fi
+
+# 验证 config 文件是否正确安装
+print_info "验证 config 文件安装..."
+CONFIG_PATH="$CATKIN_WS/devel/share/controller_ros/config"
+SRC_CONFIG="$CATKIN_WS/src/controller_ros/config"
+if [ -d "$CONFIG_PATH" ] || [ -d "$SRC_CONFIG" ]; then
+    print_success "config 文件可访问 ✓"
+else
+    print_error "config 文件不存在!"
+    exit 1
+fi
+
 print_success "controller_ros 编译完成 ✓"
 
 # ============================================================================
