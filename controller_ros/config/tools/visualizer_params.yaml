@@ -64,4 +64,4 @@ joystick:
 # =============================================================================
 camera:
   use_camera: true                        # 是否使用相机图像
-  calibration_file: ""                    # 单应性标定文件路径 (需要先标定)
+  calibration_file: ""   # 通过 launch 参数指定: calibration_file:=$(rospack find controller_ros)/config/tools/homography_calib.yaml                    # 单应性标定文件路径 (需要先标定)

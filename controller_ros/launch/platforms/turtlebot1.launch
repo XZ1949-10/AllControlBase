@@ -34,8 +34,8 @@
   <arg name="use_sim_time" default="false" doc="Use simulation time"/>
   <arg name="dashboard" default="true" doc="Launch Dashboard GUI for monitoring"/>
   <arg name="visualizer" default="true" doc="Launch TurtleBot1 运行可视化界面 (轨迹、速度、手柄控制)"/>
-  <arg name="camera_image" default="" doc="相机图像话题 (留空使用俯视图模式)"/>
-  <arg name="calibration_file" default="" doc="单应性标定文件 (留空使用俯视图模式)"/>
+  <arg name="camera_image" default="/usb_cam/image_raw" doc="相机图像话题 (留空使用俯视图模式)"/>
+  <arg name="calibration_file" default="$(rospack find controller_ros)/config/tools/homography_calib.yaml" doc="单应性标定文件 (留空使用俯视图模式)"/>
   
   <!-- ========== 全局参数 ========== -->
   <param name="/use_sim_time" value="$(arg use_sim_time)"/>
