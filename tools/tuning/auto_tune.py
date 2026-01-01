@@ -261,8 +261,9 @@ class AutoTuner:
         try:
             from controller_ros.msg import Trajectory, DiagnosticsV2
             has_custom_msgs = True
-        except ImportError:
-            self._log("警告: controller_ros 消息不可用，部分功能受限")
+            self._log("✓ controller_ros 消息已加载")
+        except ImportError as e:
+            self._log(f"警告: controller_ros 消息不可用 ({e})，部分功能受限")
             has_custom_msgs = False
         
         # 初始化 ROS 节点
