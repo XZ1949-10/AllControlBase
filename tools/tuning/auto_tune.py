@@ -308,7 +308,7 @@ class AutoTuner:
         
         start_time = time.time()
         rate = rospy.Rate(50)
-        last_progress = -1
+        last_progress_time = 0
         
         while not rospy.is_shutdown():
             elapsed = time.time() - start_time
@@ -327,11 +327,13 @@ class AutoTuner:
             except:
                 pass
             
-            # 进度显示
-            progress = int(elapsed / duration_sec * 100)
-            if progress % 10 == 0 and progress != last_progress:
-                self._log(f"  进度: {progress}% ({int(elapsed)}秒)")
-                last_progress = progress
+            # 进度显示 - 每 10 秒更新一次
+            if elapsed - last_progress_time >= 10:
+                progress = int(elapsed / duration_sec * 100)
+                diag_count = len(self.diag_stats.samples)
+                topic_counts = {k: v.message_count for k, v in self.topic_stats.items()}
+                self._log(f"  进度: {progress}% ({int(elapsed)}秒) | 诊断消息: {diag_count} | 话题: {topic_counts}")
+                last_progress_time = elapsed
             
             rate.sleep()
         
@@ -575,6 +577,9 @@ class AutoTuner:
         
         # 6. 基于状态机统计调优状态机参数
         self._tune_state_machine()
+        
+        # 7. 低频轨迹专项优化
+        self._tune_low_frequency_trajectory()
         
         if not self.tuning_changes:
             self._log("\n✅ 当前配置已经是最优，无需调整")
@@ -903,6 +908,112 @@ class AutoTuner:
                         current_recovery, suggested,
                         f"备份控制器激活率 {backup_rate:.1f}% 过高，降低恢复阈值",
                         'warning')
+
+    def _tune_low_frequency_trajectory(self):
+        """低频轨迹专项优化
+        
+        当轨迹频率低于 5Hz 时，自动调优以下参数:
+        - consistency.temporal_window_size: 减少历史窗口，加快响应
+        - backup.lookahead_dist: 增加前瞻距离补偿延迟
+        - backup.min_lookahead: 配合增加的前瞻距离
+        - backup.max_lookahead: 允许更大动态前瞻
+        - safety.state_machine.mpc_fail_thresh: 放宽失败阈值
+        """
+        # 检查轨迹频率
+        traj_topic = '/controller/input/trajectory'
+        if traj_topic not in self.topic_stats:
+            return
+        
+        traj_stats = self.topic_stats[traj_topic]
+        traj_hz = traj_stats.avg_hz
+        
+        # 只有当轨迹频率低于 5Hz 时才进行低频优化
+        LOW_FREQ_THRESHOLD = 5.0
+        if traj_hz <= 0 or traj_hz >= LOW_FREQ_THRESHOLD:
+            return
+        
+        self._log(f"\n【低频轨迹专项优化】(轨迹频率: {traj_hz:.1f}Hz < {LOW_FREQ_THRESHOLD}Hz)")
+        
+        # 计算轨迹周期 (ms)
+        traj_period_ms = 1000.0 / traj_hz
+        
+        # 1. 一致性检查时序窗口
+        # 低频轨迹下，减少历史窗口以加快对轨迹变化的响应
+        # 目标: 保持约 2-3 秒的历史数据
+        current_window = self._get_param('consistency.temporal_window_size', 10)
+        target_history_sec = 2.5  # 目标历史时间
+        suggested_window = max(int(target_history_sec * traj_hz), 4)  # 最小 4 个样本
+        
+        if current_window > suggested_window * 1.3:
+            self._add_change('consistency.temporal_window_size', current_window, suggested_window,
+                f"低频轨迹({traj_hz:.1f}Hz)下减少历史窗口到~{target_history_sec}秒",
+                'info')
+        
+        # 2. 备份控制器前瞻距离
+        # 低频轨迹下，需要更大的前瞻距离来补偿轨迹更新延迟
+        # 前瞻距离应该能覆盖至少 1-2 个轨迹周期的行驶距离
+        current_lookahead = self._get_param('backup.lookahead_dist', 0.5)
+        v_max = self._get_param('constraints.v_max', 0.5)
+        
+        # 计算建议的前瞻距离: 至少覆盖 1.5 个轨迹周期
+        min_lookahead_for_freq = v_max * (traj_period_ms / 1000.0) * 1.5
+        suggested_lookahead = max(current_lookahead, round(min_lookahead_for_freq + 0.2, 1))
+        suggested_lookahead = min(suggested_lookahead, 1.5)  # 不超过 1.5m
+        
+        if suggested_lookahead > current_lookahead * 1.2:
+            self._add_change('backup.lookahead_dist', current_lookahead, suggested_lookahead,
+                f"低频轨迹({traj_hz:.1f}Hz)需要更大前瞻距离补偿延迟",
+                'info')
+            
+            # 同步调整 min_lookahead 和 max_lookahead
+            current_min = self._get_param('backup.min_lookahead', 0.3)
+            suggested_min = round(suggested_lookahead * 0.6, 1)
+            if suggested_min > current_min:
+                self._add_change('backup.min_lookahead', current_min, suggested_min,
+                    f"配合增加的前瞻距离",
+                    'info')
+            
+            current_max = self._get_param('backup.max_lookahead', 1.5)
+            suggested_max = round(suggested_lookahead * 2.5, 1)
+            suggested_max = min(suggested_max, 3.0)  # 不超过 3m
+            if suggested_max > current_max:
+                self._add_change('backup.max_lookahead', current_max, suggested_max,
+                    f"允许更大的动态前瞻范围",
+                    'info')
+        
+        # 3. MPC 失败阈值
+        # 低频轨迹下，MPC 可能更容易因为轨迹点不足而"失败"
+        # 适当放宽失败阈值，减少不必要的备份控制器切换
+        stats = self.diag_stats
+        total = len(stats.samples)
+        
+        if total > 0:
+            # 检查 MPC 降级和备份激活情况
+            degraded_count = stats.state_counts.get(3, 0)  # MPC_DEGRADED
+            backup_count = stats.state_counts.get(4, 0)  # BACKUP_ACTIVE
+            
+            # 如果降级或备份激活率较高，放宽失败阈值
+            problem_rate = (degraded_count + backup_count) / total * 100
+            
+            if problem_rate > 3:  # 超过 3% 的时间处于非正常状态
+                current_fail_thresh = self._get_param('safety.state_machine.mpc_fail_thresh', 3)
+                suggested_fail_thresh = min(current_fail_thresh + 1, 5)  # 最多增加到 5
+                
+                if suggested_fail_thresh > current_fail_thresh:
+                    self._add_change('safety.state_machine.mpc_fail_thresh',
+                        current_fail_thresh, suggested_fail_thresh,
+                        f"低频轨迹下放宽MPC失败阈值(降级+备份率{problem_rate:.1f}%)",
+                        'info')
+        
+        # 4. 轨迹低速阈值
+        # 低频轨迹下，可能需要更低的低速阈值来避免误判
+        current_low_speed = self._get_param('trajectory.low_speed_thresh', 0.05)
+        if traj_hz < 3:  # 非常低的频率
+            suggested_low_speed = 0.03
+            if current_low_speed > suggested_low_speed:
+                self._add_change('trajectory.low_speed_thresh', current_low_speed, suggested_low_speed,
+                    f"极低频轨迹({traj_hz:.1f}Hz)下降低低速阈值",
+                    'info')
 
     # =========================================================================
     # 输出

@@ -1,0 +1,99 @@
+已加载配置: controller_ros/config/platforms/turtlebot1.yaml
+✓ controller_ros 消息已加载
+
+开始收集数据 (600.0秒)...
+监控话题:
+  - /odom
+  - /controller/input/trajectory
+  - /mobile_base/sensors/imu_data
+  - /controller/diagnostics
+  - TF2: base_footprint → odom
+--------------------------------------------------
+  进度: 0% (0秒)
+  进度: 10% (60秒)
+  进度: 20% (120秒)
+  进度: 30% (180秒)
+  进度: 40% (240秒)
+  进度: 50% (300秒)
+  进度: 60% (360秒)
+  进度: 70% (420秒)
+  进度: 80% (480秒)
+  进度: 90% (540秒)
+
+数据收集完成!
+
+============================================================
+数据分析
+============================================================
+
+【话题帧率分析】
+  ✓ /odom
+      帧率: 49.9 Hz (期望 >= 50 Hz)
+      消息数: 29958
+      p95间隔: 22.1 ms
+  ⚠ /controller/input/trajectory
+      帧率: 2.2 Hz (期望 >= 10 Hz)
+      消息数: 1319
+      p95间隔: 972.4 ms
+  ⚠ /mobile_base/sensors/imu_data
+      帧率: 49.9 Hz (期望 >= 100 Hz)
+      消息数: 29958
+      p95间隔: 22.1 ms
+  ✓ /controller/diagnostics
+      帧率: 3.5 Hz (期望 >= 4 Hz)
+      消息数: 2107
+      p95间隔: 304.2 ms
+
+  TF2 (base_footprint → odom)
+      帧率: 50.0 Hz
+      p95间隔: 20.3 ms
+
+【诊断数据分析】(共 2107 样本)
+
+  状态分布:
+    NORMAL: 2033 (96.5%)
+    MPC_DEGRADED: 69 (3.3%)
+    STOPPING: 4 (0.2%)
+    STOPPED: 1 (0.0%)
+
+  MPC 求解时间: avg=2.0ms, p95=4.8ms, max=22.6ms
+  MPC 未求解次数: 5
+  MPC 成功率: 100.0%
+
+  轨迹延迟: avg=378.5ms, p95=956.1ms, max=2678.5ms
+  轨迹超时次数: 27
+  宽限期超时次数: 2
+
+  跟踪误差:
+    横向: avg=9.3cm, max=27.3cm
+    纵向: avg=30.8cm, max=83.2cm
+    航向: avg=25.8°, max=177.3°
+    预测: avg=0.7cm
+
+  安全检查失败: 37 (1.8%)
+
+============================================================
+调优建议
+============================================================
+
+🟡 watchdog.traj_timeout_ms
+    当前值: 1500 → 建议值: 1944
+    原因: 轨迹帧率 2.2Hz, p95间隔 972ms
+
+🟡 watchdog.traj_grace_ms
+    当前值: 900 → 建议值: 1458
+    原因: 轨迹帧率 2.2Hz, 宽限期需要更长
+
+🟡 mpc.weights.heading
+    当前值: 8.0 → 建议值: 10.4
+    原因: 航向误差 avg=25.8° 过大
+
+🔵 tracking.longitudinal_thresh
+    当前值: 0.6 → 建议值: 0.69
+    原因: 纵向误差 p95=52.9cm 接近阈值
+
+🔵 tracking.heading_thresh
+    当前值: 0.5 → 建议值: 0.81
+    原因: 航向误差 p95=35.9° 接近阈值
+
+✅ 调优配置已保存到: tuning_output/tuned_turtlebot1.yaml

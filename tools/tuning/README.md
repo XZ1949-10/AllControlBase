@@ -1,4 +1,4 @@
-# TurtleBot1 配置诊断与调优工具 v4.0
+# TurtleBot1 配置诊断与调优工具 v4.2
 
 自动分析控制器诊断数据，识别性能问题并生成优化后的配置文件。
 
@@ -11,6 +11,7 @@
 - 📈 **详细报告**: 诊断报告、分析摘要、变更日志
 - 🆕 **一键调优**: 自动收集、分析、生成配置 (v4.0 新增)
 - 🆕 **帧率分析**: 分析话题帧率、MPC 降级原因 (v3.6 新增)
+- 🆕 **低频轨迹优化**: 自动检测并优化低频轨迹场景 (v4.2 新增)
 
 ## 快速开始
 
@@ -407,6 +408,24 @@ MPC 性能:
   - 纵向误差 > 50cm → 增加 velocity 权重
   - 横向误差 > 15cm → 增加 position 权重
   - 航向误差 > 11° → 增加 heading 权重
+
+## v4.2 更新内容
+
+- **新增低频轨迹专项优化** (`_tune_low_frequency_trajectory`):
+  - 自动检测轨迹频率是否低于 5Hz
+  - 当检测到低频轨迹时，自动优化以下参数:
+    - `consistency.temporal_window_size`: 减少历史窗口，加快对轨迹变化的响应
+    - `backup.lookahead_dist`: 增加前瞻距离补偿轨迹更新延迟
+    - `backup.min_lookahead`: 配合增加的前瞻距离
+    - `backup.max_lookahead`: 允许更大的动态前瞻范围
+    - `safety.state_machine.mpc_fail_thresh`: 放宽 MPC 失败阈值，减少不必要的备份控制器切换
+    - `trajectory.low_speed_thresh`: 极低频轨迹下降低低速阈值
+  - 优化公式:
+    - `temporal_window_size = max(int(2.5秒 × 轨迹频率), 4)`
+    - `lookahead_dist = max(当前值, v_max × 轨迹周期 × 1.5 + 0.2)`
+- **改进诊断报告**:
+  - 新增【低频轨迹专项优化】章节
+  - 显示轨迹频率和对应的优化建议
 
 ## v4.1 更新内容
 
