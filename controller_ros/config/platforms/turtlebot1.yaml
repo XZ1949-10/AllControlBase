@@ -98,18 +98,19 @@ diagnostics:
 
 # =============================================================================
 # MPC 配置 - 针对 TurtleBot1 优化
+# [调优 v4 2026-01-02] 加快转弯响应
 # =============================================================================
 mpc:
-  horizon: 7                      # MPC 预测时域 - 适应轨迹点数(8)
-  horizon_degraded: 4             # 降级模式预测时域
+  horizon: 5                      # [调优v4] 原值7，减小预测时域加快响应
+  horizon_degraded: 3             # [调优v4] 原值4，配合减小
   dt: 0.1                         # 时间步长 (秒)
   
   weights:
     position: 15.0                # 位置跟踪权重 - 横向误差avg=9.3cm，良好
     velocity: 7.8                 # 速度跟踪权重 - [调优v1] 原值6.0，纵向误差avg=30.8cm
-    heading: 10.4                 # 航向跟踪权重 - [调优v2] 原值8.0，航向误差avg=25.8°过大
+    heading: 14.0                 # [调优v4] 原值10.4，大幅增加航向权重加快转弯响应
     control_accel: 0.1            # 加速度控制权重
-    control_alpha: 0.1            # 角加速度控制权重
+    control_alpha: 0.05           # [调优v4] 原值0.1，减小角加速度惩罚允许更快转向
   
   health_monitor:
     time_warning_thresh_ms: 20    # 求解时间警告阈值 (ms) - 放宽
@@ -135,7 +136,7 @@ trajectory:
 
 # =============================================================================
 # 一致性检查配置 - TurtleBot1 优化
-# [调优 v2] 针对低频轨迹 (~2Hz) 优化时序窗口
+# [调优 v4 2026-01-02] 减小时序窗口加快对新轨迹的响应
 # =============================================================================
 consistency:
   alpha_min: 0.1                  # α 最小值
@@ -143,7 +144,7 @@ consistency:
   v_dir_thresh: 0.8               # 速度方向一致性阈值
   temporal_smooth_thresh: 0.5     # 时序平滑度阈值
   max_curvature: 10.0             # 曲率计算最大值限制 (1/m)
-  temporal_window_size: 6         # [调优v2] 原值10，低频轨迹下减少到~2.7秒历史
+  temporal_window_size: 4         # [调优v4] 原值6，进一步减小加快响应新轨迹
   weights:
     kappa: 0.3                    # 曲率一致性权重 - TurtleBot1 更注重平滑
     velocity: 0.3                 # 速度方向一致性权重
@@ -178,14 +179,14 @@ safety:
 
 # =============================================================================
 # 备份控制器配置 (Pure Pursuit) - TurtleBot1 优化
-# [调优 v2] 针对低频轨迹增加前瞻距离
+# [调优 v4 2026-01-02] 减小前瞻距离加快转弯响应
 # =============================================================================
 backup:
-  lookahead_dist: 0.7             # [调优v2] 原值0.5，低频轨迹需要更大前瞻补偿延迟
-  min_lookahead: 0.4              # [调优v2] 原值0.3，配合增加的前瞻距离
-  max_lookahead: 1.8              # [调优v2] 原值1.5，允许更大的动态前瞻
-  lookahead_ratio: 0.5            # 前瞻比例
-  kp_heading: 2.0                 # 航向增益 - 提高响应
+  lookahead_dist: 0.4             # [调优v4] 原值0.7，减小前瞻距离加快转弯响应
+  min_lookahead: 0.25             # [调优v4] 原值0.4，配合减小
+  max_lookahead: 1.2              # [调优v4] 原值1.8，限制最大前瞻
+  lookahead_ratio: 0.4            # [调优v4] 原值0.5，减小前瞻比例
+  kp_heading: 2.5                 # [调优v4] 原值2.0，增加航向增益加快响应
   heading_error_thresh: 1.047     # 航向误差阈值 (rad, ~60°)
   max_curvature: 5.0              # 最大曲率限制 (1/m)
   default_speed_ratio: 0.5        # 无 soft 速度时的默认速度比例
@@ -203,11 +204,12 @@ transform:
 
 # =============================================================================
 # cmd_vel 适配器配置
+# [调优 v4 2026-01-02] 减少手柄控制滞后
 # =============================================================================
 cmd_vel_adapter:
-  publish_rate: 20.0              # 命令发布频率 (Hz)
+  publish_rate: 50.0              # [调优v4] 原值20，提高发布频率减少延迟
   cmd_timeout: 0.5                # 命令超时 (秒)
-  enable_rate_limit: true         # 启用速度变化率限制
+  enable_rate_limit: false        # [调优v4] 原值true，禁用速度限制让手柄更灵敏
   joy_topic: "/joy_cmd_vel"       # 手柄输入话题
   mode_topic: "/visualizer/control_mode"  # 模式切换话题
   output_topic: "/mobile_base/commands/velocity"  # TurtleBot1 底盘话题
