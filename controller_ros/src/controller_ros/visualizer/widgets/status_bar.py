@@ -184,6 +184,11 @@ class VisualizerStatusBar(QWidget):
             self._mpc_status.set_status("备份控制", False)
         else:
             self._mpc_status.set_status("✗ 失败", False)
+        
+        # 根据状态自动更新紧急停止/恢复按钮
+        # STOPPING(5) 或 STOPPED(6) 状态也应该显示恢复按钮
+        is_stopped = status.emergency_stop or status.state in (5, 6)
+        self.set_emergency_stop_state(is_stopped)
     
     def update_connection(self, odom_ok: bool, traj_ok: bool):
         """更新连接状态"""

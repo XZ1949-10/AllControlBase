@@ -166,6 +166,21 @@ TUNABLE_PARAMS = {
     'diagnostics.publish_rate',      # [turtlebot1.yaml] 5
     
     # =========================================================================
+    # 一致性检查参数 - 基于轨迹频率和响应需求调优
+    # 默认值来源: universal_controller/config/consistency_config.py
+    # v4.3 更新: 从 DESIGN_PARAMS 移至 TUNABLE_PARAMS
+    # =========================================================================
+    'consistency.alpha_min',             # [turtlebot1.yaml] 0.1 - 基于 alpha 分布调优
+    'consistency.kappa_thresh',          # [turtlebot1.yaml] 0.5 - 基于曲率一致性得分调优
+    'consistency.v_dir_thresh',          # [turtlebot1.yaml] 0.8 - 基于速度方向一致性得分调优
+    'consistency.temporal_smooth_thresh', # [turtlebot1.yaml] 0.5 - 基于时序平滑度得分调优
+    'consistency.max_curvature',         # [turtlebot1.yaml] 10.0 - 基于实际曲率范围调优
+    'consistency.temporal_window_size',  # [turtlebot1.yaml] 10 - 基于轨迹频率调优
+    'consistency.weights.kappa',         # [turtlebot1.yaml] 0.3 - 基于各维度得分分布调优
+    'consistency.weights.velocity',      # [turtlebot1.yaml] 0.3 - 基于各维度得分分布调优
+    'consistency.weights.temporal',      # [turtlebot1.yaml] 0.4 - 基于各维度得分分布调优
+    
+    # =========================================================================
     # 低速保护阈值 - 影响角速度限制的过渡
     # 默认值来源: universal_controller/config/safety_config.py CONSTRAINTS_CONFIG
     # =========================================================================
@@ -194,20 +209,6 @@ TUNABLE_PARAMS = {
 
 # 设计参数：需要系统辨识或专业知识，不应自动调整
 DESIGN_PARAMS = {
-    # =========================================================================
-    # 一致性检查参数 - 是设计参数，不应根据运行数据调整
-    # 默认值来源: universal_controller/config/consistency_config.py
-    # =========================================================================
-    'consistency.alpha_min',             # [turtlebot1.yaml] 0.1
-    'consistency.kappa_thresh',          # [turtlebot1.yaml] 0.5
-    'consistency.v_dir_thresh',          # [turtlebot1.yaml] 0.8
-    'consistency.temporal_smooth_thresh', # [turtlebot1.yaml] 0.5
-    'consistency.max_curvature',         # [turtlebot1.yaml] 10.0
-    'consistency.temporal_window_size',  # [turtlebot1.yaml] 10
-    'consistency.weights.kappa',         # [turtlebot1.yaml] 0.3
-    'consistency.weights.velocity',      # [turtlebot1.yaml] 0.3
-    'consistency.weights.temporal',      # [turtlebot1.yaml] 0.4
-    
     # =========================================================================
     # MPC 控制输入权重 - 需要控制理论知识
     # 默认值来源: universal_controller/config/mpc_config.py MPC_CONFIG['weights']
@@ -695,6 +696,7 @@ class DiagnosticsAnalyzer:
         self._analyze_state_machine()           # 状态机
         self._analyze_transform()               # 坐标变换
         self._analyze_backup_controller()       # 备份控制器
+        self._analyze_consistency_params()      # 一致性参数 (v4.3 新增)
         
         # 3. 诊断信息（不生成调优建议，仅报告状态）
         self._report_design_params_status()     # 设计参数状态报告
@@ -1761,29 +1763,208 @@ class DiagnosticsAnalyzer:
                     ))
 
 
+    def _analyze_consistency_params(self):
+        """分析一致性检查参数
+        
+        基于运行数据分析并调优以下参数:
+        - consistency.temporal_window_size: 基于轨迹频率
+        - consistency.alpha_min: 基于 alpha 分布
+        - consistency.kappa_thresh: 基于曲率一致性得分
+        - consistency.v_dir_thresh: 基于速度方向一致性得分
+        - consistency.temporal_smooth_thresh: 基于时序平滑度得分
+        - consistency.weights.*: 基于各维度得分分布
+        
+        v4.3 新增: 一致性参数从设计参数改为可调优参数
+        """
+        consistency_config = self.config.get('consistency', {})
+        
+        if self.stats.total_samples < 50:
+            return
+        
+        # 1. 分析 alpha 分布，调优 alpha_min
+        if self.stats.alpha_values:
+            alpha_arr = np.array(self.stats.alpha_values)
+            alpha_p5 = np.percentile(alpha_arr, 5)
+            alpha_p10 = np.percentile(alpha_arr, 10)
+            avg_alpha = np.mean(alpha_arr)
+            
+            current_alpha_min = consistency_config.get('alpha_min', 0.1)
+            
+            # 如果 5% 分位数的 alpha 值低于当前阈值，说明阈值可能过高
+            # 导致过多的 soft 模式被禁用
+            if alpha_p5 < current_alpha_min and avg_alpha > 0.3:
+                # 建议将 alpha_min 设为 p5 的一半，但不低于 0.05
+                suggested_alpha_min = max(round(alpha_p5 * 0.5, 2), 0.05)
+                if suggested_alpha_min < current_alpha_min * 0.8:
+                    self.results.append(AnalysisResult(
+                        category="consistency",
+                        severity="info",
+                        parameter="consistency.alpha_min",
+                        current_value=current_alpha_min,
+                        suggested_value=suggested_alpha_min,
+                        reason=f"alpha p5={alpha_p5:.2f} 低于阈值，降低 alpha_min 避免过早禁用 soft 模式",
+                        confidence=0.6,
+                        tuning_category=TuningCategory.TUNABLE
+                    ))
+            
+            # 如果平均 alpha 很低，可能需要放宽一致性阈值
+            if avg_alpha < 0.4:
+                self._suggest_relax_consistency_thresholds(consistency_config, avg_alpha)
+        
+        # 2. 分析各维度得分，调优阈值
+        self._analyze_consistency_scores(consistency_config)
+        
+        # 3. 分析权重分配
+        self._analyze_consistency_weights(consistency_config)
+    
+    def _suggest_relax_consistency_thresholds(self, consistency_config: Dict, avg_alpha: float):
+        """建议放宽一致性阈值
+        
+        当平均 alpha 较低时，可能是阈值过严导致的
+        """
+        # 曲率阈值
+        if self.stats.curvature_scores:
+            kappa_arr = np.array(self.stats.curvature_scores)
+            avg_kappa = np.mean(kappa_arr)
+            
+            if avg_kappa < 0.6:  # 曲率一致性得分较低
+                current_thresh = consistency_config.get('kappa_thresh', 0.5)
+                suggested_thresh = round(current_thresh * 1.3, 2)
+                suggested_thresh = min(suggested_thresh, 1.0)
+                
+                if suggested_thresh > current_thresh:
+                    self.results.append(AnalysisResult(
+                        category="consistency",
+                        severity="info",
+                        parameter="consistency.kappa_thresh",
+                        current_value=current_thresh,
+                        suggested_value=suggested_thresh,
+                        reason=f"曲率一致性得分较低(avg={avg_kappa:.2f})，放宽阈值提高 alpha",
+                        confidence=0.5,
+                        tuning_category=TuningCategory.TUNABLE
+                    ))
+        
+        # 速度方向阈值
+        if self.stats.velocity_dir_scores:
+            v_dir_arr = np.array(self.stats.velocity_dir_scores)
+            avg_v_dir = np.mean(v_dir_arr)
+            
+            if avg_v_dir < 0.6:
+                current_thresh = consistency_config.get('v_dir_thresh', 0.8)
+                # 降低阈值（v_dir_thresh 是 cos 相似度阈值，越低越宽松）
+                suggested_thresh = round(current_thresh * 0.8, 2)
+                suggested_thresh = max(suggested_thresh, 0.5)
+                
+                if suggested_thresh < current_thresh:
+                    self.results.append(AnalysisResult(
+                        category="consistency",
+                        severity="info",
+                        parameter="consistency.v_dir_thresh",
+                        current_value=current_thresh,
+                        suggested_value=suggested_thresh,
+                        reason=f"速度方向一致性得分较低(avg={avg_v_dir:.2f})，降低阈值提高 alpha",
+                        confidence=0.5,
+                        tuning_category=TuningCategory.TUNABLE
+                    ))
+        
+        # 时序平滑度阈值
+        if self.stats.temporal_scores:
+            temporal_arr = np.array(self.stats.temporal_scores)
+            avg_temporal = np.mean(temporal_arr)
+            
+            if avg_temporal < 0.6:
+                current_thresh = consistency_config.get('temporal_smooth_thresh', 0.5)
+                suggested_thresh = round(current_thresh * 1.3, 2)
+                suggested_thresh = min(suggested_thresh, 1.0)
+                
+                if suggested_thresh > current_thresh:
+                    self.results.append(AnalysisResult(
+                        category="consistency",
+                        severity="info",
+                        parameter="consistency.temporal_smooth_thresh",
+                        current_value=current_thresh,
+                        suggested_value=suggested_thresh,
+                        reason=f"时序平滑度得分较低(avg={avg_temporal:.2f})，放宽阈值提高 alpha",
+                        confidence=0.5,
+                        tuning_category=TuningCategory.TUNABLE
+                    ))
+    
+    def _analyze_consistency_scores(self, consistency_config: Dict):
+        """分析各维度一致性得分"""
+        # 检查是否有某个维度得分特别低，可能需要调整权重
+        scores = {}
+        
+        if self.stats.curvature_scores:
+            scores['kappa'] = np.mean(self.stats.curvature_scores)
+        if self.stats.velocity_dir_scores:
+            scores['velocity'] = np.mean(self.stats.velocity_dir_scores)
+        if self.stats.temporal_scores:
+            scores['temporal'] = np.mean(self.stats.temporal_scores)
+        
+        if len(scores) < 2:
+            return
+        
+        # 找出得分最低的维度
+        min_dim = min(scores, key=scores.get)
+        min_score = scores[min_dim]
+        avg_score = np.mean(list(scores.values()))
+        
+        # 如果某个维度得分显著低于平均，可能需要降低其权重
+        if min_score < avg_score * 0.7 and min_score < 0.5:
+            weights_config = consistency_config.get('weights', {})
+            current_weight = weights_config.get(min_dim, 0.33)
+            suggested_weight = round(current_weight * 0.7, 2)
+            suggested_weight = max(suggested_weight, 0.1)
+            
+            if suggested_weight < current_weight * 0.9:
+                self.results.append(AnalysisResult(
+                    category="consistency",
+                    severity="info",
+                    parameter=f"consistency.weights.{min_dim}",
+                    current_value=current_weight,
+                    suggested_value=suggested_weight,
+                    reason=f"{min_dim} 维度得分({min_score:.2f})显著低于平均({avg_score:.2f})，降低权重减少影响",
+                    confidence=0.5,
+                    tuning_category=TuningCategory.TUNABLE
+                ))
+    
+    def _analyze_consistency_weights(self, consistency_config: Dict):
+        """分析一致性权重配置"""
+        weights_config = consistency_config.get('weights', {})
+        
+        w_kappa = weights_config.get('kappa', 0.3)
+        w_velocity = weights_config.get('velocity', 0.3)
+        w_temporal = weights_config.get('temporal', 0.4)
+        
+        total_weight = w_kappa + w_velocity + w_temporal
+        
+        # 检查权重总和是否为 1.0
+        if abs(total_weight - 1.0) > 0.01:
+            # 归一化权重
+            self.results.append(AnalysisResult(
+                category="consistency",
+                severity="warning",
+                parameter="consistency.weights",
+                current_value={'kappa': w_kappa, 'velocity': w_velocity, 'temporal': w_temporal},
+                suggested_value={
+                    'kappa': round(w_kappa / total_weight, 2),
+                    'velocity': round(w_velocity / total_weight, 2),
+                    'temporal': round(w_temporal / total_weight, 2)
+                },
+                reason=f"一致性权重总和({total_weight:.2f})不等于1.0，建议归一化",
+                confidence=0.9,
+                tuning_category=TuningCategory.TUNABLE
+            ))
+
+
     def _report_design_params_status(self):
         """报告设计参数状态 - 仅诊断，不建议调优
         
         这些参数需要系统辨识或专业知识，不应自动调整。
         这里只报告当前状态，供用户参考。
-        """
-        # 一致性检查状态报告
-        if self.stats.alpha_values:
-            alpha_arr = np.array(self.stats.alpha_values)
-            avg_alpha = np.mean(alpha_arr)
-            
-            if avg_alpha < 0.5:
-                self.results.append(AnalysisResult(
-                    category="consistency_status",
-                    severity="info",
-                    parameter="consistency.weights",
-                    current_value=self.config.get('consistency', {}).get('weights', {}),
-                    suggested_value=None,
-                    reason=f"[诊断信息] 平均alpha值({avg_alpha:.2f})较低。一致性权重是设计参数，不建议自动调整。",
-                    confidence=0.0,
-                    tuning_category=TuningCategory.DESIGN
-                ))
         
+        注意: 一致性参数已在 v4.3 中移至可调优参数，由 _analyze_consistency_params() 处理
+        """
         # 打滑检测状态报告
         if self.stats.slip_probabilities:
             slip_arr = np.array(self.stats.slip_probabilities)

@@ -206,11 +206,8 @@ class VisualizerMainWindow(QMainWindow):
         self._joystick_panel.update_joystick(data.joystick)
         self._joystick_panel.update_control_mode(data.control_mode)
         
-        # 更新状态栏
+        # 更新状态栏 (包含紧急停止/恢复按钮状态更新)
         self._status_bar.update_status(data.controller_status)
-        
-        # 更新紧急停止按钮状态
-        self._status_bar.set_emergency_stop_state(data.controller_status.emergency_stop)
         
         # 更新连接状态
         conn_status = self._data_aggregator.get_connection_status()

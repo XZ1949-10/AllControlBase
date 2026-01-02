@@ -110,6 +110,13 @@ python -m tools.tuning.run_diagnostics --live --duration 60
   - `trajectory.max_point_distance`, `trajectory.default_dt_sec`
 - **诊断配置**: `diagnostics.publish_rate`
 - **低速保护**: `constraints.v_low_thresh`
+- **一致性检查参数** (consistency) - v4.3 新增:
+  - `consistency.alpha_min`: 基于 alpha 分布调优，避免过早禁用 soft 模式
+  - `consistency.kappa_thresh`: 基于曲率一致性得分调优
+  - `consistency.v_dir_thresh`: 基于速度方向一致性得分调优
+  - `consistency.temporal_smooth_thresh`: 基于时序平滑度得分调优
+  - `consistency.temporal_window_size`: 基于轨迹频率调优，低频轨迹减小窗口加快响应
+  - `consistency.weights.kappa`, `consistency.weights.velocity`, `consistency.weights.temporal`: 基于各维度得分分布调优
 
 #### controller_params.yaml 中定义的参数 (ROS 层)
 
@@ -135,10 +142,6 @@ python -m tools.tuning.run_diagnostics --live --duration 60
 
 以下参数需要系统辨识或专业知识，工具仅报告状态：
 
-- **一致性检查参数** (consistency):
-  - `consistency.alpha_min`, `consistency.kappa_thresh`, `consistency.v_dir_thresh`
-  - `consistency.temporal_smooth_thresh`, `consistency.max_curvature`, `consistency.temporal_window_size`
-  - `consistency.weights.kappa`, `consistency.weights.velocity`, `consistency.weights.temporal`
 - **MPC 控制输入权重**: `mpc.weights.control_accel`, `mpc.weights.control_alpha`
 - **状态机设计参数**: `safety.state_machine.alpha_disable_thresh`
 
@@ -408,6 +411,27 @@ MPC 性能:
   - 纵向误差 > 50cm → 增加 velocity 权重
   - 横向误差 > 15cm → 增加 position 权重
   - 航向误差 > 11° → 增加 heading 权重
+
+## v4.3 更新内容
+
+- **一致性参数自动调优** (`_analyze_consistency_params`):
+  - 将一致性参数从"设计参数"移至"可调优参数"
+  - 新增以下参数的自动调优:
+    - `consistency.alpha_min`: 基于 alpha 分布 p5 分位数调优，避免过早禁用 soft 模式
+    - `consistency.kappa_thresh`: 基于曲率一致性得分调优，得分低时放宽阈值
+    - `consistency.v_dir_thresh`: 基于速度方向一致性得分调优
+    - `consistency.temporal_smooth_thresh`: 基于时序平滑度得分调优
+    - `consistency.weights.*`: 基于各维度得分分布调优，降低得分低的维度权重
+  - 调优逻辑:
+    - 当 alpha p5 < alpha_min 且 avg_alpha > 0.3 时，降低 alpha_min
+    - 当某维度得分 < 0.6 时，放宽对应阈值
+    - 当某维度得分显著低于平均时，降低其权重
+    - 检测权重总和是否为 1.0，不是则建议归一化
+- **低频轨迹优化增强**:
+  - `temporal_window_size` 调优现在同时考虑轨迹频率和一致性得分
+- **文档更新**:
+  - 更新参数分类表，一致性参数移至可调优参数
+  - 简化设计参数列表
 
 ## v4.2 更新内容
 
