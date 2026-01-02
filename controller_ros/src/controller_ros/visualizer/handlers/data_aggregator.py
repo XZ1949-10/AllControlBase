@@ -304,3 +304,18 @@ class DataAggregator:
             self._last_diag_time = 0.0
             self._last_joy_time = 0.0
         logger.info("DataAggregator reset")
+    
+    def set_emergency_stop(self, stopped: bool):
+        """
+        设置紧急停止状态
+        
+        用于在 UI 点击紧急停止/恢复按钮时立即更新本地状态，
+        不需要等待控制器的诊断消息。
+        
+        Args:
+            stopped: 是否处于紧急停止状态
+        """
+        with self._lock:
+            self._data.controller_status.emergency_stop = stopped
+        
+        self._notify_update()

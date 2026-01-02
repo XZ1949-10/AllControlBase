@@ -472,6 +472,10 @@ class VisualizerNode:
         """发布紧急停止"""
         self._ros.publish(self._estop_pub, Empty())
         self._ros.log_warn("Emergency stop published!")
+        
+        # 立即更新本地状态，不等待控制器诊断消息
+        # 这样 UI 可以立即响应，提供更好的用户体验
+        self._data_aggregator.set_emergency_stop(True)
     
     def _publish_resume(self):
         """
@@ -491,6 +495,8 @@ class VisualizerNode:
                 response = set_state(target_state=1)  # NORMAL = 1
                 if response.success:
                     self._ros.log_info("Resume control: success")
+                    # 立即更新本地状态
+                    self._data_aggregator.set_emergency_stop(False)
                 else:
                     self._ros.log_warn(f"Resume control failed: {response.message}")
             else:
@@ -502,6 +508,8 @@ class VisualizerNode:
                     request.target_state = 1  # NORMAL = 1
                     future = client.call_async(request)
                     # 注意: 这是异步调用，不会阻塞
+                    # 乐观更新本地状态（假设服务调用会成功）
+                    self._data_aggregator.set_emergency_stop(False)
                     self._ros.log_info("Resume control request sent (async)")
                 else:
                     self._ros.log_warn(f"Service {service_name} not available")
