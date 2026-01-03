@@ -42,130 +42,42 @@ from .constants import normalize_angle, CONFIDENCE_MIN, CONFIDENCE_MAX
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# 轨迹默认配置 (可通过 Trajectory.configure() 修改)
-# =============================================================================
-class TrajectoryDefaults:
+
+@dataclass
+class TrajectoryConfig:
     """
-    轨迹默认配置，可在运行时修改
-    
-    此类是轨迹配置的单一数据源 (Single Source of Truth)。
-    所有模块（包括 ROS 层）应通过此类获取轨迹相关配置，而不是直接从配置字典读取。
-    
-    配置来源: universal_controller/config/trajectory_config.py
-    
-    注意:
-    =====
-    以下参数使用 constants.py 中的常量，不再从配置读取:
-    - min_dt_sec, max_dt_sec: 使用 TRAJECTORY_MIN_DT_SEC, TRAJECTORY_MAX_DT_SEC
-    - max_coord: 使用 TRAJECTORY_MAX_COORD
-    - min_confidence, max_confidence: 使用 CONFIDENCE_MIN, CONFIDENCE_MAX
+    Trajectory configuration parameters.
+    Passed to ControllerManager to avoid global state.
     """
-    # 时间参数
     dt_sec: float = 0.1
-    # 注意: min_dt_sec 和 max_dt_sec 现在使用常量，这里的值仅作为类属性的初始值
-    # 实际使用时应从 constants.py 导入 TRAJECTORY_MIN_DT_SEC, TRAJECTORY_MAX_DT_SEC
-    min_dt_sec: float = 0.01  # 已移至 constants.py: TRAJECTORY_MIN_DT_SEC
-    max_dt_sec: float = 1.0   # 已移至 constants.py: TRAJECTORY_MAX_DT_SEC
-    
-    # 速度计算参数
     low_speed_thresh: float = 0.1
-    
-    # 置信度参数
-    # 注意: min_confidence 和 max_confidence 是数学定义 [0, 1]，
-    # 使用 constants.py 中的 CONFIDENCE_MIN, CONFIDENCE_MAX
     default_confidence: float = 0.9
-    
-    # 坐标系
     default_frame_id: str = 'base_link'
-    
-    # 轨迹点数限制
     min_points: int = 2
     max_points: int = 100
-    
-    # 验证参数
     max_point_distance: float = 10.0
-    max_coord: float = 100.0  # 已移至 constants.py: TRAJECTORY_MAX_COORD
-    
-    # 速度填充参数 (轨迹适配器使用)
-    velocity_decay_threshold: float = 0.1  # 速度衰减填充阈值 (m/s)
-    
-    # 验证开关
+    velocity_decay_threshold: float = 0.1
     validate_enabled: bool = True
-    
+
     @classmethod
-    def configure(cls, config: Dict[str, Any]) -> None:
-        """
-        从配置字典更新默认值
-        
-        Args:
-            config: 配置字典，应包含 'trajectory', 'transform', 'mpc' 键
-        
-        配置说明:
-            dt_sec 继承已在 ParamLoader._sync_dt_config() 中统一处理。
-            传入的 config['trajectory']['default_dt_sec'] 已经是最终值。
-            
-            为了兼容直接使用 DEFAULT_CONFIG 的场景（不经过 ParamLoader），
-            此处保留了 mpc.dt 的 fallback 逻辑。
-            
-            注意: min_dt_sec, max_dt_sec, max_coord 现在使用 constants.py 中的常量，
-            不再从配置读取。这些是数值稳定性参数，不应由用户配置。
-        
-        Example:
-            >>> from universal_controller.config import DEFAULT_CONFIG
-            >>> TrajectoryDefaults.configure(DEFAULT_CONFIG)
-        """
-        # 导入常量
-        from .constants import (
-            TRAJECTORY_MIN_DT_SEC,
-            TRAJECTORY_MAX_DT_SEC,
-            TRAJECTORY_MAX_COORD,
-        )
-        
+    def from_dict(cls, config: Dict[str, Any]) -> 'TrajectoryConfig':
+        """Create from configuration dictionary"""
         traj_config = config.get('trajectory', {})
         transform_config = config.get('transform', {})
         mpc_config = config.get('mpc', {})
         
-        # dt_sec 配置: 优先使用 trajectory.default_dt_sec
-        # 如果未配置，则 fallback 到 mpc.dt (兼容直接使用 DEFAULT_CONFIG 的场景)
-        if 'default_dt_sec' in traj_config:
-            cls.dt_sec = traj_config['default_dt_sec']
-        elif 'dt' in mpc_config:
-            cls.dt_sec = mpc_config['dt']
+        dt = traj_config.get('default_dt_sec', mpc_config.get('dt', 0.1))
         
-        # 时间参数 - 使用常量，不再从配置读取
-        cls.min_dt_sec = TRAJECTORY_MIN_DT_SEC
-        cls.max_dt_sec = TRAJECTORY_MAX_DT_SEC
-        
-        # 速度计算参数
-        if 'low_speed_thresh' in traj_config:
-            cls.low_speed_thresh = traj_config['low_speed_thresh']
-        
-        # 置信度参数
-        if 'default_confidence' in traj_config:
-            cls.default_confidence = traj_config['default_confidence']
-        # 注意: min_confidence 和 max_confidence 是数学定义 [0, 1]，
-        # 使用 constants.py 中的 CONFIDENCE_MIN, CONFIDENCE_MAX，不再从配置读取
-        
-        # 坐标系配置: 统一从 transform 读取
-        # 轨迹的默认坐标系应与 transform.source_frame 一致
-        if 'source_frame' in transform_config:
-            cls.default_frame_id = transform_config['source_frame']
-        
-        # 轨迹点数限制
-        if 'min_points' in traj_config:
-            cls.min_points = traj_config['min_points']
-        if 'max_points' in traj_config:
-            cls.max_points = traj_config['max_points']
-        
-        # 验证参数 - max_coord 使用常量，不再从配置读取
-        if 'max_point_distance' in traj_config:
-            cls.max_point_distance = traj_config['max_point_distance']
-        cls.max_coord = TRAJECTORY_MAX_COORD
-        
-        # 速度填充参数
-        if 'velocity_decay_threshold' in traj_config:
-            cls.velocity_decay_threshold = traj_config['velocity_decay_threshold']
+        return cls(
+            dt_sec=dt,
+            low_speed_thresh=traj_config.get('low_speed_thresh', 0.1),
+            default_confidence=traj_config.get('default_confidence', 0.9),
+            default_frame_id=transform_config.get('source_frame', 'base_link'),
+            min_points=traj_config.get('min_points', 2),
+            max_points=traj_config.get('max_points', 100),
+            max_point_distance=traj_config.get('max_point_distance', 10.0),
+            velocity_decay_threshold=traj_config.get('velocity_decay_threshold', 0.1)
+        )
 
 
 # 模拟 ROS Header
@@ -177,7 +89,7 @@ class Header:
     seq: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class Point3D:
     """3D 点"""
     x: float
@@ -185,7 +97,7 @@ class Point3D:
     z: float
 
 
-@dataclass
+@dataclass(slots=True)
 class Twist3D:
     """3D 速度"""
     vx: float
@@ -208,9 +120,6 @@ class Trajectory:
         soft_enabled: Soft Head 是否启用
         low_speed_thresh: 低速阈值，用于角速度计算
     
-    Note:
-        默认值从 TrajectoryDefaults 获取，可通过 TrajectoryDefaults.configure() 修改
-        
     缓存机制:
         get_hard_velocities() 使用内部缓存，避免重复计算。
         缓存在以下情况下失效：
@@ -220,147 +129,91 @@ class Trajectory:
     header: Header
     points: List[Point3D]
     velocities: Optional[np.ndarray]  # [N, 4]: [vx, vy, vz, wz]
-    dt_sec: float = None  # None 表示使用默认值
-    confidence: float = None  # None 表示使用默认值
+    dt_sec: float = 0.1  # 默认 0.1s，不再依赖 TrajectoryDefaults
+    confidence: float = 0.9  # 默认 0.9
     mode: TrajectoryMode = TrajectoryMode.MODE_TRACK
     soft_enabled: bool = False
-    low_speed_thresh: float = field(default=None, repr=False, compare=False)
+    low_speed_thresh: float = field(default=0.1, repr=False, compare=False)
     
     # 缓存字段（不参与比较和 repr）
     _hard_velocities_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
+    _points_matrix_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
     _cache_key: Optional[tuple] = field(default=None, repr=False, compare=False, init=False)
     
     def __post_init__(self):
-        # 使用 TrajectoryDefaults 填充默认值
-        if self.dt_sec is None:
-            self.dt_sec = TrajectoryDefaults.dt_sec
-        if self.confidence is None:
-            self.confidence = TrajectoryDefaults.default_confidence
-        if self.low_speed_thresh is None:
-            self.low_speed_thresh = TrajectoryDefaults.low_speed_thresh
-        
-        # 验证 confidence: 必须是有效的有限数值
-        # np.clip 对 NaN 不会报错但会保留 NaN，需要先检查
-        if not np.isfinite(self.confidence):
-            logger.warning(f"Trajectory confidence={self.confidence} invalid (NaN/Inf), using default {TrajectoryDefaults.default_confidence}")
-            self.confidence = TrajectoryDefaults.default_confidence
+        # 验证 confidence
+        if self.confidence is None or not np.isfinite(self.confidence):
+            self.confidence = 0.9
         else:
-            # 使用常量 CONFIDENCE_MIN, CONFIDENCE_MAX 进行 clip
-            self.confidence = np.clip(
-                self.confidence, 
-                CONFIDENCE_MIN, 
-                CONFIDENCE_MAX
-            )
+            self.confidence = np.clip(self.confidence, CONFIDENCE_MIN, CONFIDENCE_MAX)
         
-        # 验证 dt_sec: 必须是正的有限数值
-        if not np.isfinite(self.dt_sec) or self.dt_sec <= 0:
-            logger.warning(f"Trajectory dt_sec={self.dt_sec} invalid, using default {TrajectoryDefaults.dt_sec}")
-            self.dt_sec = TrajectoryDefaults.dt_sec
-        
-        # 轨迹验证 (使用配置的验证参数)
-        if TrajectoryDefaults.validate_enabled:
-            self._validate_trajectory()
-        
-        # 验证 velocities 维度与 points 匹配
-        # 这是一个警告而非错误，因为某些情况下维度不匹配是可接受的
+        # 验证 dt_sec
+        if self.dt_sec is None or not np.isfinite(self.dt_sec) or self.dt_sec <= 0:
+            self.dt_sec = 0.1
+            
+        # 验证 Velocities 维度
         if self.velocities is not None and len(self.points) > 0:
             if len(self.velocities) != len(self.points):
-                logger.warning(
-                    f"Trajectory velocities length ({len(self.velocities)}) "
-                    f"doesn't match points length ({len(self.points)}). "
-                    f"This may cause issues in velocity-based control."
-                )
+                if len(self.velocities) > len(self.points):
+                    self.velocities = self.velocities[:len(self.points)]
+                else:
+                    pad_len = len(self.points) - len(self.velocities)
+                    self.velocities = np.pad(self.velocities, ((0, pad_len), (0, 0)), 'constant')
     
-    def _validate_trajectory(self) -> None:
+    def validate(self, config: 'TrajectoryConfig') -> None:
         """
         验证轨迹数据的有效性
         
-        验证内容:
-        1. dt_sec 在 [min_dt_sec, max_dt_sec] 范围内
-        2. 轨迹点数在 [min_points, max_points] 范围内
-        3. 相邻点距离不超过 max_point_distance
-        
-        验证失败时记录警告，不会抛出异常
+        Args:
+            config: 配置对象，提供验证阈值
         """
-        # 验证 dt_sec 范围
-        if self.dt_sec < TrajectoryDefaults.min_dt_sec:
-            logger.warning(
-                f"Trajectory dt_sec={self.dt_sec:.4f}s < min_dt_sec={TrajectoryDefaults.min_dt_sec:.4f}s, "
-                f"clamping to min value"
-            )
-            self.dt_sec = TrajectoryDefaults.min_dt_sec
-        elif self.dt_sec > TrajectoryDefaults.max_dt_sec:
-            logger.warning(
-                f"Trajectory dt_sec={self.dt_sec:.4f}s > max_dt_sec={TrajectoryDefaults.max_dt_sec:.4f}s, "
-                f"clamping to max value"
-            )
-            self.dt_sec = TrajectoryDefaults.max_dt_sec
+        from .constants import TRAJECTORY_MIN_DT_SEC, TRAJECTORY_MAX_DT_SEC
         
-        # 验证轨迹点数
-        num_points = len(self.points)
-        if num_points < TrajectoryDefaults.min_points:
-            logger.warning(
-                f"Trajectory has {num_points} points < min_points={TrajectoryDefaults.min_points}, "
-                f"control quality may be degraded"
-            )
-        elif num_points > TrajectoryDefaults.max_points:
-            logger.warning(
-                f"Trajectory has {num_points} points > max_points={TrajectoryDefaults.max_points}, "
-                f"consider truncating for performance"
-            )
+        # 验证 dt_sec
+        self.dt_sec = np.clip(self.dt_sec, TRAJECTORY_MIN_DT_SEC, TRAJECTORY_MAX_DT_SEC)
         
         # 验证相邻点距离
-        if len(self.points) >= 2:
-            max_dist = TrajectoryDefaults.max_point_distance
-            for i in range(len(self.points) - 1):
-                p0, p1 = self.points[i], self.points[i + 1]
-                dist = np.sqrt((p1.x - p0.x)**2 + (p1.y - p0.y)**2 + (p1.z - p0.z)**2)
-                if dist > max_dist:
-                    logger.warning(
-                        f"Trajectory point distance {dist:.2f}m at index {i} > max_point_distance={max_dist:.2f}m, "
-                        f"trajectory may be discontinuous"
-                    )
-                    break  # 只报告第一个异常，避免日志刷屏
+        if config.validate_enabled and len(self.points) >= 2:
+            max_dist = config.max_point_distance
+            p0, p1 = self.points[0], self.points[1]
+            dist_sq = (p1.x - p0.x)**2 + (p1.y - p0.y)**2 + (p1.z - p0.z)**2
+            if dist_sq > max_dist**2:
+                logger.warning(f"Trajectory jump detected: {np.sqrt(dist_sq):.2f}m > {max_dist}m")
     
     def __len__(self) -> int:
         return len(self.points)
     
     def _compute_cache_key(self) -> tuple:
-        """
-        计算缓存键，用于检测 points 或 dt_sec 是否变化
-        
-        使用首尾点 + 中间采样点 + 长度 + dt_sec 的组合进行检测。
-        这是性能和可靠性的权衡：
-        - 完整比较所有点 O(n) 太慢
-        - 只比较首尾点可能漏检中间点变化
-        - 采样中间点可以在 O(1) 时间内提高检测可靠性
-        """
+        """高效计算缓存键"""
         n = len(self.points)
         if n == 0:
             return (0, self.dt_sec)
-        elif n == 1:
-            p = self.points[0]
-            return (1, p.x, p.y, p.z, self.dt_sec)
-        elif n == 2:
-            p0, p1 = self.points[0], self.points[1]
-            return (2, p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, self.dt_sec)
-        else:
-            # 采样首、中、尾三个点，提高中间点变化的检测率
-            p0 = self.points[0]
+        
+        p0 = self.points[0]
+        p_last = self.points[-1]
+        
+        if n > 2:
             p_mid = self.points[n // 2]
-            p_last = self.points[-1]
-            return (n, p0.x, p0.y, p0.z, p_mid.x, p_mid.y, p_mid.z, 
-                    p_last.x, p_last.y, p_last.z, self.dt_sec)
+            return (n, p0.x, p0.y, p0.z, p_mid.x, p_mid.y, p_mid.z, p_last.x, p_last.y, p_last.z, self.dt_sec)
+        else:
+            return (n, p0.x, p0.y, p0.z, p_last.x, p_last.y, p_last.z, self.dt_sec)
+            
+    def get_points_matrix(self) -> np.ndarray:
+        """获取点坐标矩阵 [N, 3]"""
+        current_key = self._compute_cache_key()
+        if self._points_matrix_cache is not None and self._cache_key == current_key:
+            return self._points_matrix_cache
+            
+        if not self.points:
+            return np.zeros((0, 3))
+            
+        matrix = np.array([(p.x, p.y, p.z) for p in self.points], dtype=np.float64)
+        self._points_matrix_cache = matrix
+        self._cache_key = current_key
+        return matrix
     
     def copy(self) -> 'Trajectory':
-        """
-        创建轨迹的深拷贝
-        
-        确保所有数据都是独立的副本，修改副本不会影响原始对象
-        """
         new_header = Header(stamp=self.header.stamp, frame_id=self.header.frame_id, seq=self.header.seq)
-        # 保持 velocities 的原始状态：None 保持 None，数组则深拷贝
-        # np.array(..., copy=True) 对空数组和非空数组都能正确处理
         new_velocities = None if self.velocities is None else np.array(self.velocities, copy=True)
         return Trajectory(
             header=new_header,
@@ -374,66 +227,63 @@ class Trajectory:
         )
     
     def get_hard_velocities(self) -> np.ndarray:
-        """从 Hard 轨迹点计算隐含速度
-        
-        使用缓存机制避免重复计算。缓存在 points 或 dt_sec 变化时自动失效。
-        """
-        # 检查缓存是否有效
+        """使用向量化计算 Hard 轨迹隐含速度 [N, 4]"""
         current_key = self._compute_cache_key()
         if self._hard_velocities_cache is not None and self._cache_key == current_key:
             return self._hard_velocities_cache
         
-        # 计算速度
-        if len(self.points) < 2:
-            result = np.zeros((1, 4))
+        # 获取点矩阵 (会自动更新 _points_matrix_cache 和 _cache_key)
+        points_mat = self.get_points_matrix()
+        n_points = len(points_mat)
+        
+        if n_points < 2:
+            result = np.zeros((max(1, n_points), 4))
             self._hard_velocities_cache = result
-            self._cache_key = current_key
             return result
         
-        velocities = []
-        n = len(self.points)
+        # 一阶差分: V[i] = (P[i+1] - P[i]) / dt
+        diffs = np.diff(points_mat, axis=0) / self.dt_sec # [N-1, 3]
         
-        for i in range(n - 1):
-            p0, p1 = self.points[i], self.points[i + 1]
-            vx = (p1.x - p0.x) / self.dt_sec
-            vy = (p1.y - p0.y) / self.dt_sec
-            vz = (p1.z - p0.z) / self.dt_sec
-            
-            if i < n - 2:
-                p2 = self.points[i + 2]
-                vx_next = (p2.x - p1.x) / self.dt_sec
-                vy_next = (p2.y - p1.y) / self.dt_sec
-            elif i > 0:
-                p_prev = self.points[i - 1]
-                vx_prev = (p0.x - p_prev.x) / self.dt_sec
-                vy_prev = (p0.y - p_prev.y) / self.dt_sec
-                vx_next = 2 * vx - vx_prev
-                vy_next = 2 * vy - vy_prev
-            else:
-                vx_next, vy_next = vx, vy
-            
-            speed = np.sqrt(vx**2 + vy**2)
-            speed_next = np.sqrt(vx_next**2 + vy_next**2)
-            
-            # 使用实例属性 low_speed_thresh 而非硬编码值
-            if speed > self.low_speed_thresh and speed_next > self.low_speed_thresh:
-                heading_curr = np.arctan2(vy, vx)
-                heading_next = np.arctan2(vy_next, vx_next)
-                dheading = heading_next - heading_curr
-                dheading = normalize_angle(dheading)
-                wz = dheading / self.dt_sec
-            else:
-                wz = 0.0
-            
-            velocities.append([vx, vy, vz, wz])
+        vx = diffs[:, 0]
+        vy = diffs[:, 1]
+        vz = diffs[:, 2]
         
-        velocities.append(velocities[-1])
-        result = np.array(velocities)
+        # 扩展到 N 个点: 中间点使用中心差分 V[i] = (v[i-1] + v[i]) / 2
+        vx_full = np.empty(n_points)
+        vy_full = np.empty(n_points)
+        vz_full = np.empty(n_points)
         
-        # 更新缓存
+        # 边界处理: 首尾直接使用前向/后向差分
+        vx_full[0], vx_full[-1] = vx[0], vx[-1]
+        vy_full[0], vy_full[-1] = vy[0], vy[-1]
+        vz_full[0], vz_full[-1] = vz[0], vz[-1]
+        
+        # 中间点插值
+        if n_points > 2:
+            vx_full[1:-1] = (vx[:-1] + vx[1:]) * 0.5
+            vy_full[1:-1] = (vy[:-1] + vy[1:]) * 0.5
+            vz_full[1:-1] = (vz[:-1] + vz[1:]) * 0.5
+            
+        # 计算角速度 wz
+        # heading = atan2(vy, vx)
+        headings = np.arctan2(vy_full, vx_full)
+        dheadings = np.diff(headings)
+        
+        # 归一化角差
+        dheadings = normalize_angle(dheadings)
+        
+        wz_full = np.empty(n_points)
+        wz_full[:-1] = dheadings / self.dt_sec
+        wz_full[-1] = 0.0 # 最后一个点角速度为 0 或保持
+        
+        # 低速抑制
+        speed_sq = vx_full**2 + vy_full**2
+        low_speed_mask = speed_sq < (self.low_speed_thresh**2)
+        wz_full[low_speed_mask] = 0.0
+        
+        result = np.column_stack((vx_full, vy_full, vz_full, wz_full))
         self._hard_velocities_cache = result
         self._cache_key = current_key
-        
         return result
     
     def get_velocities(self) -> np.ndarray:
@@ -446,61 +296,39 @@ class Trajectory:
         return self.soft_enabled and self.velocities is not None and len(self.velocities) > 0
     
     def get_blended_velocity(self, index: int, alpha: float) -> np.ndarray:
-        """
-        获取混合后的速度向量
+        """获取混合后的速度向量 (单点)"""
+        idx_end = min(index + 1, len(self.points))
+        res = self.get_blended_velocities_slice(index, idx_end, alpha)
+        if len(res) > 0:
+            return res[0]
+        return np.zeros(4)
+
+    def get_blended_velocities_slice(self, start: int, end: int, alpha: float) -> np.ndarray:
+        """批量获取混合速度 [M, 4]"""
+        hard_vels = self.get_hard_velocities()
+        n_points = len(hard_vels)
         
-        使用公式: final_vel = alpha * soft_vel + (1 - alpha) * hard_vel
+        start = max(0, min(start, n_points))
+        end = max(start, min(end, n_points))
         
-        Args:
-            index: 轨迹点索引
-            alpha: 一致性系数 [0, 1]，alpha=1 表示完全使用 soft，alpha=0 表示完全使用 hard
+        if start >= end:
+            return np.zeros((0, 4))
+            
+        v_hard_slice = hard_vels[start:end]
         
-        Returns:
-            混合后的速度向量 [vx, vy, vz, wz]
+        if not self.has_valid_soft_velocities() or alpha <= 1e-6:
+            return v_hard_slice.copy()
+            
+        if alpha >= 1.0 - 1e-6:
+            return self.velocities[start:end].copy()
+            
+        v_soft_slice = self.velocities[start:end]
+        min_len = min(len(v_hard_slice), len(v_soft_slice))
         
-        Note:
-            - 当 soft_enabled=False 时，返回 hard velocities
-            - 当 soft velocities 不可用时，返回 hard velocities
-            - 索引超出范围时，使用最后一个有效索引
-        """
-        hard_velocities = self.get_hard_velocities()
-        
-        # 确保索引有效
-        hard_idx = min(index, len(hard_velocities) - 1) if len(hard_velocities) > 0 else 0
-        
-        if len(hard_velocities) == 0:
-            return np.zeros(4)
-        
-        hard_vel = hard_velocities[hard_idx]
-        
-        # 如果 soft 不可用，直接返回 hard
-        if not self.has_valid_soft_velocities():
-            return hard_vel.copy()
-        
-        # 确保 soft 索引有效
-        soft_idx = min(index, len(self.velocities) - 1)
-        soft_vel = self.velocities[soft_idx]
-        
-        # 确保 soft_vel 是 4 维
-        if len(soft_vel) < 4:
-            soft_vel_4d = np.zeros(4)
-            soft_vel_4d[:len(soft_vel)] = soft_vel
-            soft_vel = soft_vel_4d
-        
-        # 混合: alpha * soft + (1 - alpha) * hard
-        return alpha * soft_vel + (1 - alpha) * hard_vel
-    
+        return alpha * v_soft_slice[:min_len] + (1 - alpha) * v_hard_slice[:min_len]
+
     def get_blended_speed(self, index: int, alpha: float) -> float:
-        """
-        获取混合后的水平速度大小
-        
-        Args:
-            index: 轨迹点索引
-            alpha: 一致性系数 [0, 1]
-        
-        Returns:
-            混合后的水平速度大小 (m/s)
-        """
+        """获取混合后的水平速度大小"""
         vel = self.get_blended_velocity(index, alpha)
         return np.sqrt(vel[0]**2 + vel[1]**2)
 
@@ -519,7 +347,7 @@ class EstimatorOutput:
     imu_drift_detected: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class ControlOutput:
     """控制器输出"""
     vx: float
@@ -530,6 +358,7 @@ class ControlOutput:
     success: bool = True
     solve_time_ms: float = 0.0
     health_metrics: Dict[str, Any] = field(default_factory=dict)
+    extras: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
         if not self.frame_id:
@@ -552,7 +381,8 @@ class ControlOutput:
             vx=self.vx, vy=self.vy, vz=self.vz, omega=self.omega,
             frame_id=self.frame_id, success=self.success,
             solve_time_ms=self.solve_time_ms,
-            health_metrics=self.health_metrics.copy() if self.health_metrics else {}
+            health_metrics=self.health_metrics.copy() if self.health_metrics else {},
+            extras=self.extras.copy() if self.extras else {}
         )
 
 

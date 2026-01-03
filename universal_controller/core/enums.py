@@ -23,16 +23,17 @@ class TrajectoryMode(IntEnum):
 
 class TransformStatus(IntEnum):
     """坐标变换状态"""
-    TF2_OK = 0
-    FALLBACK_OK = 1
-    FALLBACK_WARNING = 2
-    FALLBACK_CRITICAL = 3
+    ESTIMATOR_DIRECT = 0
+    TF2_OK = 1
+    FALLBACK_OK = 2
+    FALLBACK_WARNING = 3
+    FALLBACK_CRITICAL = 4
     
     def is_critical(self) -> bool:
         return self == TransformStatus.FALLBACK_CRITICAL
     
     def is_fallback(self) -> bool:
-        return self != TransformStatus.TF2_OK
+        return self not in (TransformStatus.TF2_OK, TransformStatus.ESTIMATOR_DIRECT)
 
 
 class HeadingMode(IntEnum):

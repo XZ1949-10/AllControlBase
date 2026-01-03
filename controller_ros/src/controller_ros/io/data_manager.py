@@ -235,9 +235,10 @@ class DataManager(LifecycleMixin):
             event = ClockJumpEvent(self._last_time, now, delta, invalidated)
             self._clock_jumped_back = True
             
-            # 记录事件
+            # 记录事件 (简化版：不再维护复杂队列，仅保留日志和回调触发源)
             self._clock_jump_events.append(event)
-            if len(self._clock_jump_events) > self._max_clock_jump_events:
+            # 简化队列维护：只保留最近 1 个事件作为最后状态，避免内存泄漏风险
+            if len(self._clock_jump_events) > 1:
                 self._clock_jump_events.pop(0)
             
             logger.warning(
@@ -272,9 +273,9 @@ class DataManager(LifecycleMixin):
             
             event = ClockJumpEvent(self._last_time, now, delta, invalidated)
             
-            # 记录事件
+            # 记录事件 (简化版)
             self._clock_jump_events.append(event)
-            if len(self._clock_jump_events) > self._max_clock_jump_events:
+            if len(self._clock_jump_events) > 1:
                 self._clock_jump_events.pop(0)
             
             return event
@@ -632,3 +633,52 @@ class DataManager(LifecycleMixin):
             if self._clock_jump_events:
                 return self._clock_jump_events[-1]
             return None
+
+    def get_control_snapshot(self) -> Dict[str, Any]:
+        """
+        获取控制数据的原子快照
+        
+        原子性地获取最新的 odom, imu, trajectory 及其年龄，
+        防止在获取不同数据之间发生并发更新导致的数据不一致。
+        
+        Returns:
+            包含以下键的字典:
+            - 'odom': 最新 Odometry 或 None
+            - 'imu': 最新 Imu 或 None
+            - 'trajectory': 最新 Trajectory 或 None
+            - 'ages': 数据年龄字典 Dict[str, float]
+        """
+        now = self._get_time_func()
+        callback_event = None
+        
+        with self._lock:
+            # 检测时钟跳变 (复用逻辑)
+            event = self._check_clock_jump(now)
+            if event is not None:
+                callback_event = event
+            
+            self._last_time = now
+            
+            # 计算年龄
+            ages = {}
+            for key in ('odom', 'imu', 'trajectory'):
+                if self._data_invalidated.get(key, False):
+                    ages[key] = float('inf')
+                elif key in self._timestamps:
+                    ages[key] = max(0.0, now - self._timestamps[key])
+                else:
+                    ages[key] = float('inf')
+            
+            # 获取数据引用
+            snapshot = {
+                'odom': self._latest_data.get('odom'),
+                'imu': self._latest_data.get('imu'),
+                'trajectory': self._latest_data.get('trajectory'),
+                'ages': ages
+            }
+            
+        # 在锁外调用回调
+        if callback_event is not None:
+            self._invoke_clock_jump_callback(callback_event)
+            
+        return snapshot

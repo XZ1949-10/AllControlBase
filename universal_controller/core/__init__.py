@@ -1,9 +1,8 @@
 """核心模块"""
-from .enums import ControllerState, TrajectoryMode, TransformStatus, HeadingMode, PlatformType
 from .data_types import (
-    Header, Point3D, Twist3D, Trajectory, EstimatorOutput, ControlOutput,
+    Header, Point3D, Twist3D, Trajectory, TrajectoryConfig, EstimatorOutput, ControlOutput,
     ConsistencyResult, SafetyDecision, MPCHealthStatus, TimeoutStatus,
-    AttitudeCommand, DiagnosticsV2, Odometry, Imu, TrajectoryDefaults,
+    AttitudeCommand, DiagnosticsV2, Odometry, Imu,
     # TF2 相关数据类型
     Vector3, Quaternion, Transform, TransformStamped,
     # ROS geometry_msgs 兼容类型
@@ -13,7 +12,7 @@ from .diagnostics_input import DiagnosticsInput
 from .interfaces import (
     ILifecycleComponent, LifecycleState,
     IStateEstimator, ITrajectoryTracker, IConsistencyChecker,
-    ISafetyMonitor, ISmoothTransition, ICoordinateTransformer, IAttitudeController
+    ISafetyMonitor, ISmoothTransition, ICoordinateTransformer, IControlProcessor
 )
 from .ros_compat import (
     ROS_AVAILABLE, TF2_AVAILABLE,

@@ -69,7 +69,7 @@ def test_basic_transform():
     # 验证坐标系已更新
     assert odom_traj.header.frame_id == 'odom'
     
-    print("✓ test_basic_transform passed")
+    print("[PASS] test_basic_transform passed")
 
 
 def test_velocity_transform():
@@ -103,7 +103,7 @@ def test_velocity_transform():
         assert abs(vx_odom) < 0.1, f"Odom vx should be ~0, got {vx_odom}"
         assert abs(vy_odom - 1.0) < 0.1, f"Odom vy should be ~1.0, got {vy_odom}"
     
-    print("✓ test_velocity_transform passed")
+    print("[PASS] test_velocity_transform passed")
 
 
 def test_frame_validation():
@@ -128,7 +128,7 @@ def test_frame_validation():
     # 验证警告已记录
     assert 'unexpected_frame' in transformer._warned_frames
     
-    print("✓ test_frame_validation passed")
+    print("[PASS] test_frame_validation passed")
 
 
 def test_empty_frame_fallback():
@@ -156,7 +156,7 @@ def test_empty_frame_fallback():
     assert abs(world_traj.points[0].x - 2.0) < 0.01  # 1.0 + 1.0
     assert abs(world_traj.points[0].y - 2.0) < 0.01  # 0.0 + 2.0
     
-    print("✓ test_empty_frame_fallback passed")
+    print("[PASS] test_empty_frame_fallback passed")
 
 
 def test_transform_with_rotation():
@@ -191,7 +191,7 @@ def test_transform_with_rotation():
         assert abs(odom_traj.points[0].y - expected_y) < 0.01, \
             f"theta={theta:.2f}: y should be {expected_y:.2f}, got {odom_traj.points[0].y:.2f}"
     
-    print("✓ test_transform_with_rotation passed")
+    print("[PASS] test_transform_with_rotation passed")
 
 
 def test_transform_consistency():
@@ -232,7 +232,7 @@ def test_transform_consistency():
                 assert abs(actual_v - expected_v) < 0.01, \
                     f"Velocity [{i},{j}]: mismatch {actual_v} vs {expected_v}"
     
-    print("✓ test_transform_consistency passed")
+    print("[PASS] test_transform_consistency passed")
 
 
 def test_fallback_mode():
@@ -251,7 +251,8 @@ def test_fallback_mode():
     odom = create_test_odom(x=1.0, y=2.0, theta=0.5, vx=1.0)
     estimator.update_odom(odom)
     
-    transformer.set_state_estimator(estimator)
+    # transformer.set_state_estimator(estimator) -> Removed
+    fallback_state = estimator.get_state()
     
     # 先设置一个 TF2 位置作为基准
     transformer._last_tf2_position = np.array([1.0, 2.0, 0.0])
@@ -265,12 +266,12 @@ def test_fallback_mode():
     )
     
     # 变换 (应该使用 fallback)
-    world_traj, status = transformer.transform_trajectory(local_traj, 'odom', time.time())
+    world_traj, status = transformer.transform_trajectory(local_traj, 'odom', time.time(), fallback_state=fallback_state)
     
     # 验证状态
     assert status.name.startswith('FALLBACK'), f"Should be in fallback mode, got {status.name}"
     
-    print("✓ test_fallback_mode passed")
+    print("[PASS] test_fallback_mode passed")
 
 
 def test_delay_compensation():
@@ -299,7 +300,7 @@ def test_delay_compensation():
     # 验证变换成功
     assert world_traj is not None
     
-    print("✓ test_delay_compensation passed")
+    print("[PASS] test_delay_compensation passed")
 
 
 def run_all_tests():

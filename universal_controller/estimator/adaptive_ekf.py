@@ -72,6 +72,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         # Jacobian 计算参数 - 使用常量
         self.min_velocity_for_jacobian = EKF_MIN_VELOCITY_FOR_JACOBIAN
+        self.jacobian_smooth_epsilon = ekf_config.get('jacobian_smooth_epsilon', 0.1)
         
         # 航向备选参数
         self.use_odom_orientation_fallback = ekf_config.get('use_odom_orientation_fallback', True)
@@ -120,6 +121,11 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         # IMU 运动加速度补偿
         self.imu_motion_compensation = ekf_config.get('imu_motion_compensation', False)
+        
+        # 约束配置
+        constraints = ekf_config.get('constraints', {})
+        self.enable_non_holonomic_constraint = constraints.get('non_holonomic', True)
+        self.non_holonomic_slip_threshold = constraints.get('non_holonomic_slip_threshold', 0.5)
         
         # 状态变量
         self.slip_detected = False
@@ -239,16 +245,23 @@ class AdaptiveEKFEstimator(IStateEstimator):
         # 
         # 低速保护：当速度非常小时，不强制执行耦合约束
         # 原因：低速时速度方向不确定，强制耦合可能因噪声导致方向跳变
-        if self.velocity_heading_coupled:
+        if self.velocity_heading_coupled and self.enable_non_holonomic_constraint:
             v_magnitude = np.sqrt(self.x[3]**2 + self.x[4]**2)
             # 只有当速度大于静止阈值时才执行耦合约束
             # 使用 stationary_thresh 作为阈值，保持与其他低速判断的一致性
+            # 
+            # 优化 (v3.19): 仅当打滑概率较低时才应用强非完整约束。
+            # 如果怀疑打滑，则信任里程计原始方向，避免将错误的 Odom 数据"修正"到错误的方向。
             if v_magnitude > self.stationary_thresh:
-                # 使用点积计算带符号的投影速度，而不是仅计算模长
-                # 这保留了运动方向（支持倒车），同时过滤掉非完整约束不允许的横向滑移
-                v_signed = self.x[3] * np.cos(self.x[6]) + self.x[4] * np.sin(self.x[6])
-                self.x[3] = v_signed * np.cos(self.x[6])
-                self.x[4] = v_signed * np.sin(self.x[6])
+                if self.slip_probability < self.non_holonomic_slip_threshold:
+                    # 使用点积计算带符号的投影速度
+                    v_signed = self.x[3] * np.cos(self.x[6]) + self.x[4] * np.sin(self.x[6])
+                    self.x[3] = v_signed * np.cos(self.x[6])
+                    self.x[4] = v_signed * np.sin(self.x[6])
+                else:
+                    # 打滑高风险：不强制投影，允许 EKF 根据测量值自行收敛
+                    # 这允许滤波器在检测到横向滑移时正确跟踪
+                    pass
 
         
         # 3. 更新协方差
@@ -621,39 +634,35 @@ class AdaptiveEKFEstimator(IStateEstimator):
             # v_signed < 0: 倒车
             v_signed = vx * cos_theta + vy * sin_theta
             
-            # 使用保持符号的平滑函数避免 Jacobian 在零速度附近跳变
-            # 
-            # 物理意义：即使车辆静止，航向角的不确定性仍然会影响
-            # 速度估计的不确定性（因为一旦开始运动，速度方向取决于航向）
-            # 
-            # 数学处理：
-            # effective_v = sign(v_signed) * sqrt(v_signed^2 + MIN_V^2)
-            # 这保持了速度的符号，同时在零速度附近提供平滑过渡
-            # 
-            # 当 |v_signed| >> MIN_V 时: effective_v ≈ v_signed
-            # 当 v_signed ≈ 0 时: effective_v ≈ sign(v_signed) * MIN_V（平滑过渡）
+            # 优化策略 (v3.18):
+            # 使用 tanh 函数代替 sign 函数，确保 Jacobian 在零速附近连续可微
+            # smooth_sign(v) = tanh(v / epsilon)
+            # 当 v = 0 时，导数有限且连续
+            
+            # 平滑因子 epsilon：决定了过渡区的宽度
+            # 值越小，越接近阶跃函数；值越大，越平滑但偏差越大
+            # 从配置中读取，默认为 0.1
+            epsilon = self.jacobian_smooth_epsilon
+            
+            # 平滑后的符号函数
+            smooth_sign = np.tanh(v_signed / epsilon)
+            
+            # 平滑后的速度模长（避免 sqrt(0) 的梯度奇点）
+            # MIN_VELOCITY 作为一个正则化项
             v_magnitude_smooth = np.sqrt(v_signed**2 + self.min_velocity_for_jacobian**2)
-            # 使用 np.sign，当 v_signed = 0 时返回 0，此时 effective_v = 0
-            # 这是合理的：静止时速度对航向的偏导数为 0
-            if abs(v_signed) < 1e-10:
-                # 完全静止时，使用一个小的正值保证协方差传播
-                effective_v = self.min_velocity_for_jacobian
-            else:
-                effective_v = np.sign(v_signed) * v_magnitude_smooth
+            
+            # 计算有效速度
+            # effective_v ≈ v_signed (当 |v| > epsilon)
+            # effective_v ≈ v_signed (当 |v| ≈ 0，因为 tanh(x) ≈ x)
+            effective_v = smooth_sign * v_magnitude_smooth
             
             # ∂vx_world/∂theta = -v_signed * sin(theta)
             # ∂vy_world/∂theta = v_signed * cos(theta)
-            # 
-            # 注意：这里使用 effective_v（带符号）而非 v_body（无符号）
-            # 倒车时 effective_v < 0，偏导数符号正确
             F[3, 6] = -effective_v * sin_theta
             F[4, 6] = effective_v * cos_theta
             
-            # ∂vx_world/∂omega 和 ∂vy_world/∂omega
-            # 由于 theta_new = theta + omega * dt
-            # vx_new = v_signed * cos(theta_new)
-            # 使用链式法则: ∂vx_new/∂omega = ∂vx_new/∂theta_new * ∂theta_new/∂omega
-            #                              = -v_signed * sin(theta) * dt
+            # ∂vx_world/∂omega = -v_signed * sin(theta) * dt
+            # ∂vy_world/∂omega = v_signed * cos(theta) * dt
             F[3, 7] = -effective_v * sin_theta * dt
             F[4, 7] = effective_v * cos_theta * dt
         

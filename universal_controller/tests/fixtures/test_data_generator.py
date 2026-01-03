@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple
 
 # 导入数据类型
 from ...core.data_types import (
-    Trajectory, Point3D, Header, Odometry, Imu, TrajectoryDefaults
+    Trajectory, Point3D, Header, Odometry, Imu
 )
 from ...core.enums import TrajectoryMode
 

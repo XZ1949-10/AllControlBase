@@ -58,7 +58,8 @@ class TrajectoryAdapter(IMsgConverter):
     配置说明:
     - 所有配置参数通过 TrajectoryDefaults 类获取
     - 在使用前应确保已调用 TrajectoryDefaults.configure(config)
-    - 配置参数包括: max_coord, velocity_decay_threshold, min_dt_sec, max_dt_sec, dt_sec
+    - 配置参数包括: velocity_decay_threshold, min_dt_sec, max_dt_sec, dt_sec
+    - max_coord 使用 constants.py 中的 TRAJECTORY_MAX_COORD 常量
     """
     
     def __init__(self, config: Dict[str, Any] = None):
@@ -91,8 +92,10 @@ class TrajectoryAdapter(IMsgConverter):
         Returns:
             有效的时间间隔值
         """
-        min_dt = TrajectoryDefaults.min_dt_sec
-        max_dt = TrajectoryDefaults.max_dt_sec
+        # 使用 constants.py 中的常量
+        from universal_controller.core.constants import TRAJECTORY_MIN_DT_SEC, TRAJECTORY_MAX_DT_SEC
+        min_dt = TRAJECTORY_MIN_DT_SEC
+        max_dt = TRAJECTORY_MAX_DT_SEC
         default_dt = TrajectoryDefaults.dt_sec
         
         if dt_sec <= 0 or dt_sec < min_dt or dt_sec > max_dt:
@@ -118,99 +121,43 @@ class TrajectoryAdapter(IMsgConverter):
             velocities_flat: 扁平化的速度数组
             num_points: 位置点数量
             soft_enabled: 是否启用 soft 模式
-            mode: 轨迹模式 (用于决定填充策略)
+            mode: 轨迹模式
         
         Returns:
             (velocities, soft_enabled): 处理后的速度数组和 soft 模式状态
         
-        填充策略:
-        - MODE_STOP/MODE_EMERGENCY: 使用零速度填充 (平滑停车)
-        - 其他模式: 使用最后一个速度点填充 (保持运动连续性)
+        策略 (Refactored):
+        - 严格校验: 速度点数量必须与位置点数量完全一致
+        - 移除隐式填充: 不再自动进行零填充或衰减填充
+        - 安全降级: 如果数量不匹配，丢弃所有速度数据并禁用 soft 模式 (回退到纯位置跟踪)
         """
         if not soft_enabled:
             return None, False
         
         if len(velocities_flat) == 0:
-            logger.debug("soft_enabled=True but no velocity data, disabling soft mode")
             return None, False
         
         flat_len = len(velocities_flat)
         
-        # 检查长度是否为 VELOCITY_DIMENSION 的倍数
+        # 维度检查
         if flat_len % VELOCITY_DIMENSION != 0:
             logger.warning(
-                f"velocities_flat length {flat_len} is not a multiple of {VELOCITY_DIMENSION} "
-                f"(expected multiple of {VELOCITY_DIMENSION} for [vx, vy, vz, wz]), "
-                f"truncating to {(flat_len // VELOCITY_DIMENSION) * VELOCITY_DIMENSION}. "
-                f"This may indicate upstream data corruption."
+                f"velocities_flat length {flat_len} is not a multiple of {VELOCITY_DIMENSION}, "
+                f"discarding velocity data."
             )
-            flat_len = (flat_len // VELOCITY_DIMENSION) * VELOCITY_DIMENSION
-        
-        if flat_len == 0:
-            logger.debug("No valid velocity data after truncation, disabling soft mode")
             return None, False
-        
+            
         velocities = np.array(velocities_flat[:flat_len]).reshape(-1, VELOCITY_DIMENSION)
         num_vel_points = velocities.shape[0]
         
-        # 检查速度点数与位置点数是否匹配
+        # 严格数量检查
         if num_vel_points != num_points:
-            if num_vel_points > num_points:
-                # 速度点多于位置点，截断
-                logger.debug(
-                    f"Velocity points ({num_vel_points}) > position points ({num_points}), truncating"
-                )
-                velocities = velocities[:num_points]
-            else:
-                # 速度点少于位置点，需要填充
-                # 根据轨迹模式决定填充策略
-                padding_count = num_points - num_vel_points
-                
-                # 判断是否为停止模式
-                is_stop_mode = mode in (
-                    TrajectoryMode.MODE_STOP.value, 
-                    TrajectoryMode.MODE_EMERGENCY.value
-                )
-                
-                if is_stop_mode:
-                    # 停止模式：使用零速度填充，实现平滑停车
-                    padding = np.zeros((padding_count, VELOCITY_DIMENSION))
-                    logger.debug(
-                        f"Velocity points ({num_vel_points}) < position points ({num_points}), "
-                        f"padding with zeros for stop mode"
-                    )
-                else:
-                    # 跟踪模式：使用衰减速度填充
-                    # 设计说明：直接复制最后一个速度点可能导致轨迹末端继续高速运动
-                    # 使用线性衰减到零，确保轨迹末端平滑减速
-                    last_vel = velocities[-1, :]
-                    last_vel_magnitude = np.sqrt(last_vel[0]**2 + last_vel[1]**2 + last_vel[2]**2)
-                    
-                    velocity_decay_threshold = TrajectoryDefaults.velocity_decay_threshold
-                    if last_vel_magnitude > velocity_decay_threshold:
-                        logger.debug(
-                            f"Velocity points ({num_vel_points}) < position points ({num_points}), "
-                            f"padding with decaying velocity (magnitude={last_vel_magnitude:.2f} m/s)"
-                        )
-                        # 线性衰减到零：确保速度连续性
-                        # 使用 (padding_count - i) / (padding_count + 1) 公式:
-                        # - i=0: decay = padding_count / (padding_count + 1) ≈ 1 (接近原速度)
-                        # - i=padding_count-1: decay = 1 / (padding_count + 1) (接近零但不为零)
-                        # 这确保了从 last_vel 到填充点的平滑过渡
-                        padding = np.zeros((padding_count, VELOCITY_DIMENSION))
-                        for i in range(padding_count):
-                            decay_factor = (padding_count - i) / (padding_count + 1)
-                            padding[i, :] = last_vel * decay_factor
-                    else:
-                        # 速度很小，直接使用零填充
-                        logger.debug(
-                            f"Velocity points ({num_vel_points}) < position points ({num_points}), "
-                            f"padding with zeros (last velocity magnitude={last_vel_magnitude:.2f} m/s is small)"
-                        )
-                        padding = np.zeros((padding_count, VELOCITY_DIMENSION))
-                
-                velocities = np.vstack([velocities, padding])
-        
+            logger.warning(
+                f"Velocity points ({num_vel_points}) != position points ({num_points}). "
+                f"Strict validation failed. Discarding velocity data to prevent behavioral ambiguity."
+            )
+            return None, False
+            
         return velocities, True
     
     def _validate_points(self, points: list) -> Tuple[list, bool]:
@@ -228,7 +175,9 @@ class TrajectoryAdapter(IMsgConverter):
         
         validated = []
         has_invalid = False
-        max_coord = TrajectoryDefaults.max_coord
+        # 使用 constants.py 中的常量
+        from universal_controller.core.constants import TRAJECTORY_MAX_COORD
+        max_coord = TRAJECTORY_MAX_COORD
         
         for i, p in enumerate(points):
             # 检查 NaN 和 Inf
@@ -258,10 +207,11 @@ class TrajectoryAdapter(IMsgConverter):
     
     def to_uc(self, ros_msg: Any) -> UcTrajectory:
         """ROS LocalTrajectoryV4 → UC Trajectory"""
-        # 处理 frame_id，空字符串使用默认值
+        # 严格校验 frame_id
+        # 安全性改进: 拒绝隐式坐标系，防止 map/odom/base_link 混淆导致的事故
         frame_id = ros_msg.header.frame_id
         if not frame_id:
-            frame_id = DEFAULT_TRAJECTORY_FRAME_ID
+            raise ValueError("Trajectory message must have a valid frame_id in header! Implicit assumption of 'base_link' is unsafe.")
         
         # 验证并转换轨迹点
         raw_points = [

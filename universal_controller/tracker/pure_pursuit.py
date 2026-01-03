@@ -346,8 +346,10 @@ class PurePursuitController(ITrajectoryTracker):
             elif abs_target_angle > self.pure_pursuit_angle_thresh:
                 # 过渡区域：目标点在侧前方
                 # 混合 Pure Pursuit 和航向误差控制
-                # 使用线性插值
-                blend_factor = (abs_target_angle - self.pure_pursuit_angle_thresh) / (self.heading_control_angle_thresh - self.pure_pursuit_angle_thresh)
+                # 使用余弦平滑插值代替线性插值，避免控制律突变
+                linear_factor = (abs_target_angle - self.pure_pursuit_angle_thresh) / (self.heading_control_angle_thresh - self.pure_pursuit_angle_thresh)
+                # Cosine easing: Maps [0, 1] to [0, 1] with zero slope at ends
+                blend_factor = 0.5 * (1 - np.cos(np.pi * linear_factor))
                 
                 # Pure Pursuit 部分
                 curvature = 2.0 * local_y / L_sq

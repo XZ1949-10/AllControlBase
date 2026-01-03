@@ -382,6 +382,37 @@ class StateMachine:
             return ControllerState.NORMAL
         return None
     
+    def _check_soft_recovery_to_normal(self, diag: DiagnosticsInput) -> bool:
+        """检查是否可以从 SOFT_DISABLED 恢复到 NORMAL"""
+        if diag.alpha > self.alpha_recovery_value and diag.data_valid:
+            self.alpha_recovery_count += 1
+            mpc_is_healthy = diag.mpc_health is not None and diag.mpc_health.healthy
+            if self.alpha_recovery_count >= self.alpha_recovery_thresh and mpc_is_healthy:
+                return True
+        else:
+            self.alpha_recovery_count = 0
+        return False
+
+    def _check_degraded_recovery(self, diag: DiagnosticsInput) -> Optional[ControllerState]:
+        """检查是否可以从 MPC_DEGRADED 恢复"""
+        can_recover = (
+            diag.mpc_health is not None and 
+            diag.mpc_health.can_recover and 
+            not diag.tf2_critical and 
+            not diag.safety_failed
+        )
+        
+        if can_recover:
+            self.mpc_recovery_count += 1
+            if self.mpc_recovery_count >= self.mpc_recovery_thresh:
+                if diag.alpha >= self.alpha_disable_thresh and diag.data_valid:
+                    return ControllerState.NORMAL
+                else:
+                    return ControllerState.SOFT_DISABLED
+        else:
+            self.mpc_recovery_count = 0
+        return None
+
     def _handle_normal(self, diag: DiagnosticsInput) -> Optional[ControllerState]:
         """处理 NORMAL 状态"""
         if diag.safety_failed:
@@ -414,13 +445,8 @@ class StateMachine:
             return ControllerState.MPC_DEGRADED
         
         # 尝试恢复到 NORMAL
-        if diag.alpha > self.alpha_recovery_value and diag.data_valid:
-            self.alpha_recovery_count += 1
-            mpc_is_healthy = diag.mpc_health is not None and diag.mpc_health.healthy
-            if self.alpha_recovery_count >= self.alpha_recovery_thresh and mpc_is_healthy:
-                return ControllerState.NORMAL
-        else:
-            self.alpha_recovery_count = 0
+        if self._check_soft_recovery_to_normal(diag):
+            return ControllerState.NORMAL
         
         return None
     
@@ -430,24 +456,7 @@ class StateMachine:
             return ControllerState.BACKUP_ACTIVE
         
         # 尝试恢复
-        can_recover = (
-            diag.mpc_health is not None and 
-            diag.mpc_health.can_recover and 
-            not diag.tf2_critical and 
-            not diag.safety_failed
-        )
-        
-        if can_recover:
-            self.mpc_recovery_count += 1
-            if self.mpc_recovery_count >= self.mpc_recovery_thresh:
-                if diag.alpha >= self.alpha_disable_thresh and diag.data_valid:
-                    return ControllerState.NORMAL
-                else:
-                    return ControllerState.SOFT_DISABLED
-        else:
-            self.mpc_recovery_count = 0
-        
-        return None
+        return self._check_degraded_recovery(diag)
     
     def _handle_backup_active(self, diag: DiagnosticsInput) -> Optional[ControllerState]:
         """处理 BACKUP_ACTIVE 状态

@@ -90,6 +90,16 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 健康检查器
         self._health_checker: Optional[HealthChecker] = None
         
+        # ROS 资源占位符 (确保 shutdown 时无需 hasattr 检查)
+        self._publishers = None
+        self._services = None
+        self._timer = None  # ROS1 timer or ROS2 timer
+        self._control_timer = None # ROS2 specific
+        self._odom_sub = None
+        self._imu_sub = None
+        self._traj_sub = None
+        self._emergency_stop_sub = None
+        
         # 状态
         self._waiting_for_data = True
         self._consecutive_errors = 0
@@ -261,20 +271,7 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         
         return details
     
-    def _notify_odom_received(self) -> None:
-        """通知收到里程计数据（更新超时监控）"""
-        if self._controller_bridge is not None:
-            self._controller_bridge.notify_odom_received()
-    
-    def _notify_trajectory_received(self) -> None:
-        """通知收到轨迹数据（更新超时监控）"""
-        if self._controller_bridge is not None:
-            self._controller_bridge.notify_trajectory_received()
-    
-    def _notify_imu_received(self) -> None:
-        """通知收到 IMU 数据（更新超时监控）"""
-        if self._controller_bridge is not None:
-            self._controller_bridge.notify_imu_received()
+
     
     def _on_clock_jump(self, event) -> None:
         """
@@ -367,95 +364,26 @@ class ControllerNodeBase(LifecycleMixin, ABC):
     
     # ==================== 姿态控制接口 ====================
     
-    def _try_publish_attitude_command(self, cmd: ControlOutput) -> None:
+    def _publish_extra_outputs(self, cmd: ControlOutput) -> None:
         """
-        尝试获取状态并发布姿态命令 (仅四旋翼平台)
-        
-        安全地从状态估计器获取状态数组，处理各种边界情况。
+        发布额外的控制输出
         
         Args:
-            cmd: 速度控制命令
+            cmd: 控制输出，包含 extras
         """
-        try:
-            # 显式检查 controller_bridge 是否存在
-            if self._controller_bridge is None:
-                return
-            
-            manager = self._controller_bridge.manager
-            if manager is None:
-                return
-            
-            state_estimator = getattr(manager, 'state_estimator', None)
-            if state_estimator is None:
-                return
-            
-            # 安全获取状态
-            get_state_func = getattr(state_estimator, 'get_state', None)
-            if get_state_func is None:
-                return
-            
-            state_result = get_state_func()
-            if state_result is None:
-                return
-            
-            # 获取状态数组，支持多种返回格式
-            state_array = None
-            if hasattr(state_result, 'state'):
-                state_array = state_result.state
-            elif hasattr(state_result, 'x'):
-                state_array = state_result.x
-            elif isinstance(state_result, (list, tuple)):
-                state_array = np.array(state_result)
-            
-            if state_array is None:
-                return
-            
-            # 验证状态数组有效性
-            if not isinstance(state_array, np.ndarray):
-                try:
-                    state_array = np.array(state_array)
-                except (TypeError, ValueError):
-                    return
-            
-            if state_array.size == 0 or np.any(np.isnan(state_array)):
-                return
-            
-            self._compute_and_publish_attitude(cmd, state_array)
-            
-        except Exception as e:
-            # 姿态命令发布失败不应影响主控制循环
-            logger.debug(f"Failed to publish attitude command: {e}")
-    
-    def _compute_and_publish_attitude(self, cmd: ControlOutput, state_array) -> Optional[AttitudeCommand]:
-        """
-        计算并发布姿态命令 (仅四旋翼平台)
-        
-        Args:
-            cmd: 速度控制命令
-            state_array: 当前状态数组
-        
-        Returns:
-            姿态命令，非四旋翼平台返回 None
-        """
-        if not self._is_quadrotor:
-            return None
-        
-        if self._controller_bridge is None or self._controller_bridge.manager is None:
-            return None
-        
-        manager = self._controller_bridge.manager
-        
-        # 使用 ControllerManager 的姿态控制接口
-        attitude_cmd = manager.compute_attitude_command(
-            cmd, state_array, 
-            yaw_mode=self._get_yaw_mode_string()
-        )
-        
-        if attitude_cmd is not None:
-            self._last_attitude_cmd = attitude_cmd
-            self._publish_attitude_cmd(attitude_cmd)
-        
-        return attitude_cmd
+        # 发布姿态命令 (四旋翼平台)
+        if self._is_quadrotor and 'attitude_cmd' in cmd.extras:
+            attitude_cmd = cmd.extras['attitude_cmd']
+            if attitude_cmd is not None:
+                self._last_attitude_cmd = attitude_cmd
+                # 获取悬停状态 (如果处理器提供了的话)
+                is_hovering = cmd.extras.get('is_hovering', False)
+                
+                self._publishers.publish_attitude_cmd(
+                    attitude_cmd,
+                    yaw_mode=self._attribute_yaw_mode if hasattr(self, '_attribute_yaw_mode') else 'velocity',
+                    is_hovering=is_hovering
+                )
     
     def _get_yaw_mode_string(self) -> str:
         """将航向模式整数转换为字符串"""
@@ -502,10 +430,7 @@ class ControllerNodeBase(LifecycleMixin, ABC):
             return None
         
         manager = self._controller_bridge.manager
-        if manager.attitude_controller is None:
-            return None
-        
-        return manager.attitude_controller.get_attitude_rate_limits()
+        return manager.get_attitude_rate_limits()
     
     # ==================== 控制循环 ====================
     
@@ -538,10 +463,12 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 0.3 尝试 TF2 重新注入（由 TF2InjectionManager 管理）
         self._try_tf2_reinjection()
         
-        # 1. 获取最新数据
-        odom = self._data_manager.get_latest_odom()
-        imu = self._data_manager.get_latest_imu()
-        trajectory = self._data_manager.get_latest_trajectory()
+        # 1. 获取最新数据 (Atomic Snapshot)
+        snapshot = self._data_manager.get_control_snapshot()
+        odom = snapshot['odom']
+        imu = snapshot['imu']
+        trajectory = snapshot['trajectory']
+        data_ages = snapshot['ages']
         
         # 2. 检查数据有效性
         if odom is None or trajectory is None:
@@ -556,15 +483,15 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         # 3. 执行控制更新
         # 超时检测由 ControllerManager 内部的 TimeoutMonitor 统一处理
         try:
-            cmd = self._controller_bridge.update(odom, trajectory, imu)
+            # New: Pass data_ages to update
+            cmd = self._controller_bridge.update(odom, trajectory, data_ages, imu)
             self._consecutive_errors = 0
             
             # 4. 记录超时警告（从 ControllerManager 获取统一的超时状态）
             self._log_timeout_warnings()
             
-            # 5. 四旋翼平台：计算并发布姿态命令
-            if self._is_quadrotor and self._controller_bridge.manager is not None:
-                self._try_publish_attitude_command(cmd)
+            # 5. 发布额外输出（如四旋翼姿态）
+            self._publish_extra_outputs(cmd)
             
             # 6. 发布调试路径 (用于 RViz 可视化)
             self._publish_debug_path(trajectory)
@@ -604,7 +531,21 @@ class ControllerNodeBase(LifecycleMixin, ABC):
                 )
     
     def _handle_control_error(self, error: Exception):
-        """处理控制更新错误"""
+        """
+        处理控制更新错误
+        
+        策略 (v3.19 Optimization):
+        - 对于配置错误 (TypeError, ValueError) 或代码逻辑错误 (AttributeError, NameError)，
+          立即抛出异常 (Crash Early)，不进行掩盖。这有助于快速定位静态错误。
+        - 对于运行时错误 (RuntimeError, IOError) 或算法异常，
+          捕获并记录，尝试降级或安全停止。
+        """
+        # Critical structural errors: Do not catch, let it crash!
+        if isinstance(error, (TypeError, AttributeError, NameError)):
+            logger.critical(f"Critical configuration or logic error detected: {error}. Crashing immediately.")
+            raise error
+
+        # Runtime errors: Handle gracefully
         self._consecutive_errors += 1
         
         # 限制连续错误计数的上限，避免无限增长

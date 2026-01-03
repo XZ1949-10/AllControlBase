@@ -49,6 +49,9 @@ class ControllerNode(ControllerNodeBase, Node):
         # 2. 创建回调组（用于并发控制）
         self._sensor_cb_group = ReentrantCallbackGroup()
         self._control_cb_group = MutuallyExclusiveCallbackGroup()
+        # 紧急停止专用回调组 (高优先级，互斥)
+        # 使用单独的组确保即使传感器组积压，E-Stop 也能被调度
+        self._estop_cb_group = MutuallyExclusiveCallbackGroup()
         
         # 3. 初始化核心组件（基类方法）
         self._initialize()
@@ -175,7 +178,7 @@ class ControllerNode(ControllerNodeBase, Node):
             emergency_stop_topic,
             self._emergency_stop_callback,
             1,  # 低队列深度，确保及时响应
-            callback_group=self._sensor_cb_group
+            callback_group=self._estop_cb_group
         )
         self.get_logger().info(f"Subscribed to emergency_stop: {emergency_stop_topic}")
     
@@ -184,17 +187,14 @@ class ControllerNode(ControllerNodeBase, Node):
     def _odom_callback(self, msg):
         """里程计回调"""
         self._data_manager.update_odom(msg)
-        self._notify_odom_received()  # 通知超时监控
     
     def _imu_callback(self, msg):
         """IMU 回调"""
         self._data_manager.update_imu(msg)
-        self._notify_imu_received()  # 通知超时监控
     
     def _traj_callback(self, msg):
         """轨迹回调"""
         self._data_manager.update_trajectory(msg)
-        self._notify_trajectory_received()  # 通知超时监控
     
     def _emergency_stop_callback(self, msg):
         """紧急停止回调"""
@@ -250,23 +250,7 @@ class ControllerNode(ControllerNodeBase, Node):
         """发布诊断信息"""
         self._publishers.publish_diagnostics(diag, force=force)
     
-    def _publish_attitude_cmd(self, attitude_cmd: AttitudeCommand):
-        """发布姿态命令 (四旋翼平台)"""
-        if not self._is_quadrotor:
-            return
-        
-        # 获取悬停状态
-        is_hovering = False
-        if self._controller_bridge and self._controller_bridge.manager:
-            attitude_controller = self._controller_bridge.manager.attitude_controller
-            if attitude_controller is not None:
-                is_hovering = attitude_controller.is_hovering
-        
-        self._publishers.publish_attitude_cmd(
-            attitude_cmd,
-            yaw_mode=self._attitude_yaw_mode,
-            is_hovering=is_hovering
-        )
+
     
     def _publish_debug_path(self, trajectory):
         """发布调试路径 (用于 RViz 可视化)"""
@@ -291,46 +275,46 @@ class ControllerNode(ControllerNodeBase, Node):
         self._shutting_down.set()
         
         # 2. 取消控制定时器
-        if hasattr(self, '_control_timer') and self._control_timer is not None:
+        if self._control_timer is not None:
             self._control_timer.cancel()
             self._control_timer = None
         
         # 3. 发送最终停止命令
         try:
-            if hasattr(self, '_publishers') and self._publishers is not None:
+            if self._publishers is not None:
                 self._publishers.publish_stop_cmd()
                 self.get_logger().info("Final stop command sent")
         except Exception as e:
             self.get_logger().warn(f"Failed to send final stop command: {e}")
         
         # 4. 销毁订阅器
-        if hasattr(self, '_odom_sub') and self._odom_sub is not None:
+        if self._odom_sub is not None:
             self.destroy_subscription(self._odom_sub)
             self._odom_sub = None
         
-        if hasattr(self, '_imu_sub') and self._imu_sub is not None:
+        if self._imu_sub is not None:
             self.destroy_subscription(self._imu_sub)
             self._imu_sub = None
         
-        if hasattr(self, '_traj_sub') and self._traj_sub is not None:
+        if self._traj_sub is not None:
             self.destroy_subscription(self._traj_sub)
             self._traj_sub = None
         
-        if hasattr(self, '_emergency_stop_sub') and self._emergency_stop_sub is not None:
+        if self._emergency_stop_sub is not None:
             self.destroy_subscription(self._emergency_stop_sub)
             self._emergency_stop_sub = None
         
         # 5. 关闭发布器和服务
-        if hasattr(self, '_publishers') and self._publishers is not None:
+        if self._publishers is not None:
             self._publishers.shutdown()
             self._publishers = None
         
-        if hasattr(self, '_services') and self._services is not None:
+        if self._services is not None:
             self._services.shutdown()
             self._services = None
         
         # 6. 关闭 TF 桥接
-        if hasattr(self, '_tf_bridge') and self._tf_bridge is not None:
+        if self._tf_bridge is not None:
             self._tf_bridge.shutdown()
             self._tf_bridge = None
         

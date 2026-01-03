@@ -45,6 +45,7 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         self.w_velocity = weights.get('velocity', 1.5)
         self.w_temporal = weights.get('temporal', 0.8)
         self.alpha_min = consistency_config.get('alpha_min', 0.1)
+        self.min_value_for_log = consistency_config.get('min_value_for_log', 1e-10)
         
         # 数据无效时的保守 confidence 值 - 使用常量
         # 与 TrajectoryDefaults.default_confidence (0.9) 不同，这是运行时异常的保守处理
@@ -137,15 +138,14 @@ class WeightedConsistencyAnalyzer(IConsistencyChecker):
         # - 对数空间: log(1e-6) * 1.5 = -13.8 * 1.5 = -20.7，然后 exp(-20.7) ≈ 1e-9
         # - 对数空间计算更稳定，避免中间结果下溢
         # 
-        # 下界选择 1e-10:
+        # 下界选择 1e-10 (可配置):
         # - log(1e-10) = -23，乘以最大权重 1.5 后为 -34.5
         # - exp(-34.5) ≈ 1e-15，仍在 float64 精度范围内
-        MIN_VALUE_FOR_LOG = 1e-10
         
         log_alpha = (
-            effective_w_kappa * np.log(max(effective_kappa, MIN_VALUE_FOR_LOG)) +
-            effective_w_velocity * np.log(max(effective_v_dir, MIN_VALUE_FOR_LOG)) +
-            effective_w_temporal * np.log(max(effective_temporal, MIN_VALUE_FOR_LOG))
+            effective_w_kappa * np.log(max(effective_kappa, self.min_value_for_log)) +
+            effective_w_velocity * np.log(max(effective_v_dir, self.min_value_for_log)) +
+            effective_w_temporal * np.log(max(effective_temporal, self.min_value_for_log))
         ) / total_effective_weight
         
         alpha = np.exp(log_alpha) * confidence

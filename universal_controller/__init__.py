@@ -55,7 +55,7 @@ from .core.interfaces import (
     ILifecycleComponent,
     IStateEstimator, ITrajectoryTracker, IConsistencyChecker,
     ISafetyMonitor, ISmoothTransition, ICoordinateTransformer,
-    IAttitudeController
+    IControlProcessor
 )
 # 导出常量
 from .core.constants import (
@@ -88,7 +88,7 @@ __all__ = [
     'ILifecycleComponent',
     'IStateEstimator', 'ITrajectoryTracker', 'IConsistencyChecker',
     'ISafetyMonitor', 'ISmoothTransition', 'ICoordinateTransformer',
-    'IAttitudeController',
+    'IControlProcessor',
     # 常量
     'EPSILON', 'EPSILON_SMALL', 'EPSILON_ANGLE',
     'DEFAULT_GRAVITY', 'NEVER_RECEIVED_TIME_MS',

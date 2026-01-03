@@ -1,41 +1,18 @@
 """
-鲁棒坐标变换器
-
-实现功能:
-- F3.1: 补偿网络推理延迟
-- F3.2: 使用 TF2 lookupTransform 获取坐标变换
-- F3.3: TF2 降级策略 (降级到 odom 积分，记录持续时间，恢复后校正)
-- F3.4: TF2 降级超过 1000ms 触发 MPC_DEGRADED 状态
-- F3.5: TF2 恢复时校正状态估计器的漂移
-
-坐标系约定 (不需要建图):
-- base_link: 机体坐标系，原点在机器人中心，X轴朝前
-- odom: 里程计坐标系，从启动位置开始累积 (这就是"世界坐标系")
-
-数据流:
-- 网络输出轨迹: base_link (局部坐标系，当前位置为原点)
-- 控制器工作坐标系: odom (里程计坐标系)
-- 变换方向: base_link -> odom
-
-延迟补偿说明:
-- 网络推理有延迟，输出的轨迹是基于推理开始时刻的机体坐标系
-- 控制执行时机器人已经移动，需要将轨迹变换到当前的里程计坐标系
-- TF2 提供 base_link -> odom 的变换，即机器人在里程计坐标系中的位姿
+鲁棒坐标变换模块
 """
 from typing import Dict, Any, Tuple, Optional, List
+import time
 import numpy as np
 import logging
+from threading import Lock
 
-from ..core.interfaces import ICoordinateTransformer, IStateEstimator
-from ..core.data_types import Trajectory, Point3D
+from ..core.interfaces import ICoordinateTransformer
+from ..core.data_types import Trajectory, Point3D, EstimatorOutput
 from ..core.enums import TransformStatus
 from ..core.ros_compat import (
-    tf2_ros, tft, ROS_AVAILABLE, TF2_AVAILABLE,
-    TF2LookupException, TF2ExtrapolationException, TF2ConnectivityException,
-    get_current_time, create_time, create_duration,
-    euler_from_quaternion, quaternion_from_euler,
-    normalize_angle,
-    get_monotonic_time
+    TF2_AVAILABLE, Duration, Time, 
+    transform_pose, get_transform_matrix, apply_transform_to_trajectory
 )
 
 logger = logging.getLogger(__name__)
@@ -45,764 +22,304 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
     """
     带降级时限和恢复校正的坐标变换器
     
-    TF2 集成说明:
-    - 优先使用 TF2 进行坐标变换
-    - TF2 不可用时降级到 odom 积分
-    - 降级超过阈值时触发警告/临界状态
-    - TF2 恢复时执行漂移校正
-    
-    坐标系处理 (不需要建图):
-    - 网络输出轨迹在 base_link 坐标系下 (局部坐标，当前位置为原点)
-    - 变换后轨迹在 odom 坐标系下 (里程计坐标系)
-    - 控制器使用 odom 坐标系下的轨迹进行跟踪
-    
-    注意: 这里的 odom 就是你的"世界坐标系"，不需要建图或定位。
+    主要功能:
+    1. 将局部坐标系(base_link)的轨迹变换到世界坐标系(odom)
+    2. 如果 TF2 可用，使用 TF2 进行变换
+    3. 如果 TF2 不可用，使用 fallback_state (状态估计器) 进行降级处理
+    4. 补偿网络推理延迟
     """
     
     def __init__(self, config: Dict[str, Any]):
-        transform_config = config.get('transform', config)
+        transform_config = config.get('transform', {})
         
-        # 配置参数
+        self.source_frame = transform_config.get('source_frame', 'base_link')
+        self.default_target_frame = transform_config.get('target_frame', 'odom')
+        self.timeout_sec = transform_config.get('timeout_sec', 0.05)
+        
+        # 降级阈值配置
         self.fallback_duration_limit = transform_config.get('fallback_duration_limit_ms', 500) / 1000.0
         self.fallback_critical_limit = transform_config.get('fallback_critical_limit_ms', 1000) / 1000.0
-        # TF2 查询超时 (统一使用 timeout_ms)
-        self.tf2_timeout = transform_config.get('timeout_ms', 10) / 1000.0
-        self.drift_estimation_enabled = transform_config.get('drift_estimation_enabled', True)
-        self.recovery_correction_enabled = transform_config.get('recovery_correction_enabled', True)
-        self.drift_rate = transform_config.get('drift_rate', 0.01)
-        self.drift_velocity_factor = transform_config.get('drift_velocity_factor', 0.1)  # 速度漂移因子
-        self.max_drift_dt = transform_config.get('max_drift_dt', 0.5)
-        # 漂移累积上限 - 防止长时间运行后漂移估计值过大
-        # 当累积漂移超过此值时，停止累积（认为估计已不可靠）
-        self.max_accumulated_drift = transform_config.get('max_accumulated_drift', 1.0)  # 米
-        self.source_frame = transform_config.get('source_frame', 'base_link')
-        self.target_frame = transform_config.get('target_frame', 'odom')
-        self.drift_correction_thresh = transform_config.get('drift_correction_thresh', 0.01)
-        
-        # 延迟补偿参数
-        self.max_delay_compensation_sec = transform_config.get('max_delay_compensation_sec', 0.5)
-        
-        # 坐标系验证配置
-        self.expected_source_frames: List[str] = transform_config.get(
-            'expected_source_frames', ['base_link', 'base_footprint', 'base_link_0', '', 'odom'])
         self.warn_unexpected_frame = transform_config.get('warn_unexpected_frame', True)
-        self._warned_frames: set = set()  # 已警告过的坐标系，避免重复警告
         
-        # 状态变量
-        self.fallback_start_time: Optional[float] = None
-        self.accumulated_drift = 0.0
-        self._drift_estimate_reliable: bool = True  # 漂移估计是否可靠
-        self.state_estimator: Optional[IStateEstimator] = None
-        
-        # TF2 缓存
-        self._last_tf2_position: Optional[np.ndarray] = None
-        self._last_tf2_yaw: float = 0.0
-        self._fallback_start_tf2_position: Optional[np.ndarray] = None
-        self._fallback_start_tf2_yaw: float = 0.0
-        self._fallback_start_estimator_position: Optional[np.ndarray] = None
-        self._fallback_start_estimator_theta: float = 0.0
+        # 状态记录
         self._last_status = TransformStatus.TF2_OK
-        self._last_fallback_update_time: Optional[float] = None  # 漂移估计时间跟踪
+        self.fallback_start_time: Optional[float] = None
+        self._tf2_lookup_callback = None
+        self._tf2_available = TF2_AVAILABLE
         
-        # TF2 Buffer 和 Listener
-        self._tf_buffer: Optional[Any] = None
-        self._tf_listener: Optional[Any] = None
-        self._tf2_initialized = False
-        self._tf2_force_disabled = False  # 用于测试时强制禁用 TF2
+        # 记录已警告过的坐标系，避免日志刷屏
+        self._warned_frames = set()
         
-        # 外部 TF2 查找回调 (用于 ROS 胶水层注入)
-        self._external_tf2_lookup: Optional[callable] = None
-        
-        # 初始化 TF2
-        self._initialize_tf2()
-    
-    def _initialize_tf2(self) -> None:
-        """初始化 TF2 Buffer 和 Listener"""
-        if TF2_AVAILABLE and not self._tf2_force_disabled:
-            try:
-                self._tf_buffer = tf2_ros.Buffer()
-                self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
-                self._tf2_initialized = True
-                logger.info("TF2 initialized successfully")
-            except Exception as e:
-                logger.warning(f"TF2 initialization failed: {e}")
-                self._tf2_initialized = False
-        else:
-            # 非 ROS 环境，使用独立运行模式的 TF2 Buffer
-            self._tf_buffer = tf2_ros.Buffer()
-            self._tf2_initialized = True
-            logger.debug("Using standalone TF2 buffer (non-ROS mode)")
-    
-    def set_tf2_available(self, available: bool) -> None:
+        # 用于缓存上一次成功的变换，用于极短时间的平滑（可选）
+        self._last_successful_transform = None
+        self._lock = Lock()
+
+    def set_tf2_lookup_callback(self, callback):
+        """注入 TF2 查找回调"""
+        self._tf2_lookup_callback = callback
+        if callback:
+            self._tf2_available = True
+
+    def set_tf2_available(self, available: bool):
+        """手动设置 TF2 可用性 (用于测试)"""
+        self._tf2_available = available
+
+    def transform_trajectory(self, traj: Trajectory, target_frame: str, 
+                            target_time: float,
+                            fallback_state: Optional[EstimatorOutput] = None) -> Tuple[Trajectory, TransformStatus]:
         """
-        设置 TF2 可用性 (用于测试)
+        变换轨迹坐标系
         
-        注意: 这会强制禁用/启用 TF2，即使真实 TF2 可用
-        """
-        self._tf2_force_disabled = not available
-        if not available:
-            logger.debug("TF2 force disabled for testing")
-    
-    def set_tf2_lookup_callback(self, callback: callable) -> None:
-        """
-        设置外部 TF2 查找回调
-        
-        用于 ROS 胶水层注入真实的 TF2 查找功能。
+        流程:
+        1. 检查输入轨迹坐标系
+        2. 尝试获取 TF 变换
+        3. 如果 TF 失败，使用 fallback_state
         
         Args:
-            callback: 回调函数，签名为:
-                callback(target_frame: str, source_frame: str, 
-                        time: Optional[float], timeout_sec: float) -> Optional[dict]
-                返回 {'translation': (x, y, z), 'rotation': (x, y, z, w)} 或 None
-        """
-        self._external_tf2_lookup = callback
-        if callback is not None:
-            logger.info("External TF2 lookup callback set")
-        else:
-            logger.info("External TF2 lookup callback cleared")
-    
-    def set_transform(self, parent_frame: str, child_frame: str,
-                     x: float, y: float, z: float, yaw: float,
-                     stamp: Optional[float] = None) -> None:
-        """
-        设置变换 (用于测试或手动设置)
-        
-        Args:
-            parent_frame: 父坐标系
-            child_frame: 子坐标系
-            x, y, z: 平移
-            yaw: 航向角 (弧度)
-            stamp: 时间戳 (秒)，None 表示当前时间
-        """
-        if self._tf_buffer is None:
-            return
-        
-        from ..core.data_types import TransformStamped, Header, Transform, Vector3, Quaternion
-        
-        transform = TransformStamped()
-        transform.header = Header()
-        transform.header.frame_id = parent_frame
-        transform.header.stamp = stamp if stamp is not None else get_current_time()
-        transform.child_frame_id = child_frame
-        
-        q = quaternion_from_euler(0, 0, yaw)
-        transform.transform = Transform()
-        transform.transform.translation = Vector3(x, y, z)
-        transform.transform.rotation = Quaternion(q[0], q[1], q[2], q[3])
-        
-        self._tf_buffer.set_transform(transform, "manual")
-    
-    def _try_tf2_lookup(self, target_frame: str, source_frame: str,
-                       target_time: float) -> Tuple[Optional[np.ndarray], Optional[float], bool]:
-        """
-        尝试 TF2 查找
-        
-        优先使用外部 TF2 回调（如果设置），否则使用内部 TF2 Buffer。
-        
-        Returns:
-            (position, yaw, success): 位置 [x, y, z], 航向角, 是否成功
-        """
-        # 优先使用外部 TF2 回调 (ROS 胶水层注入)
-        if self._external_tf2_lookup is not None and not self._tf2_force_disabled:
-            try:
-                result = self._external_tf2_lookup(
-                    target_frame, source_frame, target_time, self.tf2_timeout
-                )
-                if result is not None:
-                    position = np.array(result['translation'])
-                    q = result['rotation']
-                    _, _, yaw = euler_from_quaternion(q)
-                    
-                    # 更新缓存
-                    self._last_tf2_position = position.copy()
-                    self._last_tf2_yaw = yaw
-                    
-                    return position, yaw, True
-            except Exception as e:
-                logger.debug(f"External TF2 lookup failed: {e}")
+            traj: 输入轨迹
+            target_frame: 目标坐标系 (通常是 'odom')
+            target_time: 目标时间戳 (用于查询 TF)
+            fallback_state: 备用的状态估计 (当 TF 失败时使用)
             
-            return None, None, False
-        
-        # 使用内部 TF2 Buffer
-        if self._tf_buffer is None or self._tf2_force_disabled:
-            return None, None, False
+        Returns:
+            (变换后的轨迹, 状态码)
+        """
+        if not traj.points:
+            return traj, TransformStatus.TF2_OK
+            
+        source_frame = traj.header.frame_id
+        if not source_frame:
+            source_frame = self.source_frame
+            
+        # 如果坐标系已经一致，直接返回
+        if source_frame == target_frame:
+            return traj, TransformStatus.TF2_OK
+            
+        # 简单的坐标系验证警告
+        if self.warn_unexpected_frame and source_frame != self.source_frame:
+            if source_frame not in self._warned_frames:
+                logger.warning(f"Unexpected trajectory frame: {source_frame} (expected {self.source_frame})")
+                self._warned_frames.add(source_frame)
+
+        # 尝试使用 TF2 获取变换
+        transform_matrix = None
+        tf2_success = False
         
         try:
-            # 创建时间对象
-            lookup_time = create_time(target_time)
-            timeout = create_duration(self.tf2_timeout)
-            
-            # 查找变换
-            transform = self._tf_buffer.lookup_transform(
-                target_frame, source_frame, lookup_time, timeout)
-            
-            # 提取位置
-            t = transform.transform.translation
-            position = np.array([t.x, t.y, t.z])
-            
-            # 提取航向角
-            r = transform.transform.rotation
-            q = (r.x, r.y, r.z, r.w)
-            _, _, yaw = euler_from_quaternion(q)
-            
-            # 更新缓存
-            self._last_tf2_position = position.copy()
-            self._last_tf2_yaw = yaw
-            
-            return position, yaw, True
-            
-        except (TF2LookupException, TF2ExtrapolationException, TF2ConnectivityException) as e:
-            # TF2 查找失败
-            return None, None, False
-        except Exception as e:
-            logger.warning(f"TF2 lookup error: {e}")
-            return None, None, False
-    
-    def transform_trajectory(self, traj: Trajectory, target_frame: str, 
-                            target_time: float) -> Tuple[Trajectory, TransformStatus]:
-        """
-        变换轨迹到目标坐标系
-        
-        实现 F3.1: 补偿网络推理延迟
-        实现 F3.2: 使用 TF2 lookupTransform 获取坐标变换
-        实现 F3.3: TF2 降级策略
-        
-        坐标变换说明:
-        - 输入轨迹在 source_frame (通常是 base_link) 坐标系下
-        - 轨迹点是相对于推理时刻机器人位置的局部坐标 (原点在机器人位置)
-        - 输出轨迹在 target_frame (通常是 odom) 坐标系下
-        - 变换使用 TF2 获取的 base_link -> odom 变换
-        
-        特殊情况:
-        - 如果轨迹已经在目标坐标系 (world/odom)，则不进行变换
-        
-        延迟补偿:
-        - traj.header.stamp 是轨迹生成时刻 (网络推理时刻)
-        - target_time 是当前控制时刻
-        - 理想情况下应使用 traj.header.stamp 时刻的 TF 变换
-        - 但由于 TF2 缓存限制，可能需要使用最新的变换
-        
-        Args:
-            traj: 输入轨迹 (局部坐标系)
-            target_frame: 目标坐标系 (通常是 'odom')
-            target_time: 目标时间戳 (当前控制时刻)
-        
-        Returns:
-            (transformed_traj, status): 变换后的轨迹和状态
-        """
-        # 确定源坐标系
-        source_frame = traj.header.frame_id if traj.header.frame_id else self.source_frame
-        
-        # 坐标系验证
-        self._validate_source_frame(source_frame)
-        
-        # 如果轨迹已经在目标坐标系 (odom)，不需要变换
-        if source_frame == target_frame or source_frame == 'odom':
-            # 轨迹已经在里程计坐标系，直接返回
-            new_traj = traj.copy()
-            new_traj.header.frame_id = target_frame
-            return new_traj, TransformStatus.TF2_OK
-        
-        # 确定查询时间：优先使用轨迹时间戳进行延迟补偿
-        # 如果轨迹时间戳有效且不太旧，使用它来获取更准确的变换
-        lookup_time = target_time
-        traj_stamp = traj.header.stamp
-        if traj_stamp > 0:
-            time_diff = target_time - traj_stamp
-            # 如果轨迹时间戳在合理范围内，使用它
-            if 0 <= time_diff <= self.max_delay_compensation_sec:
-                lookup_time = traj_stamp
-        
-        # 尝试 TF2 查找
-        position, yaw, tf2_success = self._try_tf2_lookup(target_frame, source_frame, lookup_time)
-        
-        if tf2_success:
-            # TF2 可用
-            if self.fallback_start_time is not None:
-                # 从降级状态恢复
-                if self.recovery_correction_enabled:
-                    self._apply_recovery_correction(position, yaw)
-                self.fallback_start_time = None
-                self.accumulated_drift = 0.0
-                self._drift_estimate_reliable = True  # 重置漂移估计可靠性标志
-                # 重置漂移估计时间跟踪
-                self._last_fallback_update_time = None
-                logger.info("TF2 recovered, drift corrected")
-            
-            self._last_status = TransformStatus.TF2_OK
-            
-            # 应用变换
-            transformed_traj = self._apply_tf2_transform(traj, position, yaw, target_frame)
-            return transformed_traj, TransformStatus.TF2_OK
-        else:
-            # TF2 不可用，降级处理
-            return self._handle_fallback(traj, target_time, target_frame)
-    
-    def _validate_source_frame(self, source_frame: str) -> None:
-        """
-        验证源坐标系是否符合预期
-        
-        网络输出的轨迹应该在 base_link 或 base_link_0 坐标系下。
-        如果收到其他坐标系的轨迹，发出警告。
-        """
-        if not self.warn_unexpected_frame:
-            return
-        
-        if source_frame not in self.expected_source_frames:
-            if source_frame not in self._warned_frames:
-                self._warned_frames.add(source_frame)
-                logger.warning(
-                    f"Unexpected trajectory frame_id: '{source_frame}'. "
-                    f"Expected one of {self.expected_source_frames}. "
-                    f"Network output should be in local (base_link) frame. "
-                    f"If this is intentional, add '{source_frame}' to "
-                    f"transform.expected_source_frames config."
-                )
-    
-    def _apply_tf2_transform(self, traj: Trajectory, position: np.ndarray,
-                            yaw: float, target_frame: str) -> Trajectory:
-        """
-        应用 TF2 变换到轨迹
-        
-        变换说明:
-        - position 和 yaw 表示 base_link 在 odom 中的位姿
-        - 即机器人在里程计坐标系中的位置和航向
-        - 轨迹点是相对于机器人的局部坐标
-        - 变换公式: p_odom = R(yaw) @ p_local + position
-        
-        Args:
-            traj: 输入轨迹 (局部坐标系 base_link)
-            position: 机器人在 odom 坐标系中的位置 [x, y, z]
-            yaw: 机器人在 odom 坐标系中的航向角
-            target_frame: 目标坐标系名称 (通常是 'odom')
-        
-        Returns:
-            变换后的轨迹 (odom 坐标系)
-        """
-        cos_yaw = np.cos(yaw)
-        sin_yaw = np.sin(yaw)
-        
-        transformed_points = []
-        for p in traj.points:
-            # 旋转 + 平移: p_world = R(yaw) @ p_local + position
-            # 这里 p.x, p.y 是局部坐标 (相对于机器人)
-            # new_x, new_y 是世界坐标
-            new_x = p.x * cos_yaw - p.y * sin_yaw + position[0]
-            new_y = p.x * sin_yaw + p.y * cos_yaw + position[1]
-            new_z = p.z + position[2]
-            transformed_points.append(Point3D(new_x, new_y, new_z))
-        
-        # 变换速度 (如果有)
-        # 速度是向量，只需要旋转，不需要平移
-        new_velocities = None
-        if traj.velocities is not None and len(traj.velocities) > 0:
-            new_velocities = traj.velocities.copy()
-            for i in range(len(new_velocities)):
-                vx, vy = new_velocities[i, 0], new_velocities[i, 1]
-                # 旋转速度向量: v_world = R(yaw) @ v_local
-                new_velocities[i, 0] = vx * cos_yaw - vy * sin_yaw
-                new_velocities[i, 1] = vx * sin_yaw + vy * cos_yaw
-                # vz 不受 yaw 旋转影响
-        
-        new_traj = traj.copy()
-        new_traj.points = transformed_points
-        new_traj.velocities = new_velocities
-        new_traj.header.frame_id = target_frame
-        return new_traj
-    
-    def _handle_fallback(self, traj: Trajectory, target_time: float,
-                        target_frame: str) -> Tuple[Trajectory, TransformStatus]:
-        """
-        处理 TF2 不可用时的降级
-        
-        实现 F3.3: TF2 降级策略
-        - 降级到 odom 积分时记录持续时间
-        - 降级超过 500ms 触发更高级别警告
-        - 降级超过 1000ms 触发临界状态 (F3.4)
-        
-        依赖说明:
-        - 需要 state_estimator 进行 odom 积分估计
-        - 如果 state_estimator 未设置，将返回原轨迹并标记为临界状态
-        """
-        current_time = get_monotonic_time()
-        
-        # 检查 state_estimator 依赖
-        if self.state_estimator is None:
-            # 首次进入降级且无 state_estimator，记录错误
-            if self.fallback_start_time is None:
-                self.fallback_start_time = current_time
-                logger.error(
-                    "TF2 fallback started but state_estimator is not set. "
-                    "Cannot estimate transform from odom integration. "
-                    "This is a configuration error - ensure ControllerManager.initialize_components() "
-                    "is called with state_estimator before coord_transformer, or use "
-                    "initialize_default_components() which handles dependencies automatically."
-                )
-            
-            fallback_duration = current_time - self.fallback_start_time
-            if fallback_duration > self.fallback_critical_limit:
-                status = TransformStatus.FALLBACK_CRITICAL
-            elif fallback_duration > self.fallback_duration_limit:
-                status = TransformStatus.FALLBACK_WARNING
-            else:
-                status = TransformStatus.FALLBACK_OK
-            
-            self._last_status = status
-            return traj, status
-        
-        if self.fallback_start_time is None:
-            # 开始降级
-            self.fallback_start_time = current_time
-            logger.warning("TF2 fallback started")
-            
-            if self.state_estimator is not None:
-                state = self.state_estimator.get_state()
-                initial_position = state.state[:3]
-                initial_theta = state.state[6]
+            if self._tf2_available and self._tf2_lookup_callback:
+                # 使用注入的回调查询 TF
+                # 注意：traj.header.stamp 是轨迹生成的时刻，通常包含延迟补偿
+                # 我们应该查询这个时刻的变换，或者 target_time
+                lookup_time = traj.header.stamp if traj.header.stamp > 0 else target_time
                 
-                # 验证初始数据有效性
-                if np.all(np.isfinite(initial_position)) and np.isfinite(initial_theta):
-                    self._fallback_start_estimator_position = initial_position.copy()
-                    self._fallback_start_estimator_theta = initial_theta
-                    if self._last_tf2_position is not None:
-                        self._fallback_start_tf2_position = self._last_tf2_position.copy()
-                        self._fallback_start_tf2_yaw = self._last_tf2_yaw
-                else:
-                    logger.warning(
-                        "State estimator returned invalid initial data for TF2 fallback: "
-                        f"position={initial_position}, theta={initial_theta}. "
-                        "Fallback estimation will be disabled."
-                    )
-                    self._fallback_start_estimator_position = None
-                    self._fallback_start_estimator_theta = 0.0
+                transform_data = self._tf2_lookup_callback(
+                    target_frame, source_frame, lookup_time, self.timeout_sec
+                )
+                
+                if transform_data:
+                    # 获取变换矩阵
+                    translation = transform_data['translation']
+                    rotation = transform_data['rotation']
+                    transform_matrix = get_transform_matrix(translation, rotation)
+                    tf2_success = True
+                    
+                    # 成功获取 TF，重置降级状态
+                    if self.fallback_start_time is not None:
+                        logger.info(f"TF2 service recovered after {time.time() - self.fallback_start_time:.3f}s")
+                        self.fallback_start_time = None
+                    self._last_status = TransformStatus.TF2_OK
+                    
+        except Exception as e:
+            logger.debug(f"TF2 lookup failed: {e}")
+            tf2_success = False
+
+        # 如果 TF2 成功，执行变换
+        if tf2_success and transform_matrix is not None:
+            new_traj = apply_transform_to_trajectory(traj, transform_matrix, target_frame)
+            return new_traj, TransformStatus.TF2_OK
+            
+        # 如果 TF2 失败，进入降级处理
+        return self._handle_fallback(traj, target_time, target_frame, fallback_state)
+
+    def _handle_fallback(self, traj: Trajectory, target_time: float,
+                        target_frame: str,
+                        fallback_state: Optional[EstimatorOutput] = None) -> Tuple[Trajectory, TransformStatus]:
+        """
+        处理降级情况
         
+        策略:
+        1. 记录降级开始时间
+        2. 检查 Frame 兼容性 (仅支持定义的 source_frame)
+        3. 检查是否有 fallback_state (EstimatorOutput)
+        4. 如果有，直接使用 fallback_state 的位置和航向作为变换基准
+        5. 如果没有，只能报错并返回原轨迹
+        """
+        # 验证 Frame 是否匹配估计器
+        source_frame = traj.header.frame_id or self.source_frame
+        if source_frame != self.source_frame and source_frame != "" and self.source_frame != "":
+             # simple inequality check might be safe enough if we assume normalization
+            if source_frame != self.source_frame:
+                logger.error(f"RobustFallback: Source frame '{source_frame}' mismatch with configured '{self.source_frame}'. Cannot use estimator fallback.")
+                return traj, TransformStatus.FALLBACK_CRITICAL
+
+        current_time = time.time()
+        
+        # 首次进入降级模式
+        if self.fallback_start_time is None:
+            self.fallback_start_time = current_time
+            logger.warning(f"TF2 unavailable. Entering fallback mode using estimator state.")
+            
         fallback_duration = current_time - self.fallback_start_time
         
-        # 累积漂移估计
-        # 使用实际时间间隔和速度相关的漂移率
-        if self.drift_estimation_enabled:
-            # 计算自上次更新以来的时间间隔
-            if self._last_fallback_update_time is None:
-                self._last_fallback_update_time = self.fallback_start_time
-            
-            dt_raw = current_time - self._last_fallback_update_time
-            # 限制 dt 在合理范围内，避免异常值 (使用配置值)
-            dt = np.clip(dt_raw, 0.0, self.max_drift_dt)
-            
-            # 如果 dt 被截断，记录警告（可能是系统暂停）
-            if dt_raw > self.max_drift_dt:
-                logger.debug(f"Drift estimation dt clamped: {dt_raw:.3f}s -> {dt:.3f}s (possible system pause)")
-            
-            # 使用速度相关的漂移率
-            # 高速运动时漂移更大（轮子打滑、IMU 积分误差等）
-            effective_drift_rate = self.drift_rate
-            if self.state_estimator is not None:
-                state = self.state_estimator.get_state()
-                velocity_vec = state.state[3:6]
-                # 验证速度数据有效性
-                if np.all(np.isfinite(velocity_vec)):
-                    velocity = np.linalg.norm(velocity_vec)
-                    # 漂移率 = 基础漂移率 * (1 + 速度 * 速度因子)
-                    # 速度因子默认 0.1，即每 1 m/s 增加 10% 的漂移率
-                    effective_drift_rate = self.drift_rate * (1.0 + velocity * self.drift_velocity_factor)
-                # 如果速度无效，使用基础漂移率
-            
-            # 累积漂移，但不超过上限
-            # 超过上限后停止累积，并标记漂移估计为不可靠
-            if self._drift_estimate_reliable:
-                new_drift = self.accumulated_drift + effective_drift_rate * dt
-                if new_drift >= self.max_accumulated_drift:
-                    self.accumulated_drift = self.max_accumulated_drift
-                    self._drift_estimate_reliable = False
-                    logger.warning(
-                        f"Accumulated drift reached maximum ({self.max_accumulated_drift}m). "
-                        f"Drift estimation is no longer reliable. "
-                        f"Recovery correction will only use TF2 position if available. "
-                        f"Consider checking TF2 availability."
-                    )
-                else:
-                    self.accumulated_drift = new_drift
-            
-            self._last_fallback_update_time = current_time
-        
-        # 确定降级状态
+        # 确定状态级别
         if fallback_duration > self.fallback_critical_limit:
             status = TransformStatus.FALLBACK_CRITICAL
         elif fallback_duration > self.fallback_duration_limit:
             status = TransformStatus.FALLBACK_WARNING
         else:
             status = TransformStatus.FALLBACK_OK
-        
+            
         self._last_status = status
         
-        # 使用 odom 积分计算变换
-        # 
-        # 注意坐标系处理:
-        # - _fallback_start_tf2_position 和 _fallback_start_tf2_yaw 是 TF2 变换
-        #   表示 source_frame 到 target_frame 的变换
-        # - delta_position 是状态估计器在世界坐标系 (odom) 下的位移
-        # - 如果 TF2 变换包含旋转，需要将 delta_position 旋转到正确的坐标系
-        #
-        # 对于典型的 base_link -> odom 变换:
-        # - TF2 变换表示机器人在 odom 坐标系下的位姿
-        # - 状态估计器的位移也是在 odom 坐标系下
-        # - 因此可以直接相加
-        #
-        # 对于更复杂的变换链，需要考虑旋转
-        if (self.state_estimator is not None and 
-            self._fallback_start_estimator_position is not None and
-            self._fallback_start_tf2_position is not None):
+        # 如果有状态估计器数据，使用它进行变换
+        if fallback_state is not None:
+            # 假设 fallback_state 是在 target_frame (odom) 下的 state
+            # state: [x, y, z, vx, vy, vz, theta, omega]
+            # 我们需要构建 base_link -> odom 的变换
+            # 即机器人在 odom 下的位姿
             
-            state = self.state_estimator.get_state()
-            current_estimator_position = state.state[:3]
-            current_estimator_theta = state.state[6]
+            est_pos = fallback_state.state[0:3]
+            est_theta = fallback_state.state[6]
             
-            # 验证状态估计器数据有效性
-            # 如果数据包含 NaN 或 Inf，无法进行有效的变换估计
-            if not (np.all(np.isfinite(current_estimator_position)) and 
-                    np.isfinite(current_estimator_theta)):
-                logger.warning(
-                    "State estimator returned invalid data during TF2 fallback: "
-                    f"position={current_estimator_position}, theta={current_estimator_theta}. "
-                    "Returning original trajectory."
-                )
-                return traj, status
+            # 由于这是 2D 平面假设居多，我们主要关注 x, y, theta
+            # 构建变换矩阵 (2D 旋转 + 平移)
+            # T = [ R  p ]
+            #     [ 0  1 ]
             
-            # 计算相对位移（在状态估计器的坐标系下，通常是 odom）
-            delta_position = current_estimator_position - self._fallback_start_estimator_position
-            delta_theta = current_estimator_theta - self._fallback_start_estimator_theta
-            delta_theta = normalize_angle(delta_theta)
+            cos_t = np.cos(est_theta)
+            sin_t = np.sin(est_theta)
             
-            # 如果 TF2 变换的 yaw 不为零，需要将 delta_position 旋转到 TF2 坐标系
-            # 这是因为 TF2 变换可能包含一个初始旋转
-            # 
-            # 对于 base_link -> odom 的情况:
-            # - _fallback_start_tf2_yaw 是机器人在 odom 坐标系下的初始航向
-            # - delta_position 已经是在 odom 坐标系下的位移
-            # - 不需要额外旋转
-            #
-            # 对于其他情况（如 base_link -> map，其中 map 和 odom 有旋转偏移）:
-            # - 需要将 delta_position 从 odom 坐标系旋转到 map 坐标系
-            # - 但这需要知道 odom -> map 的旋转，这里没有这个信息
-            #
-            # 因此，这里假设 TF2 变换的目标坐标系与状态估计器的坐标系一致
-            # 这是大多数实际应用的情况
+            # 构建 4x4 矩阵
+            matrix = np.eye(4)
+            matrix[0, 0] = cos_t
+            matrix[0, 1] = -sin_t
+            matrix[0, 3] = est_pos[0]
             
-            # 估计当前变换
-            estimated_position = self._fallback_start_tf2_position + delta_position
-            estimated_yaw = self._fallback_start_tf2_yaw + delta_theta
-            estimated_yaw = normalize_angle(estimated_yaw)
+            matrix[1, 0] = sin_t
+            matrix[1, 1] = cos_t
+            matrix[1, 3] = est_pos[1]
             
-            transformed_traj = self._apply_tf2_transform(
-                traj, estimated_position, estimated_yaw, target_frame)
+            matrix[2, 3] = est_pos[2] # Z
             
-            return transformed_traj, status
-        
-        # 无法估计变换，返回原轨迹
-        return traj, status
-    
-    def _apply_recovery_correction(self, current_tf2_position: Optional[np.ndarray] = None,
-                                   current_tf2_yaw: Optional[float] = None) -> None:
+            # 应用变换
+            new_traj = apply_transform_to_trajectory(traj, matrix, target_frame)
+            return new_traj, status
+            
+        else:
+            # 严重错误：既没有 TF2 也没有 Estimator
+            if fallback_duration > 1.0: # 稍微节流日志
+                logger.error("TF2 fallback active but no state estimator available. Unable to transform trajectory correctly.")
+            return traj, TransformStatus.FALLBACK_CRITICAL
+
+    def get_status(self) -> Dict[str, Any]:
+        """获取状态信息"""
+        fallback_duration = 0.0
+        if self.fallback_start_time is not None:
+            fallback_duration = time.time() - self.fallback_start_time
+            
+        return {
+            'status': self._last_status.name,
+            'fallback_active': self.fallback_start_time is not None,
+            'fallback_duration_ms': fallback_duration * 1000,
+            'tf2_available': self._tf2_available
+        }
+
+    def reset(self) -> None:
+        """重置状态"""
+        self.fallback_start_time = None
+        self._last_status = TransformStatus.TF2_OK
+        self._warned_frames.clear()
+        self._stored_transforms = {}
+
+    def set_transform(self, target_frame: str, source_frame: str,
+                      x: float, y: float, z: float, theta: float,
+                      stamp: Optional[float] = None) -> None:
         """
-        计算并应用漂移校正 (F3.5)
+        存储静态变换 (用于测试和简单场景)
         
-        漂移校正逻辑:
-        - 在 TF2 恢复时，比较 fallback 期间的 odom 积分与实际 TF2 位移
-        - 差值即为需要校正的漂移
-        - 通过 state_estimator.apply_drift_correction() 应用校正
+        这个方法用于在没有真实 TF2 系统时存储变换。
+        变换会通过内部 lookup 回调返回。
         
         Args:
-            current_tf2_position: TF2 恢复后的真实位置
-            current_tf2_yaw: TF2 恢复后的真实航向
+            target_frame: 目标坐标系
+            source_frame: 源坐标系
+            x, y, z: 平移
+            theta: 航向角 (yaw)
+            stamp: 时间戳 (可选)
         """
-        if self.state_estimator is None:
-            return
+        if not hasattr(self, '_stored_transforms'):
+            self._stored_transforms = {}
         
-        if self._fallback_start_tf2_position is None or self._fallback_start_estimator_position is None:
-            return
-        
-        # 获取当前状态估计位置
-        state = self.state_estimator.get_state()
-        current_estimator_position = state.state[:3]
-        current_estimator_theta = state.state[6]
-        
-        # 计算 fallback 期间 odom 积分的位移
-        odom_displacement = current_estimator_position - self._fallback_start_estimator_position
-        odom_theta_change = current_estimator_theta - self._fallback_start_estimator_theta
-        odom_theta_change = normalize_angle(odom_theta_change)
-        
-        # 如果有真实 TF2 位置，计算精确漂移
-        if current_tf2_position is not None and current_tf2_yaw is not None:
-            # 验证输入数据有效性
-            if not (np.all(np.isfinite(current_tf2_position)) and np.isfinite(current_tf2_yaw)):
-                logger.warning(
-                    f"Invalid TF2 data for drift correction: "
-                    f"position={current_tf2_position}, yaw={current_tf2_yaw}. "
-                    f"Skipping drift correction."
-                )
-                # 清理状态并返回
-                self._fallback_start_tf2_position = None
-                self._fallback_start_estimator_position = None
-                self._fallback_start_tf2_yaw = 0.0
-                self._fallback_start_estimator_theta = 0.0
-                return
-            
-            # 计算 TF2 实际位移
-            tf2_displacement = current_tf2_position - self._fallback_start_tf2_position
-            tf2_theta_change = current_tf2_yaw - self._fallback_start_tf2_yaw
-            tf2_theta_change = normalize_angle(tf2_theta_change)
-            
-            # 漂移 = odom 积分 - TF2 实际
-            drift_x = odom_displacement[0] - tf2_displacement[0]
-            drift_y = odom_displacement[1] - tf2_displacement[1]
-            drift_theta = odom_theta_change - tf2_theta_change
-            drift_theta = normalize_angle(drift_theta)
-            
-            # 验证计算结果有效性
-            if not (np.isfinite(drift_x) and np.isfinite(drift_y) and np.isfinite(drift_theta)):
-                logger.warning(
-                    f"Drift calculation resulted in invalid values: "
-                    f"dx={drift_x}, dy={drift_y}, dtheta={drift_theta}. "
-                    f"Skipping drift correction."
-                )
-                # 清理状态并返回
-                self._fallback_start_tf2_position = None
-                self._fallback_start_estimator_position = None
-                self._fallback_start_tf2_yaw = 0.0
-                self._fallback_start_estimator_theta = 0.0
-                return
-            
-            # 应用校正 (反向)
-            # 使用配置的漂移校正阈值
-            if (abs(drift_x) > self.drift_correction_thresh or 
-                abs(drift_y) > self.drift_correction_thresh or 
-                abs(drift_theta) > self.drift_correction_thresh):
-                self.state_estimator.apply_drift_correction(-drift_x, -drift_y, -drift_theta)
-                logger.info(f"Applied precise drift correction: "
-                      f"dx={-drift_x:.4f}, dy={-drift_y:.4f}, dtheta={-drift_theta:.4f}")
-        else:
-            # 没有真实 TF2 位置，无法计算精确漂移
-            # 
-            # 设计说明：
-            # - 如果漂移估计可靠（未达到上限），记录警告但不做校正
-            # - 如果漂移估计不可靠（已达到上限），记录更严重的警告
-            # 
-            # 原因：漂移方向是未知的，盲目猜测可能使情况更糟
-            # 例如：如果漂移实际上与运动方向相同，反向校正会加倍误差
-            drift_magnitude = self.accumulated_drift
-            
-            if not self._drift_estimate_reliable:
-                # 漂移估计不可靠，记录更严重的警告
-                logger.warning(
-                    f"Drift estimate unreliable (reached max {self.max_accumulated_drift}m). "
-                    f"No TF2 position available for correction. "
-                    f"State estimator may have significant drift. "
-                    f"Consider checking TF2 availability or using external localization."
-                )
-            elif drift_magnitude > self.drift_correction_thresh:
-                # 漂移估计可靠但没有 TF2 位置
-                logger.warning(
-                    f"Accumulated drift estimate: {drift_magnitude:.4f}m, "
-                    f"but no TF2 position available for precise correction. "
-                    f"Consider enabling external localization for drift correction."
-                )
-        
-        # 清理状态
-        self._fallback_start_tf2_position = None
-        self._fallback_start_estimator_position = None
-        self._fallback_start_tf2_yaw = 0.0
-        self._fallback_start_estimator_theta = 0.0
-    
-    def set_state_estimator(self, estimator: IStateEstimator) -> None:
-        """设置状态估计器"""
-        self.state_estimator = estimator
-    
-    def get_status(self) -> Dict[str, Any]:
-        """获取变换器状态
-        
-        Returns:
-            包含以下字段的状态字典:
-            - tf2_available: TF2 是否可用（未处于降级状态）
-            - tf2_injected: 是否使用外部 TF2 回调
-            - fallback_duration_ms: 降级持续时间（毫秒）
-            - accumulated_drift: 累积漂移估计（米）
-            - drift_estimate_reliable: 漂移估计是否可靠
-            - is_critical: 是否处于临界状态
-            - status: 状态名称
-            - tf2_initialized: TF2 是否已初始化
-            - source_frame: 源坐标系名称
-            - target_frame: 目标坐标系名称（从配置读取）
-            - error_message: 最近的错误信息
-        """
-        fallback_duration_ms = 0.0
-        if self.fallback_start_time is not None:
-            fallback_duration_ms = (get_monotonic_time() - self.fallback_start_time) * 1000
-        
-        tf2_injected = self._external_tf2_lookup is not None
-        
-        # 构建错误信息
-        error_message = ''
-        if self.fallback_start_time is not None:
-            if fallback_duration_ms > self.fallback_critical_limit * 1000:
-                error_message = f'TF2 fallback critical: {fallback_duration_ms:.0f}ms'
-            elif fallback_duration_ms > self.fallback_duration_limit * 1000:
-                error_message = f'TF2 fallback warning: {fallback_duration_ms:.0f}ms'
-            else:
-                error_message = 'TF2 temporarily unavailable'
-        
-        return {
-            'tf2_available': self.fallback_start_time is None,
-            'tf2_injected': tf2_injected,
-            'fallback_duration_ms': fallback_duration_ms,
-            'accumulated_drift': self.accumulated_drift,
-            'drift_estimate_reliable': self._drift_estimate_reliable,
-            'is_critical': self._last_status.is_critical(),
-            'status': self._last_status.name,
-            'tf2_initialized': self._tf2_initialized,
-            'source_frame': self.source_frame,
-            'target_frame': self.target_frame,
-            'error_message': error_message
+        key = (target_frame, source_frame)
+        self._stored_transforms[key] = {
+            'translation': {'x': x, 'y': y, 'z': z},
+            'rotation': self._euler_to_quaternion(0, 0, theta),
+            'stamp': stamp or time.time()
         }
-    
-    def reset(self) -> None:
-        """重置变换器状态"""
-        self.fallback_start_time = None
-        self.accumulated_drift = 0.0
-        self._drift_estimate_reliable = True  # 重置漂移估计可靠性标志
-        self._last_tf2_position = None
-        self._last_tf2_yaw = 0.0
-        self._fallback_start_tf2_position = None
-        self._fallback_start_tf2_yaw = 0.0
-        self._fallback_start_estimator_position = None
-        self._fallback_start_estimator_theta = 0.0
-        self._last_status = TransformStatus.TF2_OK
-        # 重置漂移估计时间跟踪
-        self._last_fallback_update_time = None
-        # 重置警告记录
-        self._warned_frames.clear()
-    
-    def shutdown(self) -> None:
-        """
-        关闭变换器并释放资源
         
-        释放 TF2 Buffer 和 Listener 资源。
-        调用后变换器不应再使用。
-        """
-        # 清除外部回调
-        self._external_tf2_lookup = None
+        # 如果没有回调，设置内部回调
+        if self._tf2_lookup_callback is None:
+            self._tf2_lookup_callback = self._internal_lookup
+            self._tf2_available = True
+
+    def _euler_to_quaternion(self, roll: float, pitch: float, yaw: float) -> dict:
+        """欧拉角转四元数"""
+        cy = np.cos(yaw * 0.5)
+        sy = np.sin(yaw * 0.5)
+        cp = np.cos(pitch * 0.5)
+        sp = np.sin(pitch * 0.5)
+        cr = np.cos(roll * 0.5)
+        sr = np.sin(roll * 0.5)
         
-        # 释放 TF2 资源
-        # 注意：TF2 Listener 在 ROS 环境中会自动清理
-        # 这里主要是清除引用，帮助 GC
-        if self._tf_listener is not None:
-            self._tf_listener = None
-        if self._tf_buffer is not None:
-            self._tf_buffer = None
+        w = cr * cp * cy + sr * sp * sy
+        x = sr * cp * cy - cr * sp * sy
+        y = cr * sp * cy + sr * cp * sy
+        z = cr * cp * sy - sr * sp * cy
+        return {'x': x, 'y': y, 'z': z, 'w': w}
+
+    def _internal_lookup(self, target_frame: str, source_frame: str, 
+                         lookup_time: float, timeout: float) -> Optional[dict]:
+        """内部变换查找"""
+        if not hasattr(self, '_stored_transforms'):
+            return None
         
-        self._tf2_initialized = False
+        key = (target_frame, source_frame)
+        if key in self._stored_transforms:
+            return self._stored_transforms[key]
         
-        # 清除状态估计器引用
-        self.state_estimator = None
+        # 尝试反向查找
+        reverse_key = (source_frame, target_frame)
+        if reverse_key in self._stored_transforms:
+            t = self._stored_transforms[reverse_key]
+            # 简化的反向变换 (仅适用于 2D)
+            q = t['rotation']
+            theta = 2 * np.arctan2(q['z'], q['w'])
+            cos_t, sin_t = np.cos(theta), np.sin(theta)
+            tx, ty = t['translation']['x'], t['translation']['y']
+            
+            # 反向平移: -R^T * t
+            inv_x = -(cos_t * tx + sin_t * ty)
+            inv_y = -(-sin_t * tx + cos_t * ty)
+            
+            return {
+                'translation': {'x': inv_x, 'y': inv_y, 'z': -t['translation']['z']},
+                'rotation': {'x': -q['x'], 'y': -q['y'], 'z': -q['z'], 'w': q['w']},
+                'stamp': t['stamp']
+            }
         
-        # 重置内部状态
-        self.reset()
+        return None
+
+    # 为了保持接口兼容性，保留的方法名（但不再用于变换逻辑）
+    def transform_velocity(self, velocity, heading):
+        # 速度变换通常是在 Trajectory 变换中一并处理的
+        pass

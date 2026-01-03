@@ -17,7 +17,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from universal_controller.transform.robust_transformer import RobustCoordinateTransformer
+from universal_controller.core.ros_compat import TF2_AVAILABLE
 from universal_controller.estimator.adaptive_ekf import AdaptiveEKFEstimator
+
 from universal_controller.core.data_types import Trajectory, Point3D, Header, Odometry
 from universal_controller.core.enums import TransformStatus
 from universal_controller.config.default_config import DEFAULT_CONFIG
@@ -51,7 +53,7 @@ def test_tf2_transform_basic():
     assert abs(p0.x - 1.0) < 0.01, f"Expected x=1.0, got {p0.x}"
     assert abs(p0.y - 2.0) < 0.01, f"Expected y=2.0, got {p0.y}"
     
-    print("✓ test_tf2_transform_basic passed")
+    print("[PASS] test_tf2_transform_basic passed")
 
 
 def test_tf2_fallback_degradation():
@@ -65,7 +67,10 @@ def test_tf2_fallback_degradation():
     
     # 初始化状态估计器
     estimator = AdaptiveEKFEstimator(config)
-    transformer.set_state_estimator(estimator)
+    # transformer.set_state_estimator(estimator) -> Removed
+    
+    # Get fallback state
+    fallback_state = estimator.get_state()
     
     # 设置初始变换
     transformer.set_transform("odom", "base_link", 0.0, 0.0, 0.0, 0.0)
@@ -78,20 +83,20 @@ def test_tf2_fallback_degradation():
     traj = create_test_trajectory(num_points=10, dt=0.1, frame_id="base_link")
     
     # 第一次调用 - 应该是 FALLBACK_OK
-    _, status1 = transformer.transform_trajectory(traj, "odom", time.time())
+    _, status1 = transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
     assert status1 == TransformStatus.FALLBACK_OK, f"Expected FALLBACK_OK, got {status1}"
     
     # 等待超过警告阈值
     time.sleep(0.15)
-    _, status2 = transformer.transform_trajectory(traj, "odom", time.time())
+    _, status2 = transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
     assert status2 == TransformStatus.FALLBACK_WARNING, f"Expected FALLBACK_WARNING, got {status2}"
     
     # 等待超过临界阈值
     time.sleep(0.15)
-    _, status3 = transformer.transform_trajectory(traj, "odom", time.time())
+    _, status3 = transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
     assert status3 == TransformStatus.FALLBACK_CRITICAL, f"Expected FALLBACK_CRITICAL, got {status3}"
     
-    print("✓ test_tf2_fallback_degradation passed")
+    print("[PASS] test_tf2_fallback_degradation passed")
 
 
 def test_tf2_recovery_correction():
@@ -104,7 +109,7 @@ def test_tf2_recovery_correction():
     
     # 初始化状态估计器
     estimator = AdaptiveEKFEstimator(config)
-    transformer.set_state_estimator(estimator)
+    # transformer.set_state_estimator(estimator) -> Removed
     
     # 设置初始变换
     transformer.set_transform("odom", "base_link", 0.0, 0.0, 0.0, 0.0)
@@ -113,9 +118,10 @@ def test_tf2_recovery_correction():
     
     traj = create_test_trajectory(num_points=10, dt=0.1, frame_id="base_link")
     
-    # 正常状态
-    _, status1 = transformer.transform_trajectory(traj, "odom", time.time())
-    assert status1 == TransformStatus.TF2_OK
+    # 正常状态 (不需要 fallback_state，但传了也没关系)
+    fallback_state = estimator.get_state()
+    _, status = transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
+    assert status == TransformStatus.TF2_OK
     
     # 禁用 TF2
     transformer.set_tf2_available(False)
@@ -131,7 +137,8 @@ def test_tf2_recovery_correction():
     estimator.update_odom(odom)
     
     # 降级状态
-    _, status2 = transformer.transform_trajectory(traj, "odom", time.time())
+    fallback_state = estimator.get_state()
+    _, status2 = transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
     assert status2.is_fallback()
     
     # 恢复 TF2 (设置新的变换)
@@ -139,7 +146,8 @@ def test_tf2_recovery_correction():
     transformer.set_transform("odom", "base_link", 0.9, 0.4, 0.0, 0.0)  # 略有偏差
     
     # 恢复后应该触发漂移校正
-    _, status3 = transformer.transform_trajectory(traj, "odom", time.time())
+    fallback_state = estimator.get_state()
+    _, status3 = transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
     assert status3 == TransformStatus.TF2_OK
     
     # 验证状态
@@ -147,7 +155,7 @@ def test_tf2_recovery_correction():
     assert tf_status['tf2_available'] == True
     assert tf_status['fallback_duration_ms'] == 0.0
     
-    print("✓ test_tf2_recovery_correction passed")
+    print("[PASS] test_tf2_recovery_correction passed")
 
 
 def test_tf2_transform_with_velocity():
@@ -185,7 +193,7 @@ def test_tf2_transform_with_velocity():
     assert abs(v0[0]) < 0.01, f"Expected vx≈0, got {v0[0]}"
     assert abs(v0[1] - 1.0) < 0.01, f"Expected vy≈1, got {v0[1]}"
     
-    print("✓ test_tf2_transform_with_velocity passed")
+    print("[PASS] test_tf2_transform_with_velocity passed")
 
 
 def test_tf2_status_reporting():
@@ -195,29 +203,36 @@ def test_tf2_status_reporting():
     
     # 初始状态
     status = transformer.get_status()
-    assert status['tf2_available'] == True
+    # 在测试环境中，TF2_AVAILABLE 取决于是否安装了 ROS 库
+    assert status['tf2_available'] == TF2_AVAILABLE
     assert status['fallback_duration_ms'] == 0.0
-    assert status['accumulated_drift'] == 0.0
-    assert status['is_critical'] == False
+    assert status['fallback_active'] == False
+    # assert status['accumulated_drift'] == 0.0 -> key not present in simplified implementation
+    # assert status['is_critical'] == False -> key not present
+
     
     # 禁用 TF2
     transformer.set_tf2_available(False)
     
     # 设置状态估计器以启用降级
     estimator = AdaptiveEKFEstimator(config)
-    transformer.set_state_estimator(estimator)
+    estimator = AdaptiveEKFEstimator(config)
+    # transformer.set_state_estimator(estimator) -> Removed
+    
+    fallback_state = estimator.get_state()
     transformer._last_tf2_position = np.array([0.0, 0.0, 0.0])
     transformer._last_tf2_yaw = 0.0
     
     traj = create_test_trajectory(num_points=10, dt=0.1, frame_id="base_link")
-    transformer.transform_trajectory(traj, "odom", time.time())
+    transformer.transform_trajectory(traj, "odom", time.time(), fallback_state=fallback_state)
     
     # 降级后状态
     status = transformer.get_status()
     assert status['tf2_available'] == False
     assert status['fallback_duration_ms'] > 0
+    assert status['fallback_active'] == True
     
-    print("✓ test_tf2_status_reporting passed")
+    print("[PASS] test_tf2_status_reporting passed")
 
 
 def test_tf2_reset():
@@ -226,19 +241,19 @@ def test_tf2_reset():
     transformer = RobustCoordinateTransformer(config)
     
     # 设置一些状态
-    transformer.fallback_start_time = time.time()
-    transformer.accumulated_drift = 0.5
-    transformer._last_tf2_position = np.array([1.0, 2.0, 0.0])
+    transformer.fallback_start_time = time.time() - 1.0 # Simulate previous fallback
+    # transformer.accumulated_drift = 0.5 -> Removed
+    transformer._warned_frames.add("test_frame")
     
     # 重置
     transformer.reset()
     
     # 验证重置
     assert transformer.fallback_start_time is None
-    assert transformer.accumulated_drift == 0.0
-    assert transformer._last_tf2_position is None
+    # assert transformer.accumulated_drift == 0.0 -> Removed
+    assert len(transformer._warned_frames) == 0
     
-    print("✓ test_tf2_reset passed")
+    print("[PASS] test_tf2_reset passed")
 
 
 def test_tf2_full_se3_inverse():
@@ -303,7 +318,7 @@ def test_tf2_full_se3_inverse():
     print(f"  Original: roll={roll:.3f}, pitch={pitch:.3f}, yaw={yaw:.3f}")
     print(f"  Inverse:  roll={inv_roll:.3f}, pitch={inv_pitch:.3f}, yaw={inv_yaw:.3f}")
     
-    print("✓ test_tf2_full_se3_inverse passed")
+    print("[PASS] test_tf2_full_se3_inverse passed")
 
 
 def test_tf2_chain_lookup():
@@ -356,7 +371,7 @@ def test_tf2_chain_lookup():
     assert abs(t_chain.transform.translation.y - expected_y) < 0.01, \
         f"Expected y≈{expected_y}, got {t_chain.transform.translation.y}"
     
-    print("✓ test_tf2_chain_lookup passed")
+    print("[PASS] test_tf2_chain_lookup passed")
 
 
 def test_tf2_multi_hop_chain_lookup():
@@ -417,7 +432,7 @@ def test_tf2_multi_hop_chain_lookup():
     assert abs(yaw_mid - expected_yaw_mid) < 0.02, \
         f"Expected yaw≈{expected_yaw_mid:.3f}, got {yaw_mid:.3f}"
     
-    print("✓ test_tf2_multi_hop_chain_lookup passed")
+    print("[PASS] test_tf2_multi_hop_chain_lookup passed")
 
 
 def run_all_tf2_tests():

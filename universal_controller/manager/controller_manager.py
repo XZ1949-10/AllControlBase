@@ -42,7 +42,7 @@ import logging
 
 from ..core.interfaces import (
     IStateEstimator, ITrajectoryTracker, IConsistencyChecker,
-    ISafetyMonitor, ISmoothTransition, ICoordinateTransformer, IAttitudeController
+    ISafetyMonitor, ISmoothTransition, ICoordinateTransformer, IControlProcessor
 )
 from ..core.data_types import (
     Trajectory, ControlOutput, ConsistencyResult, EstimatorOutput,
@@ -87,20 +87,33 @@ class ControllerManager:
     """
     
     def __init__(self, config: Dict[str, Any], validate_config: bool = True, 
-                 strict_mode: bool = False):
+                 strict_mode: bool = False, profile: Optional[str] = None):
         """
         初始化控制器管理器
         
         Args:
-            config: 配置字典
+            config: 配置字典（如果提供了 profile，则此参数为基础配置或覆盖项）
             validate_config: 是否在初始化时验证配置（默认 True）
             strict_mode: 严格模式，验证失败时抛出异常（默认 False）
+            profile: 配置预设名称 ("balanced", "aggressive", "safe")
         """
-        self.config = config
+        # 加载 Profile 配置
+        if profile:
+            from ..config.profiles import create_default_config
+            profile_config = create_default_config(profile)
+            # 简单的字典合并：config 覆盖 profile_config
+            # 注意：这里只做浅层合并，实际使用可能需要递归合并
+            profile_config.update(config) 
+            self.config = profile_config
+        else:
+            self.config = config
         
         # 配置验证
         if validate_config:
             self._validate_config(strict_mode)
+        
+        # 加载 TrajectoryConfig (不再使用全局 TrajectoryDefaults)
+        self.trajectory_config = TrajectoryConfig.from_dict(self.config)
         
         self.ctrl_freq = config.get('system', {}).get('ctrl_freq', 50)
         self.dt = 1.0 / self.ctrl_freq
@@ -131,7 +144,7 @@ class ControllerManager:
         self.coord_transformer: Optional[ICoordinateTransformer] = None
         self.safety_monitor: Optional[ISafetyMonitor] = None
         self.mpc_health_monitor: Optional[MPCHealthMonitor] = None
-        self.attitude_controller: Optional[IAttitudeController] = None  # F14.1: 姿态控制器
+        self.processors: list[IControlProcessor] = []
         self.timeout_monitor = TimeoutMonitor(config)
         
         # 状态
@@ -150,7 +163,6 @@ class ControllerManager:
         self._last_update_time: Optional[float] = None  # 用于计算实际时间间隔
         
         # 跟踪质量评估配置
-        # 从 TRACKING_CONFIG 获取默认值，确保配置单一数据源
         from ..config.system_config import TRACKING_CONFIG
         tracking_config = config.get('tracking', {})
         self._tracking_thresholds = {
@@ -163,21 +175,9 @@ class ControllerManager:
         self._tracking_rating = tracking_config.get('rating', TRACKING_CONFIG['rating'].copy())
         
         # 预测误差计算相关状态
-        # 存储上一次 MPC 预测的下一步状态，用于计算预测误差
         self._last_mpc_predicted_state: Optional[np.ndarray] = None
         
-        # notify_xxx_received() 调用跟踪
-        # 用于检测外部调用者是否正确调用了数据接收通知方法
-        # 简化设计：只跟踪是否曾经调用过，不再使用复杂的计数机制
-        self._odom_notify_called: bool = False
-        self._traj_notify_called: bool = False
-        self._notify_check_done: bool = False  # 检测完成标志
-        self._update_count: int = 0  # update 调用计数
-        self._notify_check_threshold: int = config.get('watchdog', {}).get(
-            'notify_update_count_thresh', 50)  # 触发检查的 update 次数阈值
-        
         # 诊断发布器（职责分离）
-        # 注意: 话题名称配置在 ROS 层处理，核心库不再关心话题
         self._diagnostics_publisher = DiagnosticsPublisher()
         
         # 尝试初始化 ROS Publisher (向后兼容)
@@ -257,37 +257,9 @@ class ControllerManager:
         return self._diagnostics_publisher.get_last_published()
     
     # ==================== 数据接收通知接口 ====================
-    # 这些方法应该在数据实际接收时调用（如 ROS 回调中），
-    # 而不是在 update() 方法中调用。
-    
-    def notify_odom_received(self) -> None:
-        """
-        通知里程计数据已接收
-        
-        应该在 odom 数据实际接收时调用（如 ROS 回调中）。
-        这会更新超时监控器的时间戳。
-        """
-        self.timeout_monitor.update_odom()
-        self._odom_notify_called = True
-    
-    def notify_trajectory_received(self) -> None:
-        """
-        通知轨迹数据已接收
-        
-        应该在轨迹数据实际接收时调用（如 ROS 回调中）。
-        这会更新超时监控器的时间戳。
-        """
-        self.timeout_monitor.update_trajectory()
-        self._traj_notify_called = True
-    
-    def notify_imu_received(self) -> None:
-        """
-        通知 IMU 数据已接收
-        
-        应该在 IMU 数据实际接收时调用（如 ROS 回调中）。
-        这会更新超时监控器的时间戳。
-        """
-        self.timeout_monitor.update_imu()
+    # Refactored: notify_xxx methods removed to simplify interface.
+    # Timeout detection is now handled by passing data_ages directly to update().
+
     
     def initialize_components(self,
                              state_estimator: Optional[IStateEstimator] = None,
@@ -298,15 +270,14 @@ class ControllerManager:
                              smooth_transition: Optional[ISmoothTransition] = None,
                              coord_transformer: Optional[ICoordinateTransformer] = None,
                              mpc_health_monitor: Optional[MPCHealthMonitor] = None,
-                             attitude_controller: Optional[IAttitudeController] = None) -> None:
+                             processors: Optional[list[IControlProcessor]] = None) -> None:
         """
         组件注入方法
         
-        组件依赖关系:
-        - coord_transformer 依赖 state_estimator（用于 TF2 降级时的 odom 积分）
         
-        依赖绑定会在此方法结束时自动执行。如果分多次调用此方法，
-        每次调用都会尝试重新绑定依赖，确保依赖关系正确建立。
+        依赖绑定:
+        - 各组件独立，无显式相互依赖注入。
+        - 运行时依赖（如 Transformer 需要 Estimator 状态）通过方法参数传递。
         """
         if state_estimator:
             self.state_estimator = state_estimator
@@ -324,50 +295,24 @@ class ControllerManager:
             self.coord_transformer = coord_transformer
         if mpc_health_monitor:
             self.mpc_health_monitor = mpc_health_monitor
-        if attitude_controller:
-            self.attitude_controller = attitude_controller
+        if processors:
+            self.processors = processors
         
-        # 延迟绑定：确保组件间依赖正确建立
-        # 每次调用都会尝试绑定，支持分多次设置组件的场景
-        self._bind_component_dependencies()
+
         
         # 初始化状态机（如果尚未初始化）
         if self.state_machine is None:
             self.state_machine = StateMachine(self.config)
     
-    def _bind_component_dependencies(self) -> None:
-        """
-        绑定组件间的依赖关系
-        
-        此方法可以多次调用，用于在组件更新后重新绑定依赖。
-        只有当所有依赖组件都存在时才会执行绑定。
-        
-        依赖关系:
-        - coord_transformer 依赖 state_estimator（用于 TF2 降级时的 odom 积分）
-        
-        设计说明:
-        - 绑定成功后不再重复绑定（幂等性）
-        - 如果 coord_transformer 存在但 state_estimator 未设置，发出警告
-        - 这是早期警告，帮助用户在 TF2 降级前发现配置问题
-        """
-        # coord_transformer 依赖 state_estimator
-        if self.coord_transformer is not None:
-            if self.state_estimator is not None:
-                # 检查是否已经绑定（避免重复绑定）
-                if self.coord_transformer.state_estimator is None:
-                    self.coord_transformer.set_state_estimator(self.state_estimator)
-                    logger.debug("Bound state_estimator to coord_transformer")
-            elif self.coord_transformer.state_estimator is None:
-                # 早期警告：coord_transformer 存在但 state_estimator 未设置
-                # 这意味着 TF2 降级时将无法使用 odom 积分进行变换估计
-                logger.warning(
-                    "coord_transformer is set but state_estimator is not. "
-                    "TF2 fallback will not work correctly without state_estimator. "
-                    "If TF2 may be unavailable, ensure state_estimator is initialized first."
-                )
+
     
-    def initialize_default_components(self) -> None:
-        """使用默认组件初始化"""
+    def _get_default_component_classes(self) -> Dict[str, Any]:
+        """
+        获取默认组件类
+        
+        子类可以重写此方法以注入自定义组件类，而无需重写整个初始化逻辑。
+        """
+        # 本地导入以避免循环依赖
         from ..estimator.adaptive_ekf import AdaptiveEKFEstimator
         from ..tracker.pure_pursuit import PurePursuitController
         from ..tracker.mpc_controller import MPCController
@@ -375,35 +320,55 @@ class ControllerManager:
         from ..safety.safety_monitor import BasicSafetyMonitor
         from ..transition.smooth_transition import ExponentialSmoothTransition, LinearSmoothTransition
         from ..transform.robust_transformer import RobustCoordinateTransformer
-        from ..core.data_types import TrajectoryDefaults
+        from ..processors.attitude_processor import AttitudeProcessor
         
-        # 初始化轨迹默认配置
-        TrajectoryDefaults.configure(self.config)
+        return {
+            'estimator_cls': AdaptiveEKFEstimator,
+            'mpc_cls': MPCController,
+            'backup_cls': PurePursuitController,
+            'consistency_cls': WeightedConsistencyAnalyzer,
+            'safety_cls': BasicSafetyMonitor,
+            'transformer_cls': RobustCoordinateTransformer,
+            'smooth_linear_cls': LinearSmoothTransition,
+            'smooth_exp_cls': ExponentialSmoothTransition,
+            'attitude_processor_cls': AttitudeProcessor,
+        }
+
+    def initialize_default_components(self) -> None:
+        """
+        使用默认组件初始化
+        
+        这是一个便利方法，用于快速设置标准组件栈。
+        如果需要自定义各个组件实例，请直接调用 initialize_components()。
+        """
+        from ..health.mpc_health_monitor import MPCHealthMonitor
+        
+        classes = self._get_default_component_classes()
         
         # 根据配置选择平滑过渡实现
         transition_type = self.config.get('transition', {}).get('type', 'exponential')
         if transition_type == 'linear':
-            smooth_transition = LinearSmoothTransition(self.config)
+            smooth_transition = classes['smooth_linear_cls'](self.config)
         else:
-            # 默认使用指数过渡
-            smooth_transition = ExponentialSmoothTransition(self.config)
+            smooth_transition = classes['smooth_exp_cls'](self.config)
         
         # 基础组件
         components = {
-            'state_estimator': AdaptiveEKFEstimator(self.config),
-            'mpc_tracker': MPCController(self.config, self.platform_config),
-            'backup_tracker': PurePursuitController(self.config, self.platform_config),
-            'consistency_checker': WeightedConsistencyAnalyzer(self.config),
-            'safety_monitor': BasicSafetyMonitor(self.config, self.platform_config),
+            'state_estimator': classes['estimator_cls'](self.config),
+            'mpc_tracker': classes['mpc_cls'](self.config, self.platform_config),
+            'backup_tracker': classes['backup_cls'](self.config, self.platform_config),
+            'consistency_checker': classes['consistency_cls'](self.config),
+            'safety_monitor': classes['safety_cls'](self.config, self.platform_config),
             'smooth_transition': smooth_transition,
-            'coord_transformer': RobustCoordinateTransformer(self.config),
+            'coord_transformer': classes['transformer_cls'](self.config),
             'mpc_health_monitor': MPCHealthMonitor(self.config)
         }
         
-        # F14: 无人机平台添加姿态控制器
+        # Load processors
+        proc_list = []
         if self.is_quadrotor:
-            from ..tracker.attitude_controller import QuadrotorAttitudeController
-            components['attitude_controller'] = QuadrotorAttitudeController(self.config)
+            proc_list.append(classes['attitude_processor_cls'](self.config))
+        components['processors'] = proc_list
         
         self.initialize_components(**components)
     
@@ -455,34 +420,35 @@ class ControllerManager:
 
     
     def update(self, odom: Odometry, trajectory: Trajectory, 
-               imu: Optional[Imu] = None) -> ControlOutput:
+               data_ages: Dict[str, float], imu: Optional[Imu] = None) -> ControlOutput:
         """
         主控制循环
         
-        控制流程:
-        1. 时间管理和暂停检测
-        2. 超时监控
-        3. 状态估计 (EKF)
-        4. 一致性检查
-        5. 坐标变换
-        6. MPC 计算和健康监控
-        7. 控制器选择
-        8. 安全检查
-        9. 状态机更新
-        10. 平滑过渡
-        11. 诊断发布
+        Args:
+            odom: 里程计数据
+            trajectory: 轨迹数据
+            data_ages: 数据年龄字典 {'odom': ms, 'trajectory': ms, 'imu': ms}
+            imu: IMU 数据 (可选)
+            
+        Returns:
+            ControlOutput: 控制输出
         """
         current_time = get_monotonic_time()
         
         # 1. 时间管理
         actual_dt, skip_prediction = self._compute_time_step(current_time)
         
+        # 1.5 轨迹验证 (现在需要显式调用，因为去除了全局默认值)
+        trajectory.validate(self.trajectory_config)
+        
         # 2. 超时监控
-        timeout_status = self._update_timeout_monitor(imu is not None)
+        # 直接使用传入的 data_ages 进行检查
+        current_timeout_status = self.timeout_monitor.check(data_ages)
+        self._last_timeout_status = current_timeout_status
         
         # 3. 状态估计
         state, state_output = self._update_state_estimation(
-            odom, imu, timeout_status, actual_dt, skip_prediction)
+            odom, imu, current_timeout_status, actual_dt, skip_prediction)
         
         # 4. 一致性检查
         consistency = self._compute_consistency(trajectory)
@@ -495,7 +461,7 @@ class ControllerManager:
         
         # 7. 构建诊断信息
         diagnostics = self._build_diagnostics(
-            consistency, mpc_health, mpc_cmd, timeout_status, 
+            consistency, mpc_health, mpc_cmd, current_timeout_status, 
             state, trajectory, tf2_critical)
         
         # 8. 选择控制器输出
@@ -517,9 +483,39 @@ class ControllerManager:
         
         # 13. 发布诊断
         self._publish_diagnostics(
-            state_output, timeout_status, tf2_critical, cmd)
+            state_output, current_timeout_status, tf2_critical, cmd)
+        
+        # 14. 运行额外处理器 (Processors)
+        # 将解耦的平台特定逻辑（如姿态控制）作为处理器运行
+        for processor in self.processors:
+            try:
+                extra_result = processor.compute_extra(state, cmd)
+                if extra_result:
+                    cmd.extras.update(extra_result)
+            except Exception as e:
+                logger.error(f"Processor {processor.__class__.__name__} failed: {e}")
         
         return cmd
+
+    def get_timeout_status(self) -> TimeoutStatus:
+        """获取当前超时状态 (供外部查询)"""
+        if hasattr(self, '_last_timeout_status'):
+            return self._last_timeout_status
+        # 如果尚未运行 update，返回默认超时状态
+        return self.timeout_monitor.check({})
+    
+    # 辅助接口
+    def set_hover_yaw(self, yaw: float) -> None:
+        for p in self.processors:
+            if hasattr(p, 'set_hover_yaw'):
+                p.set_hover_yaw(yaw)
+
+    def get_attitude_rate_limits(self) -> Optional[Dict[str, Any]]:
+        for p in self.processors:
+            if hasattr(p, 'get_attitude_rate_limits'):
+                return p.get_attitude_rate_limits()
+        return None        
+
     
     def _compute_time_step(self, current_time: float) -> tuple:
         """
@@ -556,44 +552,7 @@ class ControllerManager:
         self._last_update_time = current_time
         return actual_dt, skip_prediction
     
-    def _update_timeout_monitor(self, has_imu: bool) -> TimeoutStatus:
-        """
-        更新超时监控
-        
-        Args:
-            has_imu: 是否有 IMU 数据
-        
-        Note:
-            超时检测基于数据接收时间（单调时钟），而非消息时间戳。
-            这确保了超时检测不受系统时间跳变影响。
-            
-            重要：notify_odom_received()/notify_trajectory_received() 应该在数据
-            实际接收时调用（如 ROS 回调中），而不是在控制循环中调用。
-            这里只调用 check() 检查超时状态。
-        """
-        # 检查 notify_xxx_received() 是否被正确调用
-        # 简化设计：只在达到阈值时检查一次，之后不再检查
-        if not self._notify_check_done:
-            self._update_count += 1
-            if self._update_count >= self._notify_check_threshold:
-                self._notify_check_done = True
-                # 检查并警告未调用的 notify 方法
-                if not self._odom_notify_called:
-                    logger.warning(
-                        "notify_odom_received() has not been called after %d update() calls. "
-                        "Timeout detection may not work correctly. "
-                        "Please ensure notify_odom_received() is called in your odom callback.",
-                        self._update_count
-                    )
-                if not self._traj_notify_called:
-                    logger.warning(
-                        "notify_trajectory_received() has not been called after %d update() calls. "
-                        "Timeout detection may not work correctly. "
-                        "Please ensure notify_trajectory_received() is called in your trajectory callback.",
-                        self._update_count
-                    )
-        
-        return self.timeout_monitor.check()
+
     
     def _update_state_estimation(self, odom: Odometry, imu: Optional[Imu],
                                  timeout_status: TimeoutStatus, actual_dt: float,
@@ -649,8 +608,14 @@ class ControllerManager:
             (transformed_traj, tf2_critical): 变换后轨迹和是否临界
         """
         if self.coord_transformer:
+            # 准备 fallback_state
+            fallback_state = None
+            if self.state_estimator:
+                fallback_state = self.state_estimator.get_state()
+            
             transformed_traj, tf_status = self.coord_transformer.transform_trajectory(
-                trajectory, self.transform_target_frame, current_time)
+                trajectory, self.transform_target_frame, current_time,
+                fallback_state=fallback_state)
             tf2_critical = tf_status.is_critical()
         else:
             # 无坐标变换器时，假设轨迹已经在正确的坐标系
@@ -686,7 +651,8 @@ class ControllerManager:
         ]:
             mpc_cmd = self.mpc_tracker.compute(state, trajectory, consistency)
             if mpc_cmd.success:
-                self._last_mpc_cmd = mpc_cmd.copy()
+                # mpc_cmd 是从 compute() 返回的新对象，无需 copy
+                self._last_mpc_cmd = mpc_cmd
         
         if self.mpc_health_monitor and mpc_cmd is not None:
             mpc_health = self.mpc_health_monitor.update(
@@ -742,11 +708,31 @@ class ControllerManager:
                 cmd = ControlOutput(vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
             return cmd
         
-        # 其他状态：使用 MPC 输出
+        # 其他状态：优先使用 MPC 输出
         else:
-            cmd = mpc_cmd if mpc_cmd else ControlOutput(
-                vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id)
-            return cmd
+            if mpc_cmd and mpc_cmd.success:
+                return mpc_cmd
+            
+            # MPC 失败或未运行：尝试使用备份控制器
+            # 这是关键的架构变更：由 Manager 统一处理降级
+            if self.backup_tracker:
+                if mpc_cmd:  # 如果有失败的 MPC 命令，记录原因
+                    logger.warning(f"MPC failed, falling back to backup controller. "
+                                 f"Reason: {mpc_cmd.health_metrics.get('error_type', 'unknown')}")
+                
+                cmd = self.backup_tracker.compute(state, trajectory, consistency)
+                self._last_backup_cmd = cmd.copy()
+                
+                # 标记为 fallback 来源，方便诊断
+                if cmd.health_metrics is None:
+                    cmd.health_metrics = {}
+                cmd.health_metrics['source'] = 'backup_fallback'
+                return cmd
+            
+            # 彻底失败：停车
+            logger.error("MPC failed and no backup controller available. Stopping.")
+            return ControlOutput(
+                vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id, success=False)
     
     def _apply_safety_check(self, state: np.ndarray, cmd: ControlOutput,
                            diagnostics: DiagnosticsInput) -> ControlOutput:
@@ -1019,7 +1005,7 @@ class ControllerManager:
         if self.state_machine: self.state_machine.reset()
         if self.safety_monitor: self.safety_monitor.reset()
         if self.mpc_health_monitor: self.mpc_health_monitor.reset()
-        if self.attitude_controller: self.attitude_controller.reset()
+        if hasattr(self, 'attitude_controller') and self.attitude_controller: self.attitude_controller.reset()
         if self.smooth_transition: self.smooth_transition.reset()
         if self.coord_transformer: self.coord_transformer.reset()
         # 重置轨迹跟踪器内部状态（不释放资源）
@@ -1038,10 +1024,6 @@ class ControllerManager:
         self._last_attitude_cmd = None
         self._last_update_time = None  # 重置时间跟踪
         # 重置 notify 跟踪状态
-        self._odom_notify_called = False
-        self._traj_notify_called = False
-        self._notify_check_done = False
-        self._update_count = 0
         self._current_horizon = self.horizon_normal
         self._last_mpc_predicted_state = None  # 重置预测状态
         if self.mpc_tracker:
@@ -1084,12 +1066,14 @@ class ControllerManager:
             self.coord_transformer = None
         
         # 3. 关闭姿态控制器
-        if self.attitude_controller:
+        # 3. 关闭附加处理器
+        for processor in self.processors:
             try:
-                self.attitude_controller.shutdown()
+                if hasattr(processor, 'shutdown'):
+                    processor.shutdown()
             except Exception as e:
-                logger.warning(f"Error shutting down attitude_controller: {e}")
-            self.attitude_controller = None
+                logger.warning(f"Error shutting down processor {processor}: {e}")
+        self.processors.clear()
         
         # 4. 关闭状态估计器
         if self.state_estimator:
@@ -1147,36 +1131,4 @@ class ControllerManager:
         
         logger.info("ControllerManager shutdown complete")
     
-    # F14: 无人机姿态控制接口
-    def compute_attitude_command(self, velocity_cmd: ControlOutput, 
-                                 current_state: np.ndarray,
-                                 yaw_mode: str = 'velocity') -> Optional[AttitudeCommand]:
-        """
-        计算姿态命令 (F14.1)
-        
-        仅在无人机平台且姿态控制器可用时有效
-        
-        Args:
-            velocity_cmd: 速度命令
-            current_state: 当前状态
-            yaw_mode: 航向模式 ('velocity', 'fixed', 'manual')
-        
-        Returns:
-            AttitudeCommand 或 None (非无人机平台)
-        """
-        if not self.is_quadrotor or self.attitude_controller is None:
-            return None
-        
-        attitude_cmd = self.attitude_controller.compute_attitude(
-            velocity_cmd, current_state, yaw_mode)
-        self._last_attitude_cmd = attitude_cmd
-        return attitude_cmd
-    
-    def get_last_attitude_command(self) -> Optional[AttitudeCommand]:
-        """获取最后的姿态命令"""
-        return self._last_attitude_cmd
-    
-    def set_hover_yaw(self, yaw: float) -> None:
-        """设置悬停时的目标航向 (F14.3)"""
-        if self.attitude_controller is not None:
-            self.attitude_controller.set_hover_yaw(yaw)
+

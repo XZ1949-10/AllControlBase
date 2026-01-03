@@ -75,78 +75,65 @@ class TimeoutMonitor:
         """是否启用 IMU 超时检测"""
         return self.imu_timeout_ms > 0
     
-    def update_odom(self) -> None:
-        """
-        更新 odom 接收时间
-        
-        Note:
-            超时检测基于接收时间（单调时钟），而非消息时间戳，原因：
-            1. 消息时间戳可能受系统时间同步影响
-            2. 接收时间更能反映实际的数据新鲜度
-            3. 使用单调时钟避免时间跳变导致的误判
-        """
-        receive_time = get_monotonic_time()
-        self._last_odom_time = receive_time
-        if self._startup_time is None:
-            self._startup_time = receive_time
-    
-    def update_trajectory(self) -> None:
-        """
-        更新轨迹接收时间
-        
-        Note:
-            参见 update_odom 的说明
-        """
-        receive_time = get_monotonic_time()
-        self._last_traj_time = receive_time
-        self._traj_timeout_start = None
-        if self._startup_time is None:
-            self._startup_time = receive_time
-    
-    def update_imu(self) -> None:
-        """
-        更新 IMU 接收时间
-        
-        Note:
-            参见 update_odom 的说明
-        """
-        receive_time = get_monotonic_time()
-        self._last_imu_time = receive_time
-        if self._startup_time is None:
-            self._startup_time = receive_time
-    
-    def check(self) -> TimeoutStatus:
+    def check(self, data_ages: Optional[Dict[str, float]] = None) -> TimeoutStatus:
         """检查所有超时状态
         
-        使用单调时钟 (time.monotonic()) 进行超时检测，避免系统时间跳变影响。
+        Args:
+            data_ages: 数据年龄字典 {'odom': sec, 'trajectory': sec, 'imu': sec}
+                      如果为 None，则假设数据无限久（从未收到）
         
-        Note:
-            超时阈值 <= 0 表示禁用该数据源的超时检测
+        Returns:
+            超时状态
         """
         monotonic_now = get_monotonic_time()
         
+        # 1. 解析数据年龄 (秒 -> 毫秒)
+        # 如果未提供 data_ages，默认为无穷大 (从未收到)
+        current_ages_ms = {
+            'odom': NEVER_RECEIVED_AGE_MS,
+            'trajectory': NEVER_RECEIVED_AGE_MS,
+            'imu': NEVER_RECEIVED_AGE_MS
+        }
+        
+        if data_ages:
+            for key, age_sec in data_ages.items():
+                if age_sec != float('inf'):
+                    current_ages_ms[key] = age_sec * 1000.0
+        
+        odom_age_ms = current_ages_ms['odom']
+        traj_age_ms = current_ages_ms['trajectory']
+        imu_age_ms = current_ages_ms['imu']
+        
+        # 2. 启动逻辑检测
+        # 检测是否收到过任何有效数据
+        has_any_data = (odom_age_ms < NEVER_RECEIVED_AGE_MS or 
+                       traj_age_ms < NEVER_RECEIVED_AGE_MS or 
+                       imu_age_ms < NEVER_RECEIVED_AGE_MS)
+        
+        if has_any_data:
+            if self._startup_time is None:
+                self._startup_time = monotonic_now
+        
+        # 3. 启动状态处理
         in_startup_grace = False
         if self._startup_time is None:
-            # 从未收到任何数据
-            # 检查是否超过绝对启动超时
+            # 尚未收到任何数据
+            # 检查绝对启动超时
             if self.absolute_startup_timeout_enabled:
                 time_since_creation_ms = (monotonic_now - self._creation_time) * 1000
                 if time_since_creation_ms > self.absolute_startup_timeout_ms:
-                    # 超过绝对启动超时，报告 odom 和 traj 超时
-                    # 这表明系统可能存在配置错误或硬件故障
                     return TimeoutStatus(
-                        odom_timeout=True, 
-                        traj_timeout=True, 
-                        traj_grace_exceeded=True,
+                        odom_timeout=True, traj_timeout=True, traj_grace_exceeded=True,
                         imu_timeout=self.imu_timeout_enabled,
-                        last_odom_age_ms=NEVER_RECEIVED_AGE_MS,
-                        last_traj_age_ms=NEVER_RECEIVED_AGE_MS,
-                        last_imu_age_ms=NEVER_RECEIVED_AGE_MS,
+                        last_odom_age_ms=odom_age_ms,
+                        last_traj_age_ms=traj_age_ms,
+                        last_imu_age_ms=imu_age_ms,
                         in_startup_grace=False
                     )
-            # 仍在等待第一条数据
+            # 等待第一条数据，处于启动宽限期
             in_startup_grace = True
         else:
+            # 已收到过数据，检查是否仍在启动宽限期内
             startup_elapsed_ms = (monotonic_now - self._startup_time) * 1000
             in_startup_grace = startup_elapsed_ms < self.startup_grace_ms
         
@@ -157,15 +144,11 @@ class TimeoutMonitor:
                 last_imu_age_ms=0.0, in_startup_grace=True
             )
         
-        odom_age_ms = self._compute_age_ms(self._last_odom_time, monotonic_now)
-        traj_age_ms = self._compute_age_ms(self._last_traj_time, monotonic_now)
-        imu_age_ms = self._compute_age_ms(self._last_imu_time, monotonic_now)
-        
-        # 使用属性检查是否启用超时检测
+        # 4. 超时检测
         odom_timeout = self.odom_timeout_enabled and odom_age_ms > self.odom_timeout_ms
         imu_timeout = self.imu_timeout_enabled and imu_age_ms > self.imu_timeout_ms
         
-        # 轨迹超时检测
+        # 轨迹超时与宽限期逻辑
         traj_timeout = self.traj_timeout_enabled and traj_age_ms > self.traj_timeout_ms
         traj_grace_exceeded = False
         
@@ -188,16 +171,7 @@ class TimeoutMonitor:
             in_startup_grace=False
         )
     
-    def _compute_age_ms(self, last_time: Optional[float], current_time: float) -> float:
-        if last_time is None:
-            return NEVER_RECEIVED_AGE_MS
-        return (current_time - last_time) * 1000
-    
     def reset(self) -> None:
-        self._last_odom_time = None
-        self._last_traj_time = None
-        self._last_imu_time = None
         self._traj_timeout_start = None
         self._startup_time = None
-        # 重置创建时间，重新开始绝对启动超时计时
         self._creation_time = get_monotonic_time()

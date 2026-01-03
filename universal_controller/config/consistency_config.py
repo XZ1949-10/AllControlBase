@@ -20,6 +20,7 @@ CONSISTENCY_CONFIG = {
     'v_dir_thresh': 0.8,              # 速度方向一致性阈值
     'temporal_smooth_thresh': 0.5,    # 时序平滑度阈值
     'alpha_min': 0.1,                 # α 最小值
+    'min_value_for_log': 1e-10,       # 对数计算的最小数值 (防止下溢)
     'max_curvature': 10.0,            # 曲率计算的最大值限制 (1/m)
     'temporal_window_size': 10,       # 时序平滑度计算的滑动窗口大小
     # 注意: invalid_data_confidence 已移至 constants.py (CONSISTENCY_INVALID_DATA_CONFIDENCE)
@@ -34,6 +35,7 @@ CONSISTENCY_CONFIG = {
 # 注意: invalid_data_confidence 已移至 constants.py，不再需要验证
 CONSISTENCY_VALIDATION_RULES = {
     'consistency.alpha_min': (0.0, 1.0, '最小 alpha 值'),
+    'consistency.min_value_for_log': (1e-20, 1e-3, '对数计算最小数值'),
     'consistency.kappa_thresh': (0.0, 10.0, '曲率一致性阈值'),
     'consistency.v_dir_thresh': (0.0, 1.0, '速度方向一致性阈值'),
     'consistency.temporal_smooth_thresh': (0.0, 10.0, '时序平滑度阈值'),

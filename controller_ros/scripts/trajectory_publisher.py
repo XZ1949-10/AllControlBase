@@ -269,8 +269,9 @@ class TrajectoryPublisher(LifecycleMixin):
             rospy.logwarn_throttle(1.0, "Trajectory contains NaN/Inf, ignoring")
             return
         
-        # Use max_coord from TrajectoryDefaults
-        max_coord = TrajectoryDefaults.max_coord
+        # Use max_coord from constants.py
+        from universal_controller.core.constants import TRAJECTORY_MAX_COORD
+        max_coord = TRAJECTORY_MAX_COORD
         if np.any(np.abs(positions) > max_coord):
             self._invalid_count += 1
             rospy.logwarn_throttle(1.0, f"Trajectory coordinates exceed {max_coord}m")

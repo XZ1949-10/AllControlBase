@@ -237,3 +237,130 @@ def create_duration(sec: float) -> Any:
         return rospy.Duration.from_sec(sec)
     from ..compat.ros_compat_impl import StandaloneRospy
     return StandaloneRospy.Duration.from_sec(sec)
+
+
+def transform_pose(pose, transform):
+    """
+    执行 Pose 变换
+    
+    Args:
+        pose: GeometryMsgs PoseStamped
+        transform: GeometryMsgs TransformStamped
+    """
+    if TF2_AVAILABLE:
+        # tf2_geometry_msgs 会自动注册到 tf2_ros
+        # 但有时需要显式调用 do_transform_pose
+        # 注意: tf2_geometry_msgs 模块本身没有导出 do_transform_pose，它是 monkey patch 的
+        # 正确用法通常是: tf2_geometry_msgs.do_transform_pose(pose, transform)
+        return tf2_geometry_msgs.do_transform_pose(pose, transform)
+    else:
+        from ..compat.ros_compat_impl import do_transform_pose
+        return do_transform_pose(pose, transform)
+
+
+# ============================================================================
+# 类型导出 (用于类型标注和直接实例化)
+# ============================================================================
+
+if ROS_AVAILABLE:
+    Time = rospy.Time
+    Duration = rospy.Duration
+else:
+    from ..compat.ros_compat_impl import StandaloneRospy
+    Time = StandaloneRospy.Time
+    Duration = StandaloneRospy.Duration
+
+
+# ============================================================================
+# 坐标变换工具函数
+# ============================================================================
+
+def get_transform_matrix(translation: dict, rotation: dict) -> np.ndarray:
+    """
+    从平移和四元数构建 4x4 变换矩阵
+    
+    Args:
+        translation: 平移向量 {'x': float, 'y': float, 'z': float}
+        rotation: 四元数 {'x': float, 'y': float, 'z': float, 'w': float}
+        
+    Returns:
+        4x4 变换矩阵
+    """
+    # 提取四元数
+    qx = rotation.get('x', 0.0)
+    qy = rotation.get('y', 0.0)
+    qz = rotation.get('z', 0.0)
+    qw = rotation.get('w', 1.0)
+    
+    # 归一化四元数
+    norm = np.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+    if norm < 1e-10:
+        qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
+    else:
+        qx, qy, qz, qw = qx/norm, qy/norm, qz/norm, qw/norm
+    
+    # 构建旋转矩阵
+    R = np.array([
+        [1 - 2*(qy*qy + qz*qz), 2*(qx*qy - qz*qw), 2*(qx*qz + qy*qw)],
+        [2*(qx*qy + qz*qw), 1 - 2*(qx*qx + qz*qz), 2*(qy*qz - qx*qw)],
+        [2*(qx*qz - qy*qw), 2*(qy*qz + qx*qw), 1 - 2*(qx*qx + qy*qy)]
+    ])
+    
+    # 构建 4x4 变换矩阵
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[0, 3] = translation.get('x', 0.0)
+    T[1, 3] = translation.get('y', 0.0)
+    T[2, 3] = translation.get('z', 0.0)
+    
+    return T
+
+
+def apply_transform_to_trajectory(traj: 'Trajectory', transform_matrix: np.ndarray, 
+                                  target_frame: str) -> 'Trajectory':
+    """
+    将变换矩阵应用到轨迹上
+    
+    Args:
+        traj: 输入轨迹
+        transform_matrix: 4x4 变换矩阵
+        target_frame: 目标坐标系名称
+        
+    Returns:
+        变换后的新轨迹
+    """
+    from .data_types import Trajectory, Point3D, Header
+    
+    # 创建新轨迹副本
+    new_traj = traj.copy()
+    new_traj.header.frame_id = target_frame
+    
+    # 提取旋转矩阵和平移向量
+    R = transform_matrix[:3, :3]
+    t = transform_matrix[:3, 3]
+    
+    # 向量化变换所有点
+    if len(traj.points) > 0:
+        # 构建点矩阵 [N, 3]
+        points = np.array([[p.x, p.y, p.z] for p in traj.points])
+        
+        # 应用变换: p' = R @ p + t
+        transformed_points = (R @ points.T).T + t
+        
+        # 更新轨迹点
+        new_traj.points = [
+            Point3D(x=p[0], y=p[1], z=p[2]) 
+            for p in transformed_points
+        ]
+    
+    # 变换速度向量 (只需旋转，不需平移)
+    if traj.velocities is not None and len(traj.velocities) > 0:
+        # velocities: [N, 4] = [vx, vy, vz, wz]
+        # 线速度需要旋转，角速度 wz 在 2D 情况下不变
+        linear_vels = traj.velocities[:, :3]  # [N, 3]
+        angular_vels = traj.velocities[:, 3:4]  # [N, 1]
+        
+        transformed_linear = (R @ linear_vels.T).T  # [N, 3]
+        new_traj.velocities = np.hstack([transformed_linear, angular_vels])
+    
+    return new_traj

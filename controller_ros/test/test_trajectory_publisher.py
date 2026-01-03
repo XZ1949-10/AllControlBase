@@ -73,9 +73,9 @@ class TestTrajectoryPublisherLogic:
     
     def test_coordinate_range_check(self):
         """Test coordinate range validation"""
-        # Use TrajectoryDefaults for consistency
-        from universal_controller.core.data_types import TrajectoryDefaults
-        max_coord = TrajectoryDefaults.max_coord
+        # Use constants.py for max_coord
+        from universal_controller.core.constants import TRAJECTORY_MAX_COORD
+        max_coord = TRAJECTORY_MAX_COORD
         
         # Valid coordinates
         positions_valid = np.array([
@@ -225,11 +225,10 @@ class TestConfigurationConsistency:
     
     def test_max_coord_consistency(self):
         """Test max_coord is consistent across modules"""
-        from universal_controller.core.data_types import TrajectoryDefaults
-        from universal_controller.config.trajectory_config import TRAJECTORY_CONFIG
+        from universal_controller.core.constants import TRAJECTORY_MAX_COORD
         
-        # TrajectoryDefaults should have same default as TRAJECTORY_CONFIG
-        assert TrajectoryDefaults.max_coord == TRAJECTORY_CONFIG['max_coord']
+        # TRAJECTORY_MAX_COORD should be 100.0 as defined in constants.py
+        assert TRAJECTORY_MAX_COORD == 100.0
     
     def test_topic_from_param_loader(self):
         """Test that output topic comes from ParamLoader"""

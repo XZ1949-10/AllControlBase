@@ -90,7 +90,13 @@ class ControllerBridge(LifecycleMixin):
         super().__init__()
         self._config = config
         self._manager: Optional[ControllerManager] = None
-    
+        
+        # 频率监控
+        self._last_update_time = 0.0
+        ctrl_freq = config.get('system', {}).get('ctrl_freq', 50.0)
+        self._expected_period = 1.0 / ctrl_freq if ctrl_freq > 0 else 0.02
+        self._freq_warn_threshold = 1.5  # 允许 50% 的抖动
+
     # ==================== LifecycleMixin 实现 ====================
     
     def _do_initialize(self) -> bool:
@@ -102,9 +108,13 @@ class ControllerBridge(LifecycleMixin):
             由其统一处理并保存完整错误信息到 _last_error。
             如果初始化失败，_manager 会在 _do_shutdown() 中被清理。
         """
+        # 重置时间
+        import time
+        self._last_update_time = time.time()
+        
         self._manager = ControllerManager(self._config)
         self._manager.initialize_default_components()
-        logger.info("Controller bridge initialized successfully")
+        logger.info(f"Controller bridge initialized (expected rate: {1.0/self._expected_period:.1f}Hz)")
         return True
     
     def _do_shutdown(self) -> None:
@@ -120,6 +130,8 @@ class ControllerBridge(LifecycleMixin):
     
     def _do_reset(self) -> None:
         """重置控制器状态"""
+        import time
+        self._last_update_time = time.time()
         if self._manager is not None:
             self._manager.reset()
             logger.info("Controller bridge reset")
@@ -138,14 +150,15 @@ class ControllerBridge(LifecycleMixin):
             },
         }
     
-    def update(self, odom: Odometry, trajectory: Trajectory,
-               imu: Optional[Imu] = None) -> ControlOutput:
+    def update(self, odom: Odometry, trajectory: Trajectory, 
+               data_ages: Dict[str, float], imu: Optional[Imu] = None) -> ControlOutput:
         """
         执行一次控制更新
         
         Args:
             odom: 里程计数据 (UC 格式)
             trajectory: 轨迹数据 (UC 格式)
+            data_ages: 数据年龄字典 {'odom': ms, 'trajectory': ms, 'imu': ms}
             imu: IMU 数据 (UC 格式，可选)
         
         Returns:
@@ -157,7 +170,21 @@ class ControllerBridge(LifecycleMixin):
         if not self.is_running or self._manager is None:
             raise RuntimeError("Controller not initialized or already shutdown")
         
-        return self._manager.update(odom, trajectory, imu)
+        # 频率监控
+        import time
+        now = time.time()
+        dt = now - self._last_update_time
+        
+        # 忽略过长的间隔（可能是首次运行或暂停后恢复）
+        if dt > self._expected_period * self._freq_warn_threshold and dt < 2.0:
+            logger.warning(
+                f"Control loop running slow: {1.0/dt:.1f}Hz "
+                f"(expected {1.0/self._expected_period:.1f}Hz, dt={dt*1000:.1f}ms)"
+            )
+        
+        self._last_update_time = now
+        
+        return self._manager.update(odom, trajectory, data_ages, imu)
     
     def get_state(self) -> ControllerState:
         """获取控制器状态"""
@@ -195,21 +222,6 @@ class ControllerBridge(LifecycleMixin):
         
         # 使用状态机的官方接口请求停止
         return self._manager.state_machine.request_stop()
-    
-    def notify_odom_received(self) -> None:
-        """通知收到里程计数据（用于超时监控）"""
-        if self._manager is not None:
-            self._manager.notify_odom_received()
-    
-    def notify_trajectory_received(self) -> None:
-        """通知收到轨迹数据（用于超时监控）"""
-        if self._manager is not None:
-            self._manager.notify_trajectory_received()
-    
-    def notify_imu_received(self) -> None:
-        """通知收到 IMU 数据（用于超时监控）"""
-        if self._manager is not None:
-            self._manager.notify_imu_received()
     
     @property
     def manager(self) -> Optional[ControllerManager]:

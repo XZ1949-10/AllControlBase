@@ -8,18 +8,21 @@
 
 配置使用说明:
 ===============
-所有模块应通过 TrajectoryDefaults 类获取轨迹配置，而不是直接从此文件读取。
-TrajectoryDefaults 是轨迹配置的单一数据源 (Single Source of Truth)。
+所有模块应通过 TrajectoryConfig 实例获取轨迹配置，而不是直接从此文件读取。
+TrajectoryConfig 是轨迹配置的数据容器。
 
 使用方式:
-    from universal_controller.core.data_types import TrajectoryDefaults
+    from universal_controller.core.data_types import TrajectoryConfig
+    from universal_controller.core.constants import TRAJECTORY_MAX_COORD
     
-    # 初始化配置 (通常在启动时调用一次)
-    TrajectoryDefaults.configure(config)
+    # 初始化配置
+    traj_config = TrajectoryConfig.from_dict(config)
     
     # 读取配置
-    max_coord = TrajectoryDefaults.max_coord
-    dt_sec = TrajectoryDefaults.dt_sec
+    dt_sec = traj_config.dt_sec
+    
+    # 读取常量 (从 constants.py)
+    max_coord = TRAJECTORY_MAX_COORD
 
 坐标系配置说明:
 ===============
@@ -86,6 +89,6 @@ TRAJECTORY_VALIDATION_RULES = {
     'trajectory.default_confidence': (0.0, 1.0, '默认置信度'),
 }
 
-# 注意: 轨迹配置参数已整合到 core/data_types.py 的 TrajectoryDefaults 类中
-# TrajectoryDefaults.configure(config) 会同时配置默认值和验证参数
-# 所有模块应通过 TrajectoryDefaults 获取配置，而不是直接从此文件读取
+# 注意: 轨迹配置参数现在由 core/data_types.py 的 TrajectoryConfig 类处理
+# Common configuration is passed via TrajectoryConfig.from_dict(config)
+# 所有模块应通过 TrajectoryConfig 实例获取配置，而不是直接依赖全局状态

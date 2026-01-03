@@ -40,6 +40,7 @@ EKF_CONFIG = {
     'accel_freshness_thresh': 0.1,         # 加速度数据新鲜度阈值 (秒)
     
     # 注意: min_velocity_for_jacobian 已移至 constants.py (EKF_MIN_VELOCITY_FOR_JACOBIAN)
+    'jacobian_smooth_epsilon': 0.1,        # Jacobian 计算平滑因子 (m/s)
     
     # 测量噪声
     'measurement_noise': {
@@ -73,6 +74,7 @@ EKF_CONFIG = {
 # 注意: max_tilt_angle, min_velocity_for_jacobian, covariance_explosion_thresh, 
 # innovation_anomaly_thresh 已移至 constants.py，不再需要验证
 EKF_VALIDATION_RULES = {
+    'ekf.jacobian_smooth_epsilon': (0.001, 1.0, 'Jacobian 平滑因子 (m/s)'),
     # 测量噪声 (必须为正数)
     'ekf.measurement_noise.odom_position': (1e-9, 10.0, 'Odom 位置测量噪声'),
     'ekf.measurement_noise.odom_velocity': (1e-9, 10.0, 'Odom 速度测量噪声'),

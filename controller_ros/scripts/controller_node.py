@@ -185,17 +185,14 @@ class ControllerNodeROS1(ControllerNodeBase):
     def _odom_callback(self, msg: RosOdometry):
         """里程计回调"""
         self._data_manager.update_odom(msg)
-        self._notify_odom_received()
     
     def _imu_callback(self, msg: RosImu):
         """IMU 回调"""
         self._data_manager.update_imu(msg)
-        self._notify_imu_received()
     
     def _traj_callback(self, msg):
         """轨迹回调"""
         self._data_manager.update_trajectory(msg)
-        self._notify_trajectory_received()
     
     def _emergency_stop_callback(self, msg: Empty):
         """紧急停止回调"""
@@ -245,23 +242,7 @@ class ControllerNodeROS1(ControllerNodeBase):
         """发布诊断信息"""
         self._publishers.publish_diagnostics(diag, force=force)
     
-    def _publish_attitude_cmd(self, attitude_cmd: AttitudeCommand):
-        """发布姿态命令 (四旋翼平台)"""
-        if not self._is_quadrotor:
-            return
-        
-        # 获取悬停状态
-        is_hovering = False
-        if self._controller_bridge and self._controller_bridge.manager:
-            attitude_controller = self._controller_bridge.manager.attitude_controller
-            if attitude_controller is not None:
-                is_hovering = attitude_controller.is_hovering
-        
-        self._publishers.publish_attitude_cmd(
-            attitude_cmd,
-            yaw_mode=self._attitude_yaw_mode,
-            is_hovering=is_hovering
-        )
+
     
     def _publish_debug_path(self, trajectory):
         """发布调试路径 (用于 RViz 可视化)"""
@@ -286,46 +267,46 @@ class ControllerNodeROS1(ControllerNodeBase):
         self._shutting_down.set()
         
         # 2. 停止定时器
-        if hasattr(self, '_timer') and self._timer is not None:
+        if self._timer is not None:
             self._timer.shutdown()
             self._timer = None
         
         # 3. 发送最终停止命令
         try:
-            if hasattr(self, '_publishers') and self._publishers is not None:
+            if self._publishers is not None:
                 self._publishers.publish_stop_cmd()
                 rospy.loginfo("Final stop command sent")
         except Exception as e:
             rospy.logwarn(f"Failed to send final stop command: {e}")
         
         # 4. 关闭订阅器
-        if hasattr(self, '_odom_sub') and self._odom_sub is not None:
+        if self._odom_sub is not None:
             self._odom_sub.unregister()
             self._odom_sub = None
         
-        if hasattr(self, '_imu_sub') and self._imu_sub is not None:
+        if self._imu_sub is not None:
             self._imu_sub.unregister()
             self._imu_sub = None
         
-        if hasattr(self, '_traj_sub') and self._traj_sub is not None:
+        if self._traj_sub is not None:
             self._traj_sub.unregister()
             self._traj_sub = None
         
-        if hasattr(self, '_emergency_stop_sub') and self._emergency_stop_sub is not None:
+        if self._emergency_stop_sub is not None:
             self._emergency_stop_sub.unregister()
             self._emergency_stop_sub = None
         
         # 5. 关闭发布器和服务
-        if hasattr(self, '_publishers') and self._publishers is not None:
+        if self._publishers is not None:
             self._publishers.shutdown()
             self._publishers = None
         
-        if hasattr(self, '_services') and self._services is not None:
+        if self._services is not None:
             self._services.shutdown()
             self._services = None
         
         # 6. 关闭 TF 桥接
-        if hasattr(self, '_tf_bridge') and self._tf_bridge is not None:
+        if self._tf_bridge is not None:
             self._tf_bridge.shutdown()
             self._tf_bridge = None
         

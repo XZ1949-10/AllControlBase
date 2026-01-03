@@ -257,48 +257,35 @@ class ICoordinateTransformer(ILifecycleComponent):
     
     @abstractmethod
     def transform_trajectory(self, traj: Trajectory, target_frame: str, 
-                            target_time: float) -> Tuple[Trajectory, TransformStatus]:
+                            target_time: float, 
+                            fallback_state: Optional[EstimatorOutput] = None) -> Tuple[Trajectory, TransformStatus]:
         pass
     
     @abstractmethod
     def get_status(self) -> Dict[str, Any]:
         pass
     
-    @abstractmethod
-    def set_state_estimator(self, estimator: IStateEstimator) -> None:
-        pass
+    # Removed set_state_estimator to solve circular dependency
 
 
-class IAttitudeController(ILifecycleComponent):
+
+class IControlProcessor(ILifecycleComponent):
     """
-    姿态内环控制器接口 (F14.1)
+    通用控制处理器接口
     
-    用于无人机的姿态控制，将速度命令转换为姿态命令
+    允许以解耦的方式扩展控制器功能，如添加特定平台的姿态控制等。
     """
     
     @abstractmethod
-    def compute_attitude(self, velocity_cmd: ControlOutput, 
-                        current_state: np.ndarray,
-                        yaw_mode: str = 'velocity') -> 'AttitudeCommand':
+    def compute_extra(self, state: np.ndarray, cmd: ControlOutput) -> Dict[str, Any]:
         """
-        计算姿态命令
+        计算额外的控制输出
         
         Args:
-            velocity_cmd: 速度命令 (vx, vy, vz, omega in world frame)
-            current_state: 当前状态 [px, py, pz, vx, vy, vz, theta, omega]
-            yaw_mode: 航向模式 ('velocity', 'fixed', 'manual')
+            state: 当前状态 [8]
+            cmd: 核心算出的控制输出 (速度信息)
         
         Returns:
-            AttitudeCommand: 姿态命令 (roll, pitch, yaw, thrust)
+            Dict[str, Any]: 额外的控制信息，将合并到 ControlOutput.extras 中
         """
-        pass
-    
-    @abstractmethod
-    def set_hover_yaw(self, yaw: float) -> None:
-        """设置悬停时的目标航向"""
-        pass
-    
-    @abstractmethod
-    def get_attitude_rate_limits(self) -> Dict[str, float]:
-        """获取姿态角速度限制"""
         pass

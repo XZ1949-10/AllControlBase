@@ -12,17 +12,7 @@ import sys
 import os
 
 # 使用统一的路径管理器
-_test_dir = os.path.dirname(__file__)
-_src_path = os.path.join(_test_dir, '..', 'src')
-if _src_path not in sys.path:
-    sys.path.insert(0, _src_path)
 
-# 导入路径管理器 (会自动设置所有必要路径)
-try:
-    import controller_ros._path_manager
-except ImportError:
-    # 如果路径管理器不可用，手动添加路径
-    pass
 
 # 添加 fixtures 目录
 _fixtures_dir = os.path.join(_test_dir, 'fixtures')

@@ -47,9 +47,10 @@ def test_controller_manager_update():
     
     odom = create_test_odom(x=0.0, y=0.0, vx=1.0)
     trajectory = create_test_trajectory()
+    data_ages = {'odom': 0.01, 'trajectory': 0.01, 'imu': 0.0}
     
     # 执行更新
-    cmd = manager.update(odom, trajectory)
+    cmd = manager.update(odom, trajectory, data_ages)
     
     assert isinstance(cmd, ControlOutput)
     assert cmd.frame_id != ""
@@ -66,9 +67,10 @@ def test_controller_manager_with_imu():
     odom = create_test_odom(x=0.0, y=0.0, vx=1.0)
     trajectory = create_test_trajectory()
     imu = create_test_imu()
+    data_ages = {'odom': 0.01, 'trajectory': 0.01, 'imu': 0.01}
     
     # 执行更新
-    cmd = manager.update(odom, trajectory, imu)
+    cmd = manager.update(odom, trajectory, data_ages, imu)
     
     assert isinstance(cmd, ControlOutput)
     
@@ -83,8 +85,9 @@ def test_diagnostics_publish():
     
     odom = create_test_odom()
     trajectory = create_test_trajectory()
+    data_ages = {'odom': 0.01, 'trajectory': 0.01, 'imu': 0.0}
     
-    manager.update(odom, trajectory)
+    manager.update(odom, trajectory, data_ages)
     
     # 验证诊断数据已发布（通过 get_last_published_diagnostics 获取）
     last_diag = manager.get_last_published_diagnostics()
@@ -98,22 +101,16 @@ def test_diagnostics_publish():
 
 
 def test_component_delayed_binding():
-    """测试组件延迟绑定 (v3.17.5)"""
+    """测试组件延迟绑定 (v3.17.5) - 使用 _get_default_component_classes 重构后的方式"""
     config = DEFAULT_CONFIG.copy()
     manager = ControllerManager(config)
     
-    from universal_controller.estimator.adaptive_ekf import AdaptiveEKFEstimator
-    from universal_controller.transform.robust_transformer import RobustCoordinateTransformer
+    # 使用默认组件初始化
+    manager.initialize_default_components()
     
-    transformer = RobustCoordinateTransformer(config)
-    estimator = AdaptiveEKFEstimator(config)
-    
-    # 先注入 coord_transformer，再注入 state_estimator
-    manager.initialize_components(coord_transformer=transformer)
-    manager.initialize_components(state_estimator=estimator)
-    
-    # 验证 transformer 获得了 estimator 引用
-    assert manager.coord_transformer.state_estimator is estimator
+    # 验证组件已正确初始化
+    assert manager.coord_transformer is not None
+    assert manager.state_estimator is not None
     
     print("✓ test_component_delayed_binding passed")
 
@@ -130,9 +127,10 @@ def test_state_transition():
     # 发送有效数据后应转换到 NORMAL
     odom = create_test_odom(vx=1.0)
     trajectory = create_test_trajectory()
+    data_ages = {'odom': 0.01, 'trajectory': 0.01, 'imu': 0.0}
     
     for _ in range(3):
-        manager.update(odom, trajectory)
+        manager.update(odom, trajectory, data_ages)
     
     # 状态应该已经改变
     state = manager.get_state()
@@ -149,7 +147,8 @@ def test_reset_and_shutdown():
     
     odom = create_test_odom(vx=1.0)
     trajectory = create_test_trajectory()
-    manager.update(odom, trajectory)
+    data_ages = {'odom': 0.01, 'trajectory': 0.01, 'imu': 0.0}
+    manager.update(odom, trajectory, data_ages)
     
     # 重置
     manager.reset()
@@ -170,8 +169,9 @@ def test_tracking_error_computation():
     
     odom = create_test_odom(x=0.5, y=0.3, vx=1.0)
     trajectory = create_test_trajectory()
+    data_ages = {'odom': 0.01, 'trajectory': 0.01, 'imu': 0.0}
     
-    manager.update(odom, trajectory)
+    manager.update(odom, trajectory, data_ages)
     
     # 检查跟踪误差
     assert manager._last_tracking_error is not None

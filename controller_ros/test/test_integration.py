@@ -208,19 +208,20 @@ def test_velocity_padding_integration():
 
 
 def test_empty_frame_id_handling():
-    """测试空 frame_id 处理"""
+    """测试空 frame_id 处理 (安全性改进: 拒绝隐式坐标系)"""
+    import pytest
     from controller_ros.adapters import TrajectoryAdapter
-    from controller_ros.adapters.trajectory_adapter import DEFAULT_TRAJECTORY_FRAME_ID
     
     # 使用共享的 Mock 类，空 frame_id
     ros_msg = MockRosTrajectory(num_points=5, frame_id='')
     
     adapter = TrajectoryAdapter()
-    uc_traj = adapter.to_uc(ros_msg)
     
-    # 空 frame_id 应该使用默认值
-    assert uc_traj.header.frame_id == DEFAULT_TRAJECTORY_FRAME_ID
-    print(f"✓ Empty frame_id correctly defaulted to '{DEFAULT_TRAJECTORY_FRAME_ID}'")
+    # 空 frame_id 应该抛出 ValueError (安全性改进)
+    with pytest.raises(ValueError, match="valid frame_id"):
+        adapter.to_uc(ros_msg)
+    
+    print("✓ Empty frame_id correctly rejected with ValueError")
 
 
 def test_trajectory_mode_mapping():
