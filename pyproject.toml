@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "universal-controller"
-version = "3.19.0"
+version = "3.19.1"
 description = "基于 MPC 的通用轨迹跟踪控制器"
 requires-python = ">=3.8"
 dependencies = [
