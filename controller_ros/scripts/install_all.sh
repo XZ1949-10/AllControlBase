@@ -225,8 +225,16 @@ export PATH="$HOME/.local/bin:$PATH"
 PIP_VERSION=$(pip3 --version | awk '{print $2}')
 print_success "pip 版本: $PIP_VERSION ✓"
 
-# 安装 Python 依赖
-pip3 install --user numpy scipy PyYAML matplotlib
+# 安装 Python 依赖 (从 requirements.txt)
+REQUIREMENTS_FILE="$ALLCONTROLBASE_PATH/universal_controller/requirements.txt"
+if [ -f "$REQUIREMENTS_FILE" ]; then
+    print_info "正在安装 universal_controller 依赖..."
+    pip3 install --user -r "$REQUIREMENTS_FILE"
+else
+    print_warning "找不到 requirements.txt: $REQUIREMENTS_FILE"
+    print_warning "回退到默认依赖列表..."
+    pip3 install --user numpy scipy PyYAML matplotlib
+fi
 
 print_success "Python 依赖安装完成 ✓"
 
