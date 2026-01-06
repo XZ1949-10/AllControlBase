@@ -130,6 +130,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
             meas_noise.get('imu_accel', 0.5)] * 3 +
             [meas_noise.get('imu_gyro', 0.01)]
         )
+
         
         # 过程噪声
         proc_noise = ekf_config.get('process_noise', {})
@@ -172,13 +173,13 @@ class AdaptiveEKFEstimator(IStateEstimator):
         # 打滑概率计算
         self.slip_history = deque(maxlen=self.slip_history_window)
         
-        # 世界坐标系加速度
-        self.last_world_velocity = np.zeros(2)
-        self.current_world_velocity = np.zeros(2)
-        self._raw_odom_twist_norm = 0.0  # Raw Odom velocity for drift detection
+        # Body Frame 加速度 (用于打滑检测)
+        self.last_body_velocity = np.zeros(2)
+        self.current_body_velocity = np.zeros(2)
+        self._raw_odom_twist_norm = 0.0
         self.last_odom_time: Optional[float] = None
-        self.world_accel_vec = np.zeros(2)
-        self._world_accel_initialized = False
+        self.body_accel_vec = np.zeros(2) # Derived from Odom
+        self._body_accel_initialized = False
         
         self.last_imu_time: Optional[float] = None
         self._imu_available = True
@@ -391,11 +392,16 @@ class AdaptiveEKFEstimator(IStateEstimator):
             self._release_lock()
 
     
-    def update_odom(self, odom: Odometry) -> None:
-        """Odom 更新"""
+    def update_odom(self, odom: Odometry, current_time: float) -> None:
+        """Odom 更新
+        
+        Args:
+            odom: 里程计数据
+            current_time: 当前时间戳 (使用与 predict 一致的时间源)
+        """
         self._acquire_lock()
         try:
-            current_time = get_monotonic_time()
+
 
             self._last_odom_orientation = odom.pose_orientation
 
@@ -422,31 +428,56 @@ class AdaptiveEKFEstimator(IStateEstimator):
             # 获取航向角用于坐标变换
             # 使用 odom 的航向角，而不是 EKF 估计的航向角
             # 这确保速度变换使用正确的航向
+             # 机体坐标系速度 (直接从 Odom 获取)
+            vx_body = odom.twist_linear[0]
+            vy_body = odom.twist_linear[1]
+            # vz_body = odom.twist_linear[2] # Unused for 2D slip
+            
+            # 使用 Odom 提供的角速度
+            omega_z = odom.twist_angular[2]
+            
+            # 记录用于后续步骤的全局转换
+            _, _, odom_yaw = euler_from_quaternion(odom.pose_orientation)
+            
+            # ------------------------------------------------------------------
+            # 打滑检测专用: 计算 Body Frame 下的加速度
+            # a_body = dv_body/dt + omega x v_body
+            # ------------------------------------------------------------------
+            self.last_body_velocity = self.current_body_velocity.copy()
+            self.current_body_velocity = np.array([vx_body, vy_body])
+            
+            if self.last_odom_time is not None:
+                dt_odom = current_time - self.last_odom_time
+                if dt_odom > 0.0001:
+                    # 1. 线性加速度项: (v_curr - v_last) / dt
+                    dv_dt_x = (vx_body - self.last_body_velocity[0]) / dt_odom
+                    dv_dt_y = (vy_body - self.last_body_velocity[1]) / dt_odom
+                    
+                    # 2. 科氏/向心项: omega x v
+                    # a_cor_x = -v_y * omega
+                    # a_cor_y = +v_x * omega
+                    # 使用当前和上一时刻速度的平均值会让积分更准，但这里用当前值即可
+                    a_cor_x = -vy_body * omega_z
+                    a_cor_y =  vx_body * omega_z
+                    
+                    self.body_accel_vec[0] = dv_dt_x + a_cor_x
+                    self.body_accel_vec[1] = dv_dt_y + a_cor_y
+                    self._body_accel_initialized = True
+                else:
+                    self.body_accel_vec = np.zeros(2)
+            else:
+                self.body_accel_vec = np.zeros(2)
+             
+            # ------------------------------------------------------------------
+            # 观测向量构建
+            # ------------------------------------------------------------------
             theta = odom_yaw
             cos_theta = np.cos(theta)
             sin_theta = np.sin(theta)
 
-            # 机体坐标系到世界坐标系的速度变换
-            # v_world = R(theta) @ v_body
-            # 其中 R(theta) 是绕 Z 轴旋转 theta 的旋转矩阵
-            # [vx_world]   [cos(θ)  -sin(θ)] [vx_body]
-            # [vy_world] = [sin(θ)   cos(θ)] [vy_body]
+            # 转换到世界系用于 EKF 更新 (观测方程 z = Hx, x 是世界系状态)
             vx_world = vx_body * cos_theta - vy_body * sin_theta
             vy_world = vx_body * sin_theta + vy_body * cos_theta
-            vz_world = vz_body  # Z 轴速度不受 yaw 旋转影响
-
-            self.last_world_velocity = self.current_world_velocity.copy()
-            self.current_world_velocity = np.array([vx_world, vy_world])
-
-            if self.last_odom_time is not None:
-                dt = current_time - self.last_odom_time
-                if dt > 0:
-                    self.world_accel_vec = (self.current_world_velocity - self.last_world_velocity) / dt
-                    self._world_accel_initialized = True
-                else:
-                    self.world_accel_vec = np.zeros(2)
-            else:
-                self.world_accel_vec = np.zeros(2)
 
             self.last_odom_time = current_time
             self._update_odom_covariance(v_body)
@@ -488,13 +519,18 @@ class AdaptiveEKFEstimator(IStateEstimator):
         finally:
             self._release_lock()
     
-    def update_imu(self, imu: Imu) -> None:
+    def update_imu(self, imu: Imu, current_time: float) -> None:
         """
         IMU 观测更新
-
+        
+        Args:
+           imu: IMU 数据
+           current_time: 当前时间戳
+           
         IMU 测量模型 (比力模型):
         - 加速度计测量的是比力 (specific force): a_measured = a_true - g_body + bias + noise
         - 其中 a_true 是真实加速度，g_body 是重力在机体坐标系的投影
+
         - 静止时: a_measured = -g_body + bias ≈ [0, 0, +g] + bias (假设水平)
         - 陀螺仪测量: omega_measured = omega + bias + noise
 
@@ -541,11 +577,11 @@ class AdaptiveEKFEstimator(IStateEstimator):
 
         self._acquire_lock()
         try:
-            self._update_imu_internal(imu, accel, gyro)
+            self._update_imu_internal(imu, accel, gyro, current_time)
         finally:
             self._release_lock()
 
-    def _update_imu_internal(self, imu: Imu, accel, gyro) -> None:
+    def _update_imu_internal(self, imu: Imu, accel, gyro, current_time: float) -> None:
         """IMU 更新的内部实现（已在锁保护下调用）"""
         self.gyro_z = imu.angular_velocity[2]
         theta = self.x[StateIdx.YAW]  # yaw 角
@@ -646,49 +682,40 @@ class AdaptiveEKFEstimator(IStateEstimator):
         ax_world = ax_body_true * cos_theta - ay_body_true * sin_theta
         ay_world = ax_body_true * sin_theta + ay_body_true * cos_theta
         
-        # 打滑检测：比较 IMU 测量的加速度与 odom 计算的加速度
-        # 添加时间窗口检查，确保 odom 加速度数据是新鲜的
-        current_imu_time = get_monotonic_time()
+        # 打滑检测：比较 IMU 测量的加速度 (Body Frame) 与 Odom 计算的加速度 (Body Frame)
+        # 修正: 统一在 Body Frame 下进行比较，避免 Yaw 漂移 带来的虚假打滑报警
         
         odom_accel_fresh = (
-            self._world_accel_initialized and 
+            self._body_accel_initialized and 
             self.last_odom_time is not None and
-            (current_imu_time - self.last_odom_time) < self.accel_freshness_thresh
+            (current_time - self.last_odom_time) < self.accel_freshness_thresh
         )
         
         if odom_accel_fresh:
-            # 重构打滑检测: 统一在 Body Frame 下进行比较
-            # -------------------------------------------------------------
-            # 原逻辑存在严重缺陷: 它将 Odom 速度转到 World 系，再微分得 World Accel，
-            # 然后与 imu_accel_world (也转到 World 系) 比较。
-            # 这对 Yaw 估计极其敏感。如果 Odom Yaw 与 EKF Yaw (用于转 IMU) 不一致，
-            # 两个向量会有一个夹角，导致巨大的虚假差值。
-            #
-            # 新逻辑:
-            # 1. 计算 Odom 在 Body Frame 下的加速度 (a_odom_body)
-            #    a_odom_body ≈ (v_body_current - v_body_last) / dt
-            #    (忽略科氏力项，因为通常由 Odom 直接给出 Body Twist)
-            # 2. 直接使用 IMU 测量值 (a_imu_body, 已去重力)
-            # 3. 比较两者模长或向量差
-            # -------------------------------------------------------------
-
-            # 计算 odom body acceleration
-            imu_accel_world = np.array([ax_world, ay_world])
-            accel_diff = np.linalg.norm(imu_accel_world - self.world_accel_vec)
+            # 1. 获取 IMU 真实加速度 (Body Frame, 去重力和 Bias)
+            # ax_body_true, ay_body_true 已经在上面计算好了
+            imu_accel_body_vec = np.array([ax_body_true, ay_body_true])
+            
+            # 2. 获取 Odom 加速度 (Body Frame)
+            # self.body_accel_vec 已经在 update_odom 中计算好
+            
+            # 3. 比较模长差
+            accel_diff = np.linalg.norm(imu_accel_body_vec - self.body_accel_vec)
+            
             self.slip_probability = self._compute_slip_probability(accel_diff)
             self.slip_detected = self.slip_probability > 0.5
         else:
             # odom 加速度数据过旧，不进行打滑检测
             # 保持上一次的打滑状态，但基于时间间隔衰减概率
             if self.slip_probability > 0 and self.last_imu_time is not None:
-                dt_decay = current_imu_time - self.last_imu_time
+                dt_decay = current_time - self.last_imu_time
                 if dt_decay > 0:
                     # 基于时间的指数衰减: P(t) = P(0) * exp(-decay_rate * dt)
                     decay_factor = np.exp(-self.slip_decay_rate * dt_decay)
                     self.slip_probability *= decay_factor
             self.slip_detected = self.slip_probability > 0.5
         
-        self.last_imu_time = current_imu_time
+        self.last_imu_time = current_time
         
         # 复用预分配的观测向量
         self._z_imu[0] = imu.linear_acceleration[0]
@@ -704,12 +731,13 @@ class AdaptiveEKFEstimator(IStateEstimator):
         bias_z = self.x[StateIdx.ACCEL_BIAS_Z]
         omega_current = self.x[StateIdx.YAW_RATE]
         
-        if self.imu_motion_compensation and self._world_accel_initialized:
-            ax_motion_body = self.world_accel_vec[0] * cos_theta + self.world_accel_vec[1] * sin_theta
-            ay_motion_body = -self.world_accel_vec[0] * sin_theta + self.world_accel_vec[1] * cos_theta
+        if self.imu_motion_compensation and self._body_accel_initialized:
+            # Motion Compensation in Body Frame
+            # Accel_measured_expected = a_kinematic_body + gravity_body
+            # a_kinematic_body is approximated by Odom derived body acceleration
             
-            self._z_imu_expected[0] = bias_x + ax_motion_body + g_measured_x
-            self._z_imu_expected[1] = bias_y + ay_motion_body + g_measured_y
+            self._z_imu_expected[0] = bias_x + self.body_accel_vec[0] + g_measured_x
+            self._z_imu_expected[1] = bias_y + self.body_accel_vec[1] + g_measured_y
             self._z_imu_expected[2] = bias_z + g_measured_z
             self._z_imu_expected[3] = omega_current
         else:

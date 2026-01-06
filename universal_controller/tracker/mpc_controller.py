@@ -106,9 +106,9 @@ class MPCController(ITrajectoryTracker):
         import os
         # 使用 PID 区分不同进程，但移除 UUID 以确保同一进程内 Horizon 切换时名称稳定
         # 注意: 如果不同 Horizon 共用同一个基础名，会导致文件冲突
-        # 使用 PID 和对象 ID 区分模型，确保进程内多实例安全
         pid = os.getpid()
-        self._model_name_base = f"mpc_model_pid{pid}_{id(self)}"
+        # 加入 id(self) 以区分同一进程内的不同实例 (如多机器人仿真)
+        self._model_name_base = f"mpc_model_pid{pid}_id{id(self)}"
         
         # 预先检查 ACADOS 库是否存在，避免频繁编译
         self._solver_lib_path = {}
@@ -488,10 +488,8 @@ class MPCController(ITrajectoryTracker):
         # 如果启用 soft mode 且 confidence 高，是否应该用 soft theta?
         # 原始设计意图不明，现在的几何优先更稳健。
         
-        # 最终不需要再次归一化到 [-pi, pi]，因为我们需要保持角度的连续性 (Unwrapped)
-        # ACADOS/QP 求解器在处理 (theta - theta_ref)^2 时，如果你归一化了，
-        # 会出现 (3.1 - (-3.1))^2 = 38.4 的巨大误差，导致控制器反转。
-        # theta_refs = normalize_angle(theta_refs)  # REMOVED
+        # 最终不进行归一化，保留累计角度以保证求解器连续性
+        # theta_refs = normalize_angle(theta_refs)
         
         # 4. 构建 yref 矩阵 [H, 12]
         # yref: [px, py, pz, vx, vy, vz, theta, omega, ax, ay, az, alpha]

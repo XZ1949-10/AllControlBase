@@ -448,7 +448,7 @@ class ControllerManager:
         
         # 3. 状态估计
         state, state_output = self._update_state_estimation(
-            odom, imu, current_timeout_status, actual_dt, skip_prediction)
+            odom, imu, current_timeout_status, actual_dt, current_time, skip_prediction)
         
         # 4. 一致性检查
         consistency = self._compute_consistency(trajectory)
@@ -604,16 +604,17 @@ class ControllerManager:
                 MAX_CATCHUP_STEPS = 20  # Max 0.2s - 0.5s of catchup
                 
                 num_steps = int(actual_dt / self.dt)
-                
                 if num_steps > MAX_CATCHUP_STEPS:
-                    logger.warning(f"Pause ({actual_dt:.2f}s) exceeds catchup limit. Resetting EKF time instead of spinning.")
-                    # 强制重置 EKF 到当前状态（通过 update_odom 会重新对齐时间）
-                    # 或者只跑最后 N 步
-                    steps_to_run = MAX_CATCHUP_STEPS
-                    actual_dt = actual_dt - (num_steps - steps_to_run) * self.dt # Adjust residual
-                    num_steps = steps_to_run
+                    logger.warning(f"Pause ({actual_dt:.2f}s) exceeds catchup limit. Resetting EKF to current state.")
+                    # 强制重置 EKF 到当前状态，避免巨大的 Innovation 导致发散
+                    if self.state_estimator:
+                        self.state_estimator.reset()
+                    
+                    # 标记跳过预测，actual_dt 设为正常帧率，让 estimator 重新锁定 odom
+                    skip_prediction = True
+                    actual_dt = self.dt
                 
-                if self.state_estimator and num_steps > 1:
+                if not skip_prediction and self.state_estimator and num_steps > 1:
                     for _ in range(num_steps - 1):
                         self.state_estimator.predict(self.dt)
                 actual_dt = actual_dt - (num_steps - 1) * self.dt
@@ -629,6 +630,7 @@ class ControllerManager:
     
     def _update_state_estimation(self, odom: Odometry, imu: Optional[Imu],
                                  timeout_status: TimeoutStatus, actual_dt: float,
+                                 current_time: float,
                                  skip_prediction: bool) -> tuple:
         """
         更新状态估计
@@ -642,13 +644,13 @@ class ControllerManager:
             if not skip_prediction:
                 self.state_estimator.predict(actual_dt)
             
-            self.state_estimator.update_odom(odom)
+            self.state_estimator.update_odom(odom, current_time)
             
             if timeout_status.imu_timeout:
                 self.state_estimator.set_imu_available(False)
             elif imu:
                 self.state_estimator.set_imu_available(True)
-                self.state_estimator.update_imu(imu)
+                self.state_estimator.update_imu(imu, current_time)
             
             state_output = self.state_estimator.get_state()
             state = state_output.state
