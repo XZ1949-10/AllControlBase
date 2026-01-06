@@ -429,25 +429,36 @@ class MPCController(ITrajectoryTracker):
             last_diff = diffs[-1]
         diffs = np.vstack([diffs, last_diff]) # [H, 3]
         
+
         # 计算几何航向 (atan2)
-        # 修正: 支持倒车逻辑
-        # 检查参考速度 (blended_vels[:, 0] 即 vx)
-        # 如果 vx < -0.01 (hysteresis), 则认为是在倒车，几何航向应翻转 180 度
-        vx_refs = blended_vels[:, 0]
+        # 修正: 使用几何一致性 (Geometric Consistency) 自动检测倒车
+        # 策略: 计算位移向量与参考速度向量的点积
+        # dot < 0 表示期望运动方向与参考速度方向相反 -> 倒车
+        # 这种方法比单纯的 vx < -0.01 阈值更稳健，符合物理意义
+        
+        # 提取参考速度向量 [H, 2] (vx, vy)
+        vel_refs = blended_vels[:, 0:2]
+        
+        # 计算点积: dx*vx + dy*vy
+        # 注意 diffs 是 [H, 3], 我们只需要前两维
+        motion_dot_prod = diffs[:, 0] * vel_refs[:, 0] + diffs[:, 1] * vel_refs[:, 1]
+        
         geom_thetas = np.arctan2(diffs[:, 1], diffs[:, 0]) # [H]
         
         # 倒车检测与修正
-        # 使用切片操作避免循环
-        reversing_mask = vx_refs < -0.01
+        # 使用点积判断方向一致性 (dot < -EPSILON) 表示显著反向
+        reversing_mask = motion_dot_prod < -EPSILON
+        
         if np.any(reversing_mask):
             # 只有当检测到确实在倒车时才修正
-            # geom = atan2(dy, dx). Reversing means heading is opposite to velocity vec
+            # Reversing means heading is opposite to displacement vector
             geom_thetas[reversing_mask] = normalize_angle(geom_thetas[reversing_mask] + np.pi)
         
         # 处理原地停滞 (Points 重叠): 此时 atan2 无意义 (0/0)
         # 使用上一个有效的航向进行填充
+        # 使用 EPSILON 替换硬编码常量
         dist_sq = diffs[:, 0]**2 + diffs[:, 1]**2
-        valid_mask = dist_sq > 1e-6
+        valid_mask = dist_sq > EPSILON
         
         theta_refs = np.zeros(self.horizon)
         
@@ -565,11 +576,34 @@ class MPCController(ITrajectoryTracker):
             x1 = self._solver.get(1, "x")
             self._last_predicted_next_state = x1
             
+            # 严重 Bug 修复: 
+            # ACADOS 状态中的 vx, vy 是 World Frame (Odom) 下的速度
+            # ControlOutput (cmd_vel) 需要 Body Frame (base_link) 下的速度
+            # 必须进行坐标旋转: V_body = R(theta)^T * V_world
+            
+            vx_world = x1[MPCStateIdx.VX]
+            vy_world = x1[MPCStateIdx.VY]
+            vz_world = x1[MPCStateIdx.VZ]
+            
+            # 使用当前时刻的航向角进行投影 (因为 cmd_vel 是基于当前机体坐标系的)
+            # state 是 compute 传入的当前状态
+            current_theta = state[MPCStateIdx.THETA]
+            cos_th = np.cos(current_theta)
+            sin_th = np.sin(current_theta)
+            
+            # 旋转矩阵 R(theta) = [[c, -s], [s, c]]
+            # 逆旋转(投影到机体) V_body = R^T * V_world
+            # vx_body = vx_world * c + vy_world * s
+            # vy_body = -vx_world * s + vy_world * c
+            
+            vx_body = vx_world * cos_th + vy_world * sin_th
+            vy_body = -vx_world * sin_th + vy_world * cos_th
+            
             # 使用索引常量提取结果
             result = ControlOutput(
-                vx=x1[MPCStateIdx.VX], 
-                vy=x1[MPCStateIdx.VY], 
-                vz=x1[MPCStateIdx.VZ], 
+                vx=vx_body, 
+                vy=vy_body, 
+                vz=vz_world, # Z 轴通常不旋转
                 omega=x1[MPCStateIdx.OMEGA],
                 frame_id=self.output_frame, 
                 success=True,
@@ -615,6 +649,10 @@ class MPCController(ITrajectoryTracker):
         if len(trajectory.points) < 2:
             return ControlOutput(vx=0, vy=0, vz=0, omega=0, frame_id=self.output_frame, success=False,
                                health_metrics={'error_type': 'traj_too_short'})
+        
+        # 兼容性修复: 确保 state 维度正确 (MPC 需要 8 维, EKF 可能提供 11 维)
+        if len(state) > 8:
+            state = state[:8]
         
         try:
             result = self._solve_with_acados(state, trajectory, consistency)

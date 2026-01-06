@@ -16,15 +16,15 @@ class StateIdx(IntEnum):
     ACCEL_BIAS_Z = 10   # 加速度计偏置 Z
 
 class MPCStateIdx(IntEnum):
-    """MPC 状态向量索引"""
-    X = 0
-    Y = 1
-    Z = 2
-    VX = 3
-    VY = 4
-    VZ = 5
-    THETA = 6
-    OMEGA = 7
+    """MPC 状态向量索引 (自动同步 StateIdx)"""
+    X = StateIdx.X
+    Y = StateIdx.Y
+    Z = StateIdx.Z
+    VX = StateIdx.VX
+    VY = StateIdx.VY
+    VZ = StateIdx.VZ
+    THETA = StateIdx.YAW
+    OMEGA = StateIdx.YAW_RATE
 
 class MPCInputIdx(IntEnum):
     """MPC 控制输入索引"""

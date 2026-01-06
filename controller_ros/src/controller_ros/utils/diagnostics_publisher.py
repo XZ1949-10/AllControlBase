@@ -198,8 +198,20 @@ def _fill_from_dict(msg: Any, d: Dict[str, Any]) -> None:
     msg.cmd_frame_id = str(cmd.get('frame_id', ''))
 
 
+# 记录已验证的类型，避免重复检查
+_VALIDATED_TYPES = set()
+
+
 def _fill_from_object(msg: Any, o: Any) -> None:
     """从对象填充 (兼容路径，使用 getattr)"""
+    # 1. 结构验证 (仅首次运行时检查)
+    # 这为了防止 silent failure: 如果底层字段改名了，getattr 会默默返回 0
+    global _VALIDATED_TYPES
+    obj_type = type(o)
+    if obj_type not in _VALIDATED_TYPES:
+        _validate_object_structure(o)
+        _VALIDATED_TYPES.add(obj_type)
+
     # 根级别
     msg.state = int(getattr(o, 'state', 0))
     msg.mpc_success = bool(getattr(o, 'mpc_success', False))
@@ -271,3 +283,34 @@ def _fill_from_object(msg: Any, o: Any) -> None:
     msg.cmd_vz = safe_float(getattr(o, 'cmd_vz', 0.0))
     msg.cmd_omega = safe_float(getattr(o, 'cmd_omega', 0.0))
     msg.cmd_frame_id = str(getattr(o, 'cmd_frame_id', ''))
+
+
+def _validate_object_structure(o: Any) -> None:
+    """
+    验证对象结构，确保关键字段存在
+    
+    这是为了解决 getattr(o, 'field', default) 掩盖字段重命名/丢失的问题。
+    """
+    import logging
+    
+    # 定义关键字段集合 (采样检查)
+    critical_fields = [
+        'state', 'mpc_success', 
+        'mpc_health_kkt_residual',
+        'consistency_curvature',
+        'estimator_covariance_norm',
+        'tracking_lateral_error'
+    ]
+    
+    missing = []
+    for field in critical_fields:
+        if not hasattr(o, field):
+            missing.append(field)
+            
+    if missing:
+        logging.getLogger(__name__).warning(
+            f"DiagnosticsV2 Structure Mismatch: Object {type(o).__name__} is missing fields: {missing}. "
+            f"Diagnostics publisher will default these to 0/False, which may hide bugs. "
+            f"Please ensure Universal Controller data types match DiagnosticsV2 definition."
+        )
+

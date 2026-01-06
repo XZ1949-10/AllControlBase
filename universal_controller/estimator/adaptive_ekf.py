@@ -294,15 +294,22 @@ class AdaptiveEKFEstimator(IStateEstimator):
             self.x[StateIdx.YAW] = normalize_angle(self.x[StateIdx.YAW])
 
             if self.velocity_heading_coupled:
-                # 使用带符号的速度投影，与 predict() 方法保持一致
-                # v_signed > 0: 前进, v_signed < 0: 倒车
-                # 这确保漂移校正后速度方向正确（支持倒车场景）
-                yaw = self.x[StateIdx.YAW]
-                vx = self.x[StateIdx.VX]
-                vy = self.x[StateIdx.VY]
-                v_signed = vx * np.cos(yaw - dtheta) + vy * np.sin(yaw - dtheta)
-                self.x[StateIdx.VX] = v_signed * np.cos(yaw)
-                self.x[StateIdx.VY] = v_signed * np.sin(yaw)
+                # 优雅修复: 使用旋转矩阵对速度向量进行旋转
+                # 之前的方法 (project -> rotate) 会丢失横向速度分量 (Lateral Velocity)
+                # 正确做法是保留 Body Frame 下的速度不变，随着 Yaw 的变化旋转 World Frame 速度
+                
+                # 1. 计算旋转前的 World 速度
+                vx_old = self.x[StateIdx.VX]
+                vy_old = self.x[StateIdx.VY]
+                
+                # 2. 旋转速度向量 (Rotate by dtheta)
+                # [vx_new]   [cos(dtheta)  -sin(dtheta)] [vx_old]
+                # [vy_new] = [sin(dtheta)   cos(dtheta)] [vy_old]
+                cos_d = np.cos(dtheta)
+                sin_d = np.sin(dtheta)
+                
+                self.x[StateIdx.VX] = vx_old * cos_d - vy_old * sin_d
+                self.x[StateIdx.VY] = vx_old * sin_d + vy_old * cos_d
 
             self.P[StateIdx.X, StateIdx.X] += abs(dx) * 0.1
             self.P[StateIdx.Y, StateIdx.Y] += abs(dy) * 0.1
@@ -333,6 +340,10 @@ class AdaptiveEKFEstimator(IStateEstimator):
 
         self._acquire_lock()
         try:
+            # 资源有效性检查 (防止 Shutdown 竞态)
+            if self._F is None:
+                return
+
             # 1. 先在当前状态上计算 Jacobian (预测前的状态)
             # 使用 StateIdx 访问状态
             theta_before = self.x[StateIdx.YAW]
@@ -401,6 +412,9 @@ class AdaptiveEKFEstimator(IStateEstimator):
         """
         self._acquire_lock()
         try:
+            # 资源有效性检查
+            if self._F is None:
+                return
 
 
             self._last_odom_orientation = odom.pose_orientation
@@ -577,6 +591,10 @@ class AdaptiveEKFEstimator(IStateEstimator):
 
         self._acquire_lock()
         try:
+            # 资源有效性检查
+            if self._F is None:
+                return
+            
             self._update_imu_internal(imu, accel, gyro, current_time)
         finally:
             self._release_lock()
@@ -678,9 +696,32 @@ class AdaptiveEKFEstimator(IStateEstimator):
         ax_body_true = imu.linear_acceleration[0] - g_measured_x - self.x[StateIdx.ACCEL_BIAS_X]
         ay_body_true = imu.linear_acceleration[1] - g_measured_y - self.x[StateIdx.ACCEL_BIAS_Y]
         
-        # 将真实加速度转换到世界坐标系（只考虑 yaw 旋转，因为地面车辆 roll/pitch 接近 0）
-        ax_world = ax_body_true * cos_theta - ay_body_true * sin_theta
-        ay_world = ax_body_true * sin_theta + ay_body_true * cos_theta
+        # 将真实加速度转换到世界坐标系
+        # 修复: 使用完整的四元数进行 3D 旋转，以支持无人机 (Quadrotor) 或倾斜地形
+        # 之前的实现假设 Roll/Pitch ~ 0，这会导致 3D 平台下的严重偏差
+        
+        # 提取四元数 (x, y, z, w)
+        qx = imu.orientation[0]
+        qy = imu.orientation[1]
+        qz = imu.orientation[2]
+        qw = imu.orientation[3]
+        
+        # 使用高性能 NumPy 实现向量旋转: v' = v + 2*cross(q_xyz, cross(q_xyz, v) + q_w*v)
+        # 避免引入 scipy 依赖
+        xyz = np.array([qx, qy, qz])
+        v = np.array([ax_body_true, ay_body_true, 0.0]) # 假设 Z 轴加速度已被重力抵消或不用于平面导航? 
+        # 注意: 如果是无人机，Z 轴加速度也很重要，但在 2D 导航 EKF 中通常忽略 vz。
+        # 即使只用 ax/ay，为了正确投影，必须带上 az 分量。
+        # imu.linear_acceleration[2] 包含重力。我们这里需要去除重力后的 Body Z 加速度
+        az_body_true = imu.linear_acceleration[2] - g_measured_z - self.x[StateIdx.ACCEL_BIAS_Z]
+        v[2] = az_body_true
+
+        t = 2 * np.cross(xyz, v)
+        v_prime = v + qw * t + np.cross(xyz, t)
+        
+        ax_world = v_prime[0]
+        ay_world = v_prime[1]
+        # az_world = v_prime[2] # 暂时未在状态向量中使用
         
         # 打滑检测：比较 IMU 测量的加速度 (Body Frame) 与 Odom 计算的加速度 (Body Frame)
         # 修正: 统一在 Body Frame 下进行比较，避免 Yaw 漂移 带来的虚假打滑报警
@@ -1072,6 +1113,12 @@ class AdaptiveEKFEstimator(IStateEstimator):
         """获取当前状态估计结果（线程安全）"""
         self._acquire_lock()
         try:
+            if self.P is None:  # Shutdown check
+                return EstimatorOutput(
+                    state=np.zeros(3), covariance=np.zeros((3,3)), covariance_norm=0, 
+                    innovation_norm=0, imu_bias=np.zeros(3), slip_probability=0, anomalies=['SHUTDOWN']
+                )
+
             return EstimatorOutput(
                 state=self.x[:StateIdx.ACCEL_BIAS_X].copy(),
                 covariance=self.P[:StateIdx.ACCEL_BIAS_X, :StateIdx.ACCEL_BIAS_X].copy(),
@@ -1098,11 +1145,15 @@ class AdaptiveEKFEstimator(IStateEstimator):
             self.slip_history.clear()
             self.last_imu_time = None
             self.last_odom_time = None
-            self.last_world_velocity = np.zeros(2)
-            self.current_world_velocity = np.zeros(2)
-            self._raw_odom_twist_norm = 0.0
-            self.world_accel_vec = np.zeros(2)
-            self._world_accel_initialized = False
+            
+            # 修复: 变量名必须与 __init__ 和 update_odom 中使用的 Body Frame 变量一致
+            # 之前错误地使用了 world_ 前缀，导致 reset 无效，引发暂停后的打滑误报
+            self.last_body_velocity = np.zeros(2)
+            self.current_body_velocity = np.zeros(2)
+            self._raw_odom_twist_norm = 0.0  # 必须重置，否则 static check 可能失效
+            self.body_accel_vec = np.zeros(2)
+            self._body_accel_initialized = False
+            
             self.last_position = np.zeros(3)
             self.position_jump = 0.0
             self.gyro_z = 0.0

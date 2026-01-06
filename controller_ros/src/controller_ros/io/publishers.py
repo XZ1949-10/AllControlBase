@@ -265,7 +265,10 @@ class PublisherManager:
                 (self._do_publish_debug_path_sync, (trajectory, self._node.get_clock().now().to_msg(), step))
             )
         except queue.Full:
-            pass
+            self._node.get_logger().warn(
+                "Debug path visualization queue full, dropping frame (visualization/network too slow).",
+                throttle_duration_sec=30.0
+            )
 
     def _do_publish_debug_path_sync(self, trajectory: Trajectory, stamp_msg, step: int = 1):
         """同步执行路径转换和发布 (由 Worker 线程调用)"""
@@ -354,7 +357,10 @@ class PublisherManager:
                 (self._do_publish_mpc_path_sync, (predicted_states, frame_id, self._node.get_clock().now().to_msg(), step))
             )
         except queue.Full:
-            pass
+            self._node.get_logger().warn(
+                "MPC path visualization queue full, dropping frame.",
+                throttle_duration_sec=30.0
+            )
 
     def _do_publish_mpc_path_sync(self, predicted_states, frame_id, stamp_msg, step: int = 1):
         """同步发布 MPC 预测路径 (由 Worker 线程调用)"""

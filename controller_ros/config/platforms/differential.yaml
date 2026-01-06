@@ -136,8 +136,9 @@ backup:
 # 坐标变换配置
 # =============================================================================
 transform:
-  source_frame: "base_link"       # 源坐标系
-  target_frame: "odom"            # 目标坐标系
+  source_frame: "base_link"       # 源坐标系 (用于定位机器人)
+  target_frame: "odom"            # 计算坐标系 (算法内部使用的世界系)
+  output_frame: "base_link"       # 输出坐标系 (指令 cmd_vel 的参考系)
   timeout_ms: 10                  # TF2 查询超时 (ms)
   buffer_warmup_timeout_sec: 2.0  # TF buffer 预热超时 (秒)
   buffer_warmup_interval_sec: 0.1 # TF buffer 预热检查间隔 (秒)

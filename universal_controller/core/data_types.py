@@ -143,6 +143,12 @@ class Trajectory:
     soft_enabled: bool = False
     low_speed_thresh: float = field(default=0.1, repr=False, compare=False)
     
+    # 启用 __slots__ 以优化内存和属性访问速度
+    __slots__ = ('header', 'points', 'velocities', 'dt_sec', 'confidence', 'mode', 
+                 'soft_enabled', 'low_speed_thresh', '_hard_velocities_cache', 
+                 '_points_matrix_cache', '_version', '_points_are_numpy', 
+                 '_cache_key', '_last_validated_version', '_last_validation_result')
+    
     # 缓存字段（不参与比较和 repr）
     _hard_velocities_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
     _points_matrix_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
@@ -243,8 +249,8 @@ class Trajectory:
             # 直接更新 version，移除 try-except 开销 (如果 Trajectory 被频繁创建/修改)
             # 因为 _version 在 __post_init__ 保证存在
             if name != '_version':
-                 curr = self.__dict__.get('_version', 0)
-                 self.__dict__['_version'] = curr + 1
+                 curr = getattr(self, '_version', 0)
+                 object.__setattr__(self, '_version', curr + 1)
             
             # 使用 object.__setattr__
             object.__setattr__(self, name, value)
@@ -285,12 +291,13 @@ class Trajectory:
         
         # 验证 dt_sec
         if self.dt_sec < TRAJECTORY_MIN_DT_SEC or self.dt_sec > TRAJECTORY_MAX_DT_SEC:
-            logger.warning(
+            logger.debug(
                 f"Trajectory dt_sec={self.dt_sec} out of range "
                 f"[{TRAJECTORY_MIN_DT_SEC}, {TRAJECTORY_MAX_DT_SEC}], clipping"
             )
             self.dt_sec = np.clip(self.dt_sec, TRAJECTORY_MIN_DT_SEC, TRAJECTORY_MAX_DT_SEC)
-            is_valid = False
+            # 自动修复被视为有效，不置为 False
+            # is_valid = False
         
         # 向量化验证相邻点距离
         # 使用 get_points_matrix() 获取统一的 numpy 视图，避免处理类型差异
@@ -306,7 +313,7 @@ class Trajectory:
             jump_indices = np.where(dist_sq > max_dist_sq)[0]
             if len(jump_indices) > 0:
                 first_idx = jump_indices[0]
-                logger.warning(
+                logger.error(
                     f"Trajectory jump detected at index {first_idx}->{first_idx+1}: "
                     f"{np.sqrt(dist_sq[first_idx]):.2f}m > {config.max_point_distance}m"
                 )
@@ -362,10 +369,8 @@ class Trajectory:
             # 处理 velocities 长度一致性
             v_len = len(self.velocities)
             v_start = start if start < v_len else v_len
-            v_end = end if end < v_len else v_len
             new_velocities = self.velocities[v_start:v_end]
             
-        # 3. 创建新实例
         # 3. 创建新实例 (高性能路径: 绕过 __init__ 和 __post_init__)
         # 因为我们已经确保了数据是合法的 numpy array，不需要再次检查
         new_traj = object.__new__(Trajectory)
@@ -383,7 +388,32 @@ class Trajectory:
         # 初始化内部字段
         object.__setattr__(new_traj, '_version', 0)
         object.__setattr__(new_traj, '_cache_key', None)
-        object.__setattr__(new_traj, '_hard_velocities_cache', None)
+        
+        # 优化: 尝试复用 Hard Cache
+        # 如果父对象已有 cache 且 key 匹配，则切片复用
+        # 这避免了对切片后的轨迹再次进行差分计算
+        new_hard_vels = None
+        current_version = getattr(self, '_version', 0)
+        
+        # 简单的 key 检查 (version + dt)
+        if (self._hard_velocities_cache is not None and 
+            getattr(self, '_cache_key', None) == (current_version, self.dt_sec)):
+            
+            # 确保 cache 长度足够覆盖 slice
+            cache_len = len(self._hard_velocities_cache)
+            # 计算对应的 cache range (通常 points 和 cache 是一一对应的)
+            c_start = start if start < cache_len else cache_len
+            c_end = end if end < cache_len else cache_len
+            
+            if c_end > c_start:
+                new_hard_vels = self._hard_velocities_cache[c_start:c_end]
+        
+        object.__setattr__(new_traj, '_hard_velocities_cache', new_hard_vels)
+        
+        # 如果复用了 cache，需要设置 cache_key 以标记其有效性
+        if new_hard_vels is not None:
+             object.__setattr__(new_traj, '_cache_key', (0, self.dt_sec))
+             
         object.__setattr__(new_traj, '_points_matrix_cache', new_points) # 直接缓存切片后的点
         object.__setattr__(new_traj, '_points_are_numpy', True)
         
@@ -649,7 +679,7 @@ class AttitudeCommand:
     thrust: float
 
 
-@dataclass
+@dataclass(slots=True)
 class DiagnosticsV2:
     """诊断消息数据类
     

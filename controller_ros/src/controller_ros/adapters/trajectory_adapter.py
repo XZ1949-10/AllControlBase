@@ -198,6 +198,21 @@ class TrajectoryAdapter(IMsgConverter):
             raw_points = ros_msg.points
             num_raw = len(raw_points)
             
+            # Performance Optimization: Early Truncation
+            # 如果使用 Python 对象列表且点数远超配置上限，提前截断以避免昂贵的转换开销
+            if self._config.max_points > 0:
+                limit = int(self._config.max_points * 2)  # 留出余量，避免过度截断影响逻辑
+                if num_raw > limit:
+                     from ..utils.ros_compat import log_warn_throttle
+                     log_warn_throttle(
+                        10.0,
+                        f"Performance Protection: Truncating large legacy trajectory "
+                        f"({num_raw} > {limit}) to prevent CPU stall. "
+                        f"Please use 'points_flat' for large paths."
+                     )
+                     raw_points = raw_points[:limit]
+                     num_raw = limit
+            
             if num_raw == 0:
                 # 快速路径：空轨迹
                 logger.warning("Received empty trajectory (0 points), returning MODE_STOP trajectory.")

@@ -136,9 +136,21 @@ class ControllerManager:
         self.dt = 1.0 / self.ctrl_freq
 
         platform_name = self.config.get('system', {}).get('platform', 'differential')
-        self.platform_config = PLATFORM_CONFIG.get(platform_name, PLATFORM_CONFIG['differential'])
+        # Copy to allow override without polluting global config
+        self.platform_config = PLATFORM_CONFIG.get(platform_name, PLATFORM_CONFIG['differential']).copy()
+        
+        # Allow overriding output_frame from config (e.g. customized 'base_footprint')
+        # 优先从 transform 配置中读取，其次尝试 system (向后兼容)，最后默认
+        transform_config = self.config.get('transform', {})
+        system_config = self.config.get('system', {})
+        
+        user_output_frame = transform_config.get('output_frame') or system_config.get('output_frame')
+        
+        if user_output_frame:
+            self.platform_config['output_frame'] = user_output_frame
+            
         self.default_frame_id = self.platform_config.get('output_frame', 'base_link')
-        self.transform_target_frame = self.config.get('transform', {}).get('target_frame', 'odom')
+        self.transform_target_frame = transform_config.get('target_frame', 'odom')
         
         # 检查是否为无人机平台（使用 is_ground_vehicle 配置）
         self.is_quadrotor = not self.platform_config.get(
@@ -438,8 +450,21 @@ class ControllerManager:
         # 1. 时间管理
         actual_dt, skip_prediction = self._compute_time_step(current_time)
         
-        # 1.5 轨迹验证 (现在需要显式调用，因为去除了全局默认值)
-        trajectory.validate(self.trajectory_config)
+        # 1.1 同步 MPC Horizon (处理节流延迟)
+        self._sync_mpc_horizon()
+        
+        # 1.5 轨迹验证
+        if not trajectory.validate(self.trajectory_config) and len(trajectory.points) > 0:
+            # 严重: 轨迹验证失败 (e.g. 跳变检测)
+            logger.error("Trajectory validation failed (e.g. detected jump > max_point_distance). Ignoring unsafe trajectory.")
+            
+            # 优雅处理: 将轨迹视为空，触发安全停止或保持当前状态
+            # 创建一个空的副本以避免修改原始对象
+            trajectory = Trajectory(
+                header=trajectory.header,
+                points=np.zeros((0, 3), dtype=np.float64),
+                velocities=None
+            )
         
         # 2. 超时监控
         # 直接使用传入的 data_ages 进行检查
@@ -472,7 +497,7 @@ class ControllerManager:
         self._update_tracking_metrics(state, transformed_traj)
         
         # 10. 安全检查
-        cmd = self._apply_safety_check(state, cmd, diagnostics)
+        cmd = self._apply_safety_check(state, cmd, diagnostics, actual_dt)
         
         # 11. 状态机更新
         self._update_state_machine(diagnostics)
@@ -592,9 +617,18 @@ class ControllerManager:
             actual_dt = current_time - self._last_update_time
             
             if actual_dt > ekf_reset_threshold:
-                logger.warning(f"Long pause detected ({actual_dt:.2f}s), resetting EKF")
+                logger.warning(f"Long pause detected ({actual_dt:.2f}s), resetting EKF and controllers")
                 if self.state_estimator:
                     self.state_estimator.reset()
+                
+                # 同时重置其他有状态的组件，防止旧状态（如 last_cmd）影响恢复
+                if self.safety_monitor:
+                    self.safety_monitor.reset()
+                if self.mpc_tracker:
+                    self.mpc_tracker.reset()
+                if self.backup_tracker:
+                    self.backup_tracker.reset()
+                    
                 skip_prediction = True
                 actual_dt = self.dt
             elif actual_dt > long_pause_threshold:
@@ -609,6 +643,14 @@ class ControllerManager:
                     # 强制重置 EKF 到当前状态，避免巨大的 Innovation 导致发散
                     if self.state_estimator:
                         self.state_estimator.reset()
+                        
+                    # 同样重置其他组件
+                    if self.safety_monitor:
+                        self.safety_monitor.reset()
+                    if self.mpc_tracker:
+                        self.mpc_tracker.reset()
+                    if self.backup_tracker:
+                        self.backup_tracker.reset()
                     
                     # 标记跳过预测，actual_dt 设为正常帧率，让 estimator 重新锁定 odom
                     skip_prediction = True
@@ -619,7 +661,10 @@ class ControllerManager:
                         self.state_estimator.predict(self.dt)
                 actual_dt = actual_dt - (num_steps - 1) * self.dt
             
-            actual_dt = np.clip(actual_dt, 0.001, long_pause_threshold)
+            # 修复 Bug: 移除 1ms 的硬性下限钳位，避免在高速高频调用时人为制造巨大的加速度计算值
+            # 仅保留上限钳位用于处理暂停恢复，下限仅用于防除零 (1e-6)
+            actual_dt = min(actual_dt, long_pause_threshold)
+            actual_dt = max(actual_dt, 1e-6)
         else:
             actual_dt = self.dt
         
@@ -668,6 +713,18 @@ class ControllerManager:
         self._last_consistency = consistency
         return consistency
     
+    def _sync_mpc_horizon(self):
+        """
+        同步 MPC Horizon
+        
+        如果在状态切换期间 set_horizon 被节流，此方法会在 update 循环中
+        重试同步，确保底层求解器 Horizon 与管理器状态一致。
+        """
+        if self.mpc_tracker and self._current_horizon != self.mpc_tracker.horizon:
+            # 尝试同步 (set_horizon 内部有节流检查)
+            if self.mpc_tracker.set_horizon(self._current_horizon):
+                logger.info(f"MPC horizon synced to {self._current_horizon} (delayed)")
+
     def _transform_trajectory(self, trajectory: Trajectory, 
                               current_time: float) -> tuple:
         """
@@ -682,14 +739,19 @@ class ControllerManager:
         Returns:
             (transformed_traj, tf2_critical): 变换后轨迹和是否临界
         """
-        # 优化: 仅变换当前 Horizon 所需的轨迹片段，避免全量变换浪费算力
-        # MPC 需要 horizon 个点，预留一定的余量 (BUFFER) 以应对求解器可能的超前访问或 Lookahead
-        # Buffer set to 10 points
-        slice_len = self._current_horizon + 10
-        if len(trajectory.points) > slice_len:
+        # 优化: 仅变换所需轨迹片段，避免全量变换浪费算力
+        # Fix: 之前的 slice_len (Horizon + 10) 对于 Pure Pursuit 可能过短
+        # 增加切片长度以确保覆盖:
+        # 1. MPC Horizon (e.g. 20-50)
+        # 2. Pure Pursuit Lookahead (e.g. 3m @ 0.05m = 60 pts)
+        # 3. Solver Buffer
+        # 采用 max(Horizon * 4, 150) 作为保守且高效的阈值
+        safe_slice_len = max(self._current_horizon * 4, 150)
+        
+        if len(trajectory.points) > safe_slice_len:
              # 高性能切片: 使用 Trajectory.get_slice() 获取切片
              # 这不仅更高效（利用 Numpy View），而且更安全（自动复制所有字段）
-             traj_to_transform = trajectory.get_slice(0, slice_len)
+             traj_to_transform = trajectory.get_slice(0, safe_slice_len)
              
         else:
              traj_to_transform = trajectory
@@ -823,10 +885,10 @@ class ControllerManager:
                 vx=0, vy=0, vz=0, omega=0, frame_id=self.default_frame_id, success=False)
     
     def _apply_safety_check(self, state: np.ndarray, cmd: ControlOutput,
-                           diagnostics: DiagnosticsInput) -> ControlOutput:
+                           diagnostics: DiagnosticsInput, dt: float) -> ControlOutput:
         """应用安全检查"""
         if self.safety_monitor:
-            safety_decision = self.safety_monitor.check(state, cmd, diagnostics)
+            safety_decision = self.safety_monitor.check(state, cmd, diagnostics, dt)
             if not safety_decision.safe:
                 self._safety_failed = True
                 self._safety_check_passed = False

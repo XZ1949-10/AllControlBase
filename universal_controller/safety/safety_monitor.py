@@ -62,7 +62,8 @@ class BasicSafetyMonitor(ISafetyMonitor):
         self.min_dt_for_accel = MIN_DT_FOR_ACCEL
         
         self._last_cmd: Optional[ControlOutput] = None
-        self._last_time: Optional[float] = None
+        # _last_time removed as we now use external dt
+
         # 使用配置的 is_ground_vehicle，默认根据平台类型判断
         self.is_3d = not platform_config.get(
             'is_ground_vehicle', 
@@ -187,18 +188,20 @@ class BasicSafetyMonitor(ISafetyMonitor):
         return self._filter_warmup_count >= self._filter_warmup_period
     
     def check(self, state: np.ndarray, cmd: ControlOutput,
-              diagnostics: DiagnosticsInput) -> SafetyDecision:
+              diagnostics: DiagnosticsInput, dt: float) -> SafetyDecision:
         """检查控制命令安全性
-
+        
+        Args:
+            state: 当前状态
+            cmd: 待检查的命令
+            diagnostics: 诊断输入
+            dt: 时间步长（由 ControllerManager 传入，确保时间基准一致）
+        
         安全检查流程:
         1. 检查命令值是否为 NaN/Inf (安全关键)
         2. 检查速度限制 (水平、垂直、角速度)
         3. 检查加速度限制 (使用滤波后的加速度估计)
         4. 如果违规，使用 emergency_decel 限制减速度
-
-        emergency_decel 使用说明:
-        - 当检测到安全违规时，限制命令的变化率不超过 emergency_decel
-        - 这确保了即使在紧急情况下，机器人也能平滑减速而非急停
         """
         diag = diagnostics
 
@@ -225,7 +228,8 @@ class BasicSafetyMonitor(ISafetyMonitor):
             # 更新内部状态，确保下次加速度计算正确
             # 使用零命令作为 last_cmd，避免 NaN 传播
             self._last_cmd = zero_cmd.copy()
-            self._last_time = get_monotonic_time()
+            # self._last_time update removed
+
             return SafetyDecision(
                 safe=False,
                 new_state=ControllerState.MPC_DEGRADED,
@@ -255,10 +259,11 @@ class BasicSafetyMonitor(ISafetyMonitor):
             limited_cmd.omega = np.clip(cmd.omega, -self.omega_max, self.omega_max)
             needs_limiting = True
         
-        # 检查加速度 (使用单调时钟避免时间跳变)
-        current_time = get_monotonic_time()
-        if self._last_cmd is not None and self._last_time is not None:
-            dt = current_time - self._last_time
+        # 检查加速度 (使用传入的 dt，避免时间源不一致)
+        # current_time = get_monotonic_time() # Removed internal time
+        if self._last_cmd is not None:
+             # dt is passed in argument
+
             
             # 初始化加速度值为 0 或上次的值
             ax, ay, az, alpha = 0.0, 0.0, 0.0, 0.0
@@ -273,7 +278,13 @@ class BasicSafetyMonitor(ISafetyMonitor):
             # 2. 过小 (< min): 不更新滤波器（防止除零/噪声），但使用上次的值进行检查 (Zero-Order Hold)
             # 3. 过大 (> max): 可能是暂停或丢帧。不更新滤波器（防止极小加速度产生误导），也不检查（数据不可靠）
             
-            if self.min_dt_for_accel <= dt <= self.max_dt_for_accel:
+            # 策略优化:
+            # 1. 正常范围 (dt >= min): 计算真实加速度并检查
+            # 2. 过小 (dt < min): 可能是 Jitter 或离散更新。不计算加速度（数值不稳定），
+            #    改为检查"速度跳变" (Velocity Jump)。如果 dv 超过了允许的瞬时突变量，则视为不安全。
+            # 3. 过大 (dt > max): 可能是暂停或丢帧。不进行检查，但重置滤波器，避免历史数据污染
+            
+            if dt >= self.min_dt_for_accel and dt <= self.max_dt_for_accel:
                 # 正常计算
                 raw_ax = (cmd.vx - self._last_cmd.vx) / dt
                 raw_ay = (cmd.vy - self._last_cmd.vy) / dt
@@ -287,12 +298,52 @@ class BasicSafetyMonitor(ISafetyMonitor):
                 should_check_accel = True
                 
             elif dt < self.min_dt_for_accel:
-                # dt 过小，沿用上次的加速度值进行检查
-                should_check_accel = True
+                # dt 过小 (Jitter/High-freq update)
+                # 风险: 直接计算 a = dv/dt 会导致误报 (False Positive)
+                # 风险: 如果沿用上次加速度，会漏报巨大的阶跃 (False Negative) - "Old Value Reuse" Bug
+                # 解决方案: 检查速度增量 dv 是否超过 "最大允许跳变"
+                # 最大允许跳变 = a_max * (min_dt_for_accel 或 一个合理的最小控制周期)
+                # 这里我们使用 min_dt_for_accel 作为参考时间尺度
+                
+                # 计算速度增量范数
+                dvx = cmd.vx - self._last_cmd.vx
+                dvy = cmd.vy - self._last_cmd.vy
+                dv_horiz = np.sqrt(dvx**2 + dvy**2)
+                
+                # 允许的跳变阈值 (放宽一点裕度，防止临界值误触)
+                # 逻辑: 即使在极短时间内，速度变化也不应超过机器人全速加速 min_dt 既然的变化量
+                # 使用 safety margins 放大一点
+                jump_limit_horiz = self.a_max * self.min_dt_for_accel * 1.5
+                
+                if dv_horiz > jump_limit_horiz and dv_horiz > EPSILON:
+                     reasons.append(f"Velocity jump detected (dt={dt*1000:.2f}ms): dv={dv_horiz:.2f} > limit {jump_limit_horiz:.2f}")
+                     # 限制速度跳变
+                     scale = jump_limit_horiz / dv_horiz
+                     limited_cmd.vx = self._last_cmd.vx + dvx * scale
+                     limited_cmd.vy = self._last_cmd.vy + dvy * scale
+                     needs_limiting = True
+                
+                # 角速度跳变检查
+                domega = abs(cmd.omega - self._last_cmd.omega)
+                jump_limit_omega = self.alpha_max * self.min_dt_for_accel * 1.5
+                
+                if domega > jump_limit_omega:
+                    reasons.append(f"Omega jump detected: domega={domega:.2f} > limit {jump_limit_omega:.2f}")
+                    limited_cmd.omega = self._last_cmd.omega + np.sign(cmd.omega - self._last_cmd.omega) * jump_limit_omega
+                    needs_limiting = True
+
+                # 对于极小 dt，我们不更新滤波器（避免数值污染），也不进行常规加速度检查
+                should_check_accel = False
             
             else:
                 # dt 过大，重置或跳过
-                logger.debug(f"dt too large ({dt:.3f}s), skipping accel check")
+                logger.debug(f"dt too large ({dt:.3f}s), skipping accel check and resetting filter")
+                # 重置滤波器以防下次使用过时的历史数据
+                self._accel_history_x.clear()
+                self._accel_history_y.clear()
+                self._accel_history_z.clear()
+                self._alpha_history.clear()
+                self._filtered_ax = None # 标记为重新初始化
                 should_check_accel = False
 
             if should_check_accel:
@@ -350,7 +401,8 @@ class BasicSafetyMonitor(ISafetyMonitor):
                     needs_limiting = True
         
         self._last_cmd = limited_cmd.copy() if needs_limiting else cmd.copy()
-        self._last_time = current_time
+        # self._last_time = current_time # Removed
+
         
         # 根据当前状态决定建议的新状态
         # 如果已经在 BACKUP_ACTIVE，不建议转换到 MPC_DEGRADED
@@ -430,7 +482,8 @@ class BasicSafetyMonitor(ISafetyMonitor):
     
     def reset(self) -> None:
         self._last_cmd = None
-        self._last_time = None
+        # self._last_time = None # Removed
+
         self._accel_history_x.clear()
         self._accel_history_y.clear()
         self._accel_history_z.clear()

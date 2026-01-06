@@ -96,6 +96,9 @@ class ControllerBridge(LifecycleMixin):
         ctrl_freq = config.get('system', {}).get('ctrl_freq', 50.0)
         self._expected_period = 1.0 / ctrl_freq if ctrl_freq > 0 else 0.02
         self._freq_warn_threshold = 1.5  # 允许 50% 的抖动
+        
+        # 预热阈值: 至少 1 秒或 50 帧，避免启动初期的瞬态抖动误报
+        self._warmup_threshold = max(50, int(1.0 / self._expected_period))
 
     # ==================== LifecycleMixin 实现 ====================
     
@@ -113,6 +116,7 @@ class ControllerBridge(LifecycleMixin):
         
         self._manager = ControllerManager(self._config)
         self._manager.initialize_default_components()
+        self._warmup_counter = 0
         logger.info(f"Controller bridge initialized (expected rate: {1.0/self._expected_period:.1f}Hz)")
         return True
     
@@ -130,6 +134,7 @@ class ControllerBridge(LifecycleMixin):
     def _do_reset(self) -> None:
         """重置控制器状态"""
         self._last_ros_time = 0.0
+        self._warmup_counter = 0
         if self._manager is not None:
             self._manager.reset()
             logger.info("Controller bridge reset")
@@ -184,7 +189,10 @@ class ControllerBridge(LifecycleMixin):
             # 注意: 如果仿真暂停，dt_ros 为 0，不应触发警告
             # 如果仿真变慢 (e.g. 0.1x)，dt_ros 仍然是 0.02s (Sim Time)，不会触发警告 -> 正确行为
             # 如果计算过慢导致丢帧 (Overrun)，dt_ros 会变成 0.04s, 0.06s -> 触发警告 -> 正确行为
-            elif dt_ros > self._expected_period * self._freq_warn_threshold and dt_ros < 2.0:
+            # 增加 warmup 检查，跳过启动初期的不稳定阶段
+            elif (self._warmup_counter > self._warmup_threshold and 
+                  dt_ros > self._expected_period * self._freq_warn_threshold and 
+                  dt_ros < 2.0):
                  logger.warning(
                     f"Control loop jitter detected (ROS Time): {1.0/dt_ros:.1f}Hz "
                     f"(expected {1.0/self._expected_period:.1f}Hz, dt={dt_ros*1000:.1f}ms)"
@@ -192,6 +200,7 @@ class ControllerBridge(LifecycleMixin):
         
         # 不要使用 time.monotonic()，它无法感知仿真速率
         self._last_ros_time = current_time
+        self._warmup_counter += 1
         
         return self._manager.update(current_time, odom, trajectory, data_ages, imu)
     

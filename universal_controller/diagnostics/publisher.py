@@ -72,8 +72,9 @@ class DiagnosticsPublisher:
         self._min_interval = 1.0 / publish_rate if publish_rate > 0 else 0.0
         self._last_publish_time = 0.0
         
-        # 复用诊断对象以减少 GC
-        self._diagnostics_v2 = DiagnosticsV2()
+        # 之前使用对象复用 (Object Pooling) 导致了脏读风险
+        # 现在每次发布都创建新对象，以确保线程安全和数据的不可变性
+        # Python 的 GC 对这种小对象的处理非常高效，性能影响可忽略不计
     
     def add_callback(self, callback: Callable[['DiagnosticsV2'], None]) -> None:
         """
@@ -216,8 +217,8 @@ class DiagnosticsPublisher:
                           emergency_stop: bool = False,
                           tracking_quality: Optional[Dict[str, Any]] = None) -> DiagnosticsV2:
         """构建 DiagnosticsV2 消息"""
-        """构建 DiagnosticsV2 消息 (复用对象)"""
-        d = self._diagnostics_v2
+        """构建 DiagnosticsV2 消息"""
+        d = DiagnosticsV2()
         
         # Header
         d.header.stamp = current_time
