@@ -252,6 +252,9 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self._temp_K_4 = np.zeros((11, 4))         # K
         self._temp_K_y_4 = np.zeros(11)            # K @ y
         self._temp_K_S_4 = np.zeros((11, 4))       # K @ S
+        
+        # 对称化操作 Buffer (用于 _ensure_positive_definite)
+        self._temp_P_sym = np.zeros((11, 11))      # P.T 拷贝
 
     # _acquire_lock 和 _release_lock 现在是动态分配的，移除默认实现
     # def _acquire_lock(self): ...
@@ -1048,15 +1051,20 @@ class AdaptiveEKFEstimator(IStateEstimator):
         """确保协方差矩阵正定
         
         优化策略:
-        1. 首先强制对称性（低成本操作）
+        1. 首先强制对称性（使用预分配缓冲区避免临时分配）
         2. 尝试 Cholesky 分解检测正定性（比特征值分解快）
         3. 只有在 Cholesky 失败时才进行特征值分解修复
         
         这种分层策略在正常情况下避免了昂贵的特征值分解，
         只在协方差矩阵出现问题时才进行完整修复。
         """
-        # 强制对称性（低成本操作，总是执行）
-        self.P = (self.P + self.P.T) / 2
+        # 强制对称性（零分配版本）
+        # 注意: self.P 和 self.P.T 是同一内存的重叠视图，
+        # 直接 np.add(self.P, self.P.T, out=self.P) 会导致数据竞争
+        # 因此需要使用预分配的临时缓冲区
+        np.copyto(self._temp_P_sym, self.P.T)      # 复制转置到临时缓冲区
+        np.add(self.P, self._temp_P_sym, out=self.P)  # P = P + P^T
+        self.P *= 0.5                              # P = P / 2
         
         # 尝试 Cholesky 分解检测正定性
         # Cholesky 分解比特征值分解快约 3 倍
