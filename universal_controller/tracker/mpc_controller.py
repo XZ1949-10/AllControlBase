@@ -64,6 +64,9 @@ class MPCController(ITrajectoryTracker):
         self.vz_max = constraints.get('vz_max', 2.0)
         self.alpha_max = constraints.get('alpha_max', 3.0)
         
+        # 非完整约束 (Ackermann)
+        self.max_curvature = constraints.get('max_curvature', 10.0) # 默认为较大值(10m^-1 => r=0.1m) 或从 min_turning_radius 计算
+        
         if self.omega_max <= 0:
             raise ValueError(f"omega_max must be > 0, got {self.omega_max}")
         
@@ -108,7 +111,8 @@ class MPCController(ITrajectoryTracker):
         # 注意: 如果不同 Horizon 共用同一个基础名，会导致文件冲突
         pid = os.getpid()
         # 加入 id(self) 以区分同一进程内的不同实例 (如多机器人仿真)
-        self._model_name_base = f"mpc_model_pid{pid}_id{id(self)}"
+        # 加入 platform_type 以区分生成代码 (Ackermann vs Diff)
+        self._model_name_base = f"mpc_model_pid{pid}_id{id(self)}_{self.platform_type.name}"
         
         # 预先检查 ACADOS 库是否存在，避免频繁编译
         self._solver_lib_path = {}
@@ -249,6 +253,21 @@ class MPCController(ITrajectoryTracker):
             xdot_expr[MPCStateIdx.OMEGA] = alpha
             
             xdot = ca.vertcat(*xdot_expr)
+            
+            # 阿克曼/非完整约束检查
+            if not self.can_rotate_in_place:
+                # 添加非完整约束: omega^2 <= (vx * max_curvature)^2
+                # 这强制要求: 如果 vx=0，则 omega=0
+                # 且 |omega| <= |vx| * k_max
+                
+                # 定义约束表达式 h(x, u)
+                # constraint: omega^2 - (v_forward * max_curvature)^2 <= 0
+                # Fix: 使用 v_forward (机体纵向速度) 而非 vx (世界坐标系速度)
+                # v_forward 在上方已定义: vx * cos(theta) + vy * sin(theta)
+                constraint_h = omega**2 - (v_forward * self.max_curvature)**2
+                
+                # 添加到模型
+                model.con_h_expr = constraint_h
         
         model.x = x
         model.u = u
@@ -302,6 +321,16 @@ class MPCController(ITrajectoryTracker):
                                        self.v_max, self.v_max, self.vz_max,
                                        ACADOS_INF, self.omega_max])
         ocp.constraints.idxbx = np.array([0, 1, 2, 3, 4, 5, 6, 7])
+        
+        # 针对阿克曼模型的非完整约束设置
+        if not self.can_rotate_in_place:
+            # h constraints
+            # model.con_h_expr 已经设置
+            ocp.dims.nh = 1
+            # lh <= h(x) <= uh
+            # -Inf <= omega^2 - (vx*k)^2 <= 0
+            ocp.constraints.lh = np.array([-ACADOS_INF])
+            ocp.constraints.uh = np.array([0.0])
         ocp.constraints.x0 = np.zeros(8)
         ocp.parameter_values = np.zeros(7)
         
@@ -656,6 +685,12 @@ class MPCController(ITrajectoryTracker):
         
         try:
             result = self._solve_with_acados(state, trajectory, consistency)
+
+            # Centralized Velocity Smoothing
+            # Limits acceleration/jerk using the shared VelocitySmoother
+            # This applies to both successful and failed (zero-vel) solver outputs
+            result = self._velocity_smoother.smooth(result, self._last_cmd)
+
             result.solve_time_ms = (time.time() - start_time) * 1000
             self._last_solve_time_ms = result.solve_time_ms
             self._last_cmd = result

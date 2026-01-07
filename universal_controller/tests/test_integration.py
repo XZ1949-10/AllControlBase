@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from universal_controller.core.data_types import (
-    Trajectory, ControlOutput, Point3D, Header, Odometry, Imu
+    Trajectory, ControlOutput, Point3D, Header, Odometry, Imu, DiagnosticsV2
 )
 from universal_controller.core.enums import ControllerState
 from universal_controller.config.default_config import DEFAULT_CONFIG, PLATFORM_CONFIG
@@ -95,10 +95,14 @@ def test_diagnostics_publish():
     # 验证诊断数据已发布（通过 get_last_published_diagnostics 获取）
     last_diag = manager.get_last_published_diagnostics()
     assert last_diag is not None
-    assert isinstance(last_diag, dict)
-    assert 'state' in last_diag
-    assert 'mpc_success' in last_diag
-    assert 'timeout' in last_diag
+    assert isinstance(last_diag, DiagnosticsV2)
+    
+    # 转换为字典以便验证
+    diag_dict = last_diag.to_ros_msg()
+    assert isinstance(diag_dict, dict)
+    assert 'state' in diag_dict
+    assert 'mpc_success' in diag_dict
+    assert 'timeout' in diag_dict
     
     print("✓ test_diagnostics_publish passed")
 

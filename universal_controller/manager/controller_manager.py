@@ -689,7 +689,11 @@ class ControllerManager:
             if not skip_prediction:
                 self.state_estimator.predict(actual_dt)
             
-            self.state_estimator.update_odom(odom, current_time)
+            # Fix: 防止陈旧的 Odom 数据被注入 EKF
+            # 只有在 Odom 数据未超时的情况下才进行更新
+            # 如果超时，EKF 将只依靠 predict (且可能被 skip_prediction 限制)
+            if not timeout_status.odom_timeout:
+                self.state_estimator.update_odom(odom, current_time)
             
             if timeout_status.imu_timeout:
                 self.state_estimator.set_imu_available(False)

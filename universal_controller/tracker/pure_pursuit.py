@@ -334,6 +334,49 @@ class PurePursuitController(ITrajectoryTracker):
         
         包含滞后 (Hysteresis) 和转向记忆逻辑。
         """
+        # Critical Fix: 阿克曼车型无法原地转向
+        if not self.can_rotate_in_place:
+            # 如果目标在后方且无法原地转向，尝试倒车策略 (Reversing Pure Pursuit)
+            # 策略:
+            # 1. 视为车尾向且可以转向的车辆
+            # 2. 计算基于车尾的 Pure Pursuit 曲率
+            # 3. 输出负速度 (限制在 vx_min)
+            
+            # 使用倒车限制速度
+            reverse_speed_limit = max(0.0, -self.vx_min) if self.vx_min < 0 else self.v_max * 0.5
+            target_v_reverse = min(target_v, reverse_speed_limit)
+            
+            # 计算倒车曲率
+            # 几何上，倒车去追后方的点 (local_x < 0)，等价于前进追前方镜像点 (local_x > 0) 的反向运动
+            # 对于后方点 (local_x < 0)，local_y > 0 (左后)
+            # 我们希望车尾向左转 -> 方向盘左打 -> 前进时是逆时针(omega>0) -> 倒车时车头扫过角度是顺时针?
+            # 验证: 
+            # 目标在 (-1, 1). 曲率 k = 2*y/L^2 = 2*1/2 = 1.
+            # 期望: 倒车，方向盘左打. 
+            # 运动学: omega = v * k. v < 0. k > 0. -> omega < 0.
+            # 物理含义: 左打方向倒车，车头向右偏 (顺时针，omega < 0). 
+            # 结论: 标准 PP 公式直接适用，只需反转速度符号即可.
+            
+            L_sq = dx**2 + dy**2
+            if L_sq > EPSILON:
+                curvature = 2.0 * local_y / L_sq
+                curvature = np.clip(curvature, -self.max_curvature, self.max_curvature)
+            else:
+                curvature = 0.0
+                
+            # 计算指令
+            cmd_vx = -target_v_reverse
+            cmd_omega = cmd_vx * curvature
+            
+            # 限制角速度
+            cmd_omega = np.clip(cmd_omega, -omega_limit, omega_limit)
+            
+            return ControlOutput(
+                vx=cmd_vx, vy=0.0, vz=0.0, omega=cmd_omega,
+                frame_id=self.output_frame, 
+                success=True
+            )
+
         target_heading = np.arctan2(dy, dx)
         heading_error = angle_difference(target_heading, theta)
         abs_heading_error = abs(heading_error)

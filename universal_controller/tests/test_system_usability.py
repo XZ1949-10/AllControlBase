@@ -17,7 +17,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from universal_controller.core.data_types import (
-    Trajectory, ControlOutput, Point3D, Header, Odometry, Imu
+    Trajectory, ControlOutput, Point3D, Header, Odometry, Imu, DiagnosticsV2
 )
 from universal_controller.core.enums import ControllerState, PlatformType
 from universal_controller.core.diagnostics_input import DiagnosticsInput
@@ -64,9 +64,12 @@ def test_end_to_end_control_loop():
             soft_enabled=True
         )
         # 偏移轨迹到当前位置
-        for pt in trajectory.points:
-            pt.x += x
-            pt.y += y
+        # 偏移轨迹到当前位置
+        # 注意: points 是只读的 numpy 数组，需要创建副本修改后重新赋值
+        new_points = trajectory.points.copy()
+        new_points[:, 0] += x
+        new_points[:, 1] += y
+        trajectory.points = new_points
         
         # 创建 IMU
         imu = create_test_imu()
@@ -131,10 +134,10 @@ def test_trajectory_tracking_accuracy():
         
         # 计算到轨迹的距离
         if len(trajectory.points) > 0:
-            min_dist = float('inf')
-            for pt in trajectory.points:
-                dist = np.sqrt((pt.x - x)**2 + (pt.y - y)**2)
-                min_dist = min(min_dist, dist)
+            # 使用 numpy 向量化计算距离
+            diffs = trajectory.points[:, :2] - np.array([x, y])
+            dists = np.linalg.norm(diffs, axis=1)
+            min_dist = np.min(dists)
             position_errors.append(min_dist)
         
         # 更新位置
@@ -478,9 +481,14 @@ def test_diagnostics_completeness():
     manager.update(time.time(), odom, trajectory, {'odom': 0.0, 'trajectory': 0.0, 'imu': 0.0})
     
     # 获取诊断信息
-    diag = manager.get_last_published_diagnostics()
+    diag_obj = manager.get_last_published_diagnostics()
     
-    assert diag is not None, "Diagnostics should not be None"
+    assert diag_obj is not None, "Diagnostics should not be None"
+    assert isinstance(diag_obj, DiagnosticsV2)
+    
+    # 转换为字典以便验证
+    diag = diag_obj.to_ros_msg()
+    assert isinstance(diag, dict)
     
     # 验证关键字段存在
     required_fields = ['state', 'mpc_success', 'timeout', 'consistency', 'cmd']
@@ -514,8 +522,11 @@ def test_diagnostics_callback():
     odom = create_test_odom(vx=1.0)
     trajectory = create_test_trajectory()
     
-    for _ in range(5):
-        manager.update(time.time(), odom, trajectory, {'odom': 0.0, 'trajectory': 0.0, 'imu': 0.0})
+    start_time = time.time()
+    for i in range(5):
+        # 模拟时间流逝以通过诊断发布器的节流控制 (默认 10Hz = 0.1s)
+        current_time = start_time + i * 0.15
+        manager.update(current_time, odom, trajectory, {'odom': 0.0, 'trajectory': 0.0, 'imu': 0.0})
     
     # 验证回调被调用
     assert len(callback_data) >= 5, f"Callback should be called at least 5 times, got {len(callback_data)}"

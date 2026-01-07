@@ -211,11 +211,14 @@ def test_trajectory_copy():
     copied = original.copy()
     
     # 修改原始对象
-    original.points[0].x = 100
+    # 修改原始对象
+    # 注意：points 默认是只读的，需要先解锁才能修改以验证深拷贝
+    original.points.flags.writeable = True
+    original.points[0, 0] = 100.0
     original.velocities[0, 0] = 100
     
     # 验证拷贝不受影响
-    assert copied.points[0].x == 0
+    assert copied.points[0, 0] == 0.0
     assert copied.velocities[0, 0] == 1.0
     
     print("✓ test_trajectory_copy passed")

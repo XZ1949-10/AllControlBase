@@ -42,7 +42,7 @@ def test_adaptive_ekf():
     
     # 测试 odom 更新
     odom = create_test_odom(x=1.0, y=0.5, vx=1.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     state = ekf.get_state()
     assert state.state[0] != 0  # 位置已更新
     
@@ -337,12 +337,12 @@ def test_safety_monitor():
     # 正常命令
     cmd = ControlOutput(vx=1.0, vy=0.0, vz=0.0, omega=0.5, frame_id="base_link")
     diagnostics = DiagnosticsInput()  # 使用默认值
-    decision = monitor.check(state, cmd, diagnostics)
+    decision = monitor.check(state, cmd, diagnostics, 0.1)
     assert decision.safe == True
     
     # 超限命令
     cmd_over = ControlOutput(vx=10.0, vy=0.0, vz=0.0, omega=0.5, frame_id="base_link")
-    decision_over = monitor.check(state, cmd_over, diagnostics)
+    decision_over = monitor.check(state, cmd_over, diagnostics, 0.1)
     assert decision_over.safe == False
     assert decision_over.limited_cmd is not None
     
@@ -352,7 +352,7 @@ def test_safety_monitor():
         frame_id="base_link",
         health_metrics={'test': 123}
     )
-    decision_metrics = monitor.check(state, cmd_with_metrics, diagnostics)
+    decision_metrics = monitor.check(state, cmd_with_metrics, diagnostics, 0.1)
     if decision_metrics.limited_cmd:
         assert 'test' in decision_metrics.limited_cmd.health_metrics
     

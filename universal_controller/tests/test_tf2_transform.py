@@ -144,7 +144,7 @@ def test_tf2_recovery_correction():
         twist_linear=(0.5, 0.0, 0.0),
         twist_angular=(0, 0, 0)
     )
-    estimator.update_odom(odom)
+    estimator.update_odom(odom, time.time())
     
     # 降级状态
     fallback_state = estimator.get_state()

@@ -266,7 +266,7 @@ def test_fallback_mode():
     
     # 设置估计器状态
     odom = create_test_odom(x=1.0, y=2.0, theta=0.5, vx=1.0)
-    estimator.update_odom(odom)
+    estimator.update_odom(odom, 0.0)
     
     # transformer.set_state_estimator(estimator) -> Removed
     fallback_state = estimator.get_state()

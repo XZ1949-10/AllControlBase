@@ -46,7 +46,7 @@ class TestEstimatorToController:
         ekf = AdaptiveEKFEstimator(config)
         
         odom = create_test_odom(x=1.0, y=2.0, vx=0.5, omega=0.1)
-        ekf.update_odom(odom)
+        ekf.update_odom(odom, 0.0)
         
         state_output = ekf.get_state()
         
@@ -67,7 +67,7 @@ class TestEstimatorToController:
         
         # 更新估计器
         odom = create_test_odom(x=0.0, y=0.0, vx=0.5)
-        ekf.update_odom(odom)
+        ekf.update_odom(odom, 0.0)
         state_output = ekf.get_state()
         
         # 创建轨迹
@@ -92,12 +92,12 @@ class TestEstimatorToController:
         
         # 先更新 odom
         odom = create_test_odom(x=0.0, y=0.0, vx=0.5)
-        ekf.update_odom(odom)
+        ekf.update_odom(odom, 0.0)
         
         # 设置 IMU 可用并更新
         ekf.set_imu_available(True)
         imu = create_test_imu(angular_velocity=(0.0, 0.0, 0.2))
-        ekf.update_imu(imu)
+        ekf.update_imu(imu, 0.0)
         
         state_output = ekf.get_state()
         assert state_output.imu_available
@@ -186,7 +186,7 @@ class TestSafetyToStateMachine:
         cmd = ControlOutput(vx=100.0, vy=0.0, vz=0.0, omega=50.0, frame_id="base_link")
         diagnostics = DiagnosticsInput()
         
-        decision = monitor.check(state, cmd, diagnostics)
+        decision = monitor.check(state, cmd, diagnostics, 0.1)
         
         assert not decision.safe
         assert decision.limited_cmd is not None
@@ -385,7 +385,7 @@ class TestEndToEndDataFlow:
         
         # 1. 状态估计
         odom = create_test_odom(x=0.0, y=0.0, vx=0.5)
-        ekf.update_odom(odom)
+        ekf.update_odom(odom, 0.0)
         state_output = ekf.get_state()
         
         # 2. 轨迹和一致性检查
@@ -410,7 +410,7 @@ class TestEndToEndDataFlow:
             vz=state_output.state[5],
         )
         
-        safety_decision = safety_monitor.check(state_output.state, cmd, diagnostics)
+        safety_decision = safety_monitor.check(state_output.state, cmd, diagnostics, 0.1)
         
         # 5. 状态机更新
         new_state = sm.update(diagnostics)

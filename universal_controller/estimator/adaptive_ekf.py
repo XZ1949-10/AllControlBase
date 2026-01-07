@@ -177,9 +177,11 @@ class AdaptiveEKFEstimator(IStateEstimator):
         self.last_body_velocity = np.zeros(2)
         self.current_body_velocity = np.zeros(2)
         self._raw_odom_twist_norm = 0.0
+        self._raw_odom_angular_velocity = 0.0  # 新增: 确保在 reset 前也有定义
         self.last_odom_time: Optional[float] = None
         self.body_accel_vec = np.zeros(2) # Derived from Odom
         self._body_accel_initialized = False
+        self._initialized = False
         
         self.last_imu_time: Optional[float] = None
         self._imu_available = True
@@ -346,6 +348,11 @@ class AdaptiveEKFEstimator(IStateEstimator):
 
             # 1. 先在当前状态上计算 Jacobian (预测前的状态)
             # 使用 StateIdx 访问状态
+            
+            # Fix: 如果尚未初始化，不进行预测，防止基于全零状态的发散
+            if not self._initialized:
+                return
+
             theta_before = self.x[StateIdx.YAW]
             omega_before = self.x[StateIdx.YAW_RATE]
             vx_before = self.x[StateIdx.VX]
@@ -424,6 +431,39 @@ class AdaptiveEKFEstimator(IStateEstimator):
                 odom.pose_position.y,
                 odom.pose_position.z
             ])
+
+            # ------------------------------------------------------------------
+            # 初始化逻辑: 如果是 Reset 后的第一帧，直接硬初始化状态
+            # 避免 "Zero State" 与 "Actual Position" 之间的巨大差异触发跳变检测 (Phantom Jump)
+            # ------------------------------------------------------------------
+            if not self._initialized:
+                self.x[StateIdx.X] = new_position[0]
+                self.x[StateIdx.Y] = new_position[1]
+                self.x[StateIdx.Z] = new_position[2]
+                
+                _, _, yaw = euler_from_quaternion(odom.pose_orientation)
+                self.x[StateIdx.YAW] = normalize_angle(yaw)
+                self.x[StateIdx.YAW_RATE] = odom.twist_angular[2]
+                
+                vx_b, vy_b = odom.twist_linear[0], odom.twist_linear[1]
+                c, s = np.cos(yaw), np.sin(yaw)
+                self.x[StateIdx.VX] = vx_b * c - vy_b * s
+                self.x[StateIdx.VY] = vx_b * s + vy_b * c
+                self.x[StateIdx.VZ] = odom.twist_linear[2]
+
+                self.last_position = new_position
+                self.position_jump = 0.0
+                
+                # 初始化缓存变量，防止虚假打滑
+                self.current_body_velocity[0] = vx_b
+                self.current_body_velocity[1] = vy_b
+                self.last_body_velocity[:] = self.current_body_velocity
+                self.last_odom_time = current_time
+                
+                self._initialized = True
+                logger.info(f"EKF state hard-initialized from Odom at {current_time:.3f}s")
+                return
+
             self.position_jump = np.linalg.norm(new_position - self.last_position)
             self.last_position = new_position
 
@@ -435,6 +475,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
 
             # 从 odom 获取角速度 (z 轴)
             omega_z = odom.twist_angular[2]
+            self._raw_odom_angular_velocity = omega_z
 
             # 从 odom 四元数提取航向角
             _, _, odom_yaw = euler_from_quaternion(odom.pose_orientation)
@@ -457,8 +498,13 @@ class AdaptiveEKFEstimator(IStateEstimator):
             # 打滑检测专用: 计算 Body Frame 下的加速度
             # a_body = dv_body/dt + omega x v_body
             # ------------------------------------------------------------------
-            self.last_body_velocity = self.current_body_velocity.copy()
-            self.current_body_velocity = np.array([vx_body, vy_body])
+            # ------------------------------------------------------------------
+            # 打滑检测专用: 计算 Body Frame 下的加速度
+            # a_body = dv_body/dt + omega x v_body
+            # ------------------------------------------------------------------
+            self.last_body_velocity[:] = self.current_body_velocity
+            self.current_body_velocity[0] = vx_body
+            self.current_body_velocity[1] = vy_body
             
             if self.last_odom_time is not None:
                 dt_odom = current_time - self.last_odom_time
@@ -492,6 +538,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
             # 转换到世界系用于 EKF 更新 (观测方程 z = Hx, x 是世界系状态)
             vx_world = vx_body * cos_theta - vy_body * sin_theta
             vy_world = vx_body * sin_theta + vy_body * cos_theta
+            vz_world = vz_body
 
             self.last_odom_time = current_time
             self._update_odom_covariance(v_body)
@@ -695,33 +742,39 @@ class AdaptiveEKFEstimator(IStateEstimator):
         # a_true_body = a_measured - g_measured - bias
         ax_body_true = imu.linear_acceleration[0] - g_measured_x - self.x[StateIdx.ACCEL_BIAS_X]
         ay_body_true = imu.linear_acceleration[1] - g_measured_y - self.x[StateIdx.ACCEL_BIAS_Y]
+        az_body_true = imu.linear_acceleration[2] - g_measured_z - self.x[StateIdx.ACCEL_BIAS_Z]
         
         # 将真实加速度转换到世界坐标系
         # 修复: 使用完整的四元数进行 3D 旋转，以支持无人机 (Quadrotor) 或倾斜地形
         # 之前的实现假设 Roll/Pitch ~ 0，这会导致 3D 平台下的严重偏差
         
-        # 提取四元数 (x, y, z, w)
-        qx = imu.orientation[0]
-        qy = imu.orientation[1]
-        qz = imu.orientation[2]
-        qw = imu.orientation[3]
+        # 优化: 使用显式代数运算代替 NumPy 数组分配和 np.cross，显著减少高频 IMU 更新的开销
         
-        # 使用高性能 NumPy 实现向量旋转: v' = v + 2*cross(q_xyz, cross(q_xyz, v) + q_w*v)
-        # 避免引入 scipy 依赖
-        xyz = np.array([qx, qy, qz])
-        v = np.array([ax_body_true, ay_body_true, 0.0]) # 假设 Z 轴加速度已被重力抵消或不用于平面导航? 
-        # 注意: 如果是无人机，Z 轴加速度也很重要，但在 2D 导航 EKF 中通常忽略 vz。
-        # 即使只用 ax/ay，为了正确投影，必须带上 az 分量。
-        # imu.linear_acceleration[2] 包含重力。我们这里需要去除重力后的 Body Z 加速度
-        az_body_true = imu.linear_acceleration[2] - g_measured_z - self.x[StateIdx.ACCEL_BIAS_Z]
-        v[2] = az_body_true
-
-        t = 2 * np.cross(xyz, v)
-        v_prime = v + qw * t + np.cross(xyz, t)
+        # 提取四元数分量
+        qx, qy, qz, qw = imu.orientation[0], imu.orientation[1], imu.orientation[2], imu.orientation[3]
         
-        ax_world = v_prime[0]
-        ay_world = v_prime[1]
-        # az_world = v_prime[2] # 暂时未在状态向量中使用
+        # 目标向量 v = [ax_body, ay_body, az_body]
+        vx, vy, vz = ax_body_true, ay_body_true, az_body_true
+        
+        # 四元数旋转向量 v' = v + 2 * cross(q_xyz, cross(q_xyz, v) + qw * v)
+        # 展开计算以避免分配:
+        # t = 2 * cross(q_xyz, v)
+        # v' = v + qw * t + cross(q_xyz, t)
+        
+        # t = 2 * cross(q_xyz, v)
+        tx = 2.0 * (qy * vz - qz * vy)
+        ty = 2.0 * (qz * vx - qx * vz)
+        tz = 2.0 * (qx * vy - qy * vx)
+        
+        # v_prime = v + qw * t + cross(q_xyz, t)
+        # cross(q_xyz, t)
+        # cx = qy * tz - qz * ty
+        # cy = qz * tx - qx * tz
+        # cz = qx * ty - qy * tx
+        
+        ax_world = vx + qw * tx + (qy * tz - qz * ty)
+        ay_world = vy + qw * ty + (qz * tx - qx * tz)
+        # az_world = vz + qw * tz + (qx * ty - qy * tx)
         
         # 打滑检测：比较 IMU 测量的加速度 (Body Frame) 与 Odom 计算的加速度 (Body Frame)
         # 修正: 统一在 Body Frame 下进行比较，避免 Yaw 漂移 带来的虚假打滑报警
@@ -885,7 +938,7 @@ class AdaptiveEKFEstimator(IStateEstimator):
             # 这里用 numpy standard solve: K = solve(S, t_PHt.T).T
             # 分配不可避免: S_inv or intermediate
             K_trans = np.linalg.solve(S, t_PHt.T)
-            np.transpose(K_trans, out=t_K) # Store in t_K
+            t_K[:] = K_trans.T # Store in t_K
         except np.linalg.LinAlgError:
             # Fallback
             K_legacy = self.P @ H.T @ np.linalg.pinv(S)
@@ -1063,7 +1116,13 @@ class AdaptiveEKFEstimator(IStateEstimator):
 
         # Use raw odom velocity for drift detection to avoid circular dependency
         # If EKF is drifting, _is_stationary() (based on self.x) might return False, masking the drift.
-        is_physically_stationary = self._raw_odom_twist_norm < self.stationary_thresh
+        # Fix: Check both linear and angular velocity for stationarity to support in-place rotation
+        is_linear_stationary = self._raw_odom_twist_norm < self.stationary_thresh
+        is_angular_stationary = True
+        if hasattr(self, '_raw_odom_angular_velocity'):
+             is_angular_stationary = abs(self._raw_odom_angular_velocity) < self.stationary_thresh
+             
+        is_physically_stationary = is_linear_stationary and is_angular_stationary
         
         if is_physically_stationary and abs(self.gyro_z) > self.drift_thresh:
             anomalies.append("IMU_DRIFT")
@@ -1133,8 +1192,13 @@ class AdaptiveEKFEstimator(IStateEstimator):
         finally:
             self._release_lock()
 
-    def reset(self) -> None:
-        """重置估计器状态（线程安全）"""
+    def reset(self, initial_state: Optional[np.ndarray] = None) -> None:
+        """重置估计器状态（线程安全）
+        
+        Args:
+            initial_state: 可选的初始状态向量 (11维). 如果提供，将立即初始化为该状态;
+                          否则将重置为 False 等待第一次 Odom 更新.
+        """
         self._acquire_lock()
         try:
             self.x = np.zeros(11)
@@ -1151,8 +1215,15 @@ class AdaptiveEKFEstimator(IStateEstimator):
             self.last_body_velocity = np.zeros(2)
             self.current_body_velocity = np.zeros(2)
             self._raw_odom_twist_norm = 0.0  # 必须重置，否则 static check 可能失效
+            self._raw_odom_angular_velocity = 0.0 # Fix: 确保状态完全重置
             self.body_accel_vec = np.zeros(2)
             self._body_accel_initialized = False
+            
+            if initial_state is not None and len(initial_state) == 11:
+                self.x = initial_state.copy()
+                self._initialized = True
+            else:
+                self._initialized = False
             
             self.last_position = np.zeros(3)
             self.position_jump = 0.0

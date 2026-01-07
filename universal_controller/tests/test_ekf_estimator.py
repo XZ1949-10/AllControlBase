@@ -44,7 +44,7 @@ def test_ekf_predict():
     
     # 设置初始速度
     odom = create_test_odom(vx=1.0, vy=0.0, theta=0.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     state_before = ekf.get_state().state.copy()
     
@@ -68,7 +68,7 @@ def test_ekf_odom_update():
     
     # 更新里程计
     odom = create_test_odom(x=1.0, y=0.5, theta=0.1, vx=1.0, vy=0.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     state = ekf.get_state()
     
@@ -86,14 +86,14 @@ def test_ekf_imu_update():
     
     # 先更新里程计建立基准
     odom = create_test_odom(vx=1.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     # 更新 IMU
     imu = create_test_imu(
         angular_velocity=(0.0, 0.0, 0.5),  # 有角速度
         linear_acceleration=(0.5, 0.0, 9.81)  # 有加速度
     )
-    ekf.update_imu(imu)
+    ekf.update_imu(imu, 0.1)
     
     state = ekf.get_state()
     
@@ -110,11 +110,11 @@ def test_ekf_slip_detection():
     
     # 正常运动
     odom = create_test_odom(vx=1.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     # 模拟正常 IMU
     imu = create_test_imu(linear_acceleration=(0.0, 0.0, 9.81))
-    ekf.update_imu(imu)
+    ekf.update_imu(imu, 0.0)
     
     state = ekf.get_state()
     
@@ -131,7 +131,7 @@ def test_ekf_anomaly_detection():
     
     # 正常更新
     odom = create_test_odom(vx=1.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     state = ekf.get_state()
     anomalies = state.anomalies
@@ -154,7 +154,7 @@ def test_ekf_drift_correction():
     
     # 设置初始状态
     odom = create_test_odom(x=1.0, y=1.0, theta=0.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     state_before = ekf.get_state().state.copy()
     
@@ -182,7 +182,7 @@ def test_ekf_drift_correction_reverse():
     # 设置倒车状态：theta=0，vx=-1.0（向后）
     # 在世界坐标系中，倒车时 vx_world < 0
     odom = create_test_odom(x=1.0, y=0.0, vx=-1.0, vy=0.0, theta=0.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     state_before = ekf.get_state().state.copy()
     vx_before = state_before[3]
@@ -234,14 +234,16 @@ def test_ekf_covariance_positive_definite():
     ekf = AdaptiveEKFEstimator(config)
     
     # 多次更新
+    sim_time = 0.0
     for i in range(100):
         odom = create_test_odom(x=i*0.1, y=i*0.05, vx=1.0)
-        ekf.update_odom(odom)
+        ekf.update_odom(odom, sim_time)
         ekf.predict(0.02)
+        sim_time += 0.02
         
         if i % 10 == 0:
             imu = create_test_imu()
-            ekf.update_imu(imu)
+            ekf.update_imu(imu, sim_time)
     
     state = ekf.get_state()
     P = state.covariance
@@ -263,7 +265,7 @@ def test_ekf_reset():
     
     # 更新一些数据
     odom = create_test_odom(x=5.0, y=3.0, vx=2.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     # 重置
     ekf.reset()
@@ -287,20 +289,22 @@ def test_ekf_continuous_operation():
     x, y, theta = 0.0, 0.0, 0.0
     vx = 1.0
     dt = 0.02
+    sim_time = 0.0
     
     for i in range(1000):
         # 更新位置
         x += vx * np.cos(theta) * dt
         y += vx * np.sin(theta) * dt
         theta += 0.1 * dt  # 缓慢转向
+        sim_time += dt
         
         odom = create_test_odom(x=x, y=y, theta=theta, vx=vx)
-        ekf.update_odom(odom)
+        ekf.update_odom(odom, sim_time)
         ekf.predict(dt)
         
         if i % 5 == 0:
             imu = create_test_imu(angular_velocity=(0, 0, 0.1))
-            ekf.update_imu(imu)
+            ekf.update_imu(imu, sim_time)
         
         state = ekf.get_state()
         
@@ -323,7 +327,7 @@ def test_ekf_heading_fallback():
     
     # 更新里程计
     odom = create_test_odom(x=1.0, y=0.0, theta=0.5, vx=1.0)
-    ekf.update_odom(odom)
+    ekf.update_odom(odom, 0.0)
     
     # 验证航向备选功能存在
     theta = ekf._get_theta_for_transform()

@@ -108,7 +108,7 @@ class Twist3D:
     wz: float
 
 
-@dataclass
+@dataclass(slots=True)
 class Trajectory:
     """轨迹数据类
 
@@ -143,17 +143,16 @@ class Trajectory:
     soft_enabled: bool = False
     low_speed_thresh: float = field(default=0.1, repr=False, compare=False)
     
-    # 启用 __slots__ 以优化内存和属性访问速度
-    __slots__ = ('header', 'points', 'velocities', 'dt_sec', 'confidence', 'mode', 
-                 'soft_enabled', 'low_speed_thresh', '_hard_velocities_cache', 
-                 '_points_matrix_cache', '_version', '_points_are_numpy', 
-                 '_cache_key', '_last_validated_version', '_last_validation_result')
-    
     # 缓存字段（不参与比较和 repr）
     _hard_velocities_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
     _points_matrix_cache: Optional[np.ndarray] = field(default=None, repr=False, compare=False, init=False)
     _version: int = field(default=0, repr=False, compare=False, init=False)
     _points_are_numpy: bool = field(default=False, repr=False, compare=False, init=False)
+    
+    # 显式定义私有字段以支持 slots=True
+    _cache_key: Optional[tuple] = field(default=None, repr=False, compare=False, init=False)
+    _last_validated_version: int = field(default=-1, repr=False, compare=False, init=False)
+    _last_validation_result: bool = field(default=True, repr=False, compare=False, init=False)
 
     def __post_init__(self):
         # 初始化 version 和 cache_key
@@ -767,7 +766,7 @@ class DiagnosticsV2:
         # 注意: 这里用 object.__setattr__ 避免递归
         if name != '_cached_ros_msg' and name != '_dirty':
             object.__setattr__(self, '_dirty', True)
-        super().__setattr__(name, value)
+        object.__setattr__(self, name, value)
 
     def to_ros_msg(self) -> Dict[str, Any]:
         """转换为 ROS 消息格式的字典 (带缓存)"""
