@@ -2,6 +2,7 @@ from typing import Any, Callable, Dict, Optional
 import logging
 
 from universal_controller.core.data_types import TimeoutStatus
+from universal_controller.core.enums import ControllerState
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ class ErrorHandler:
     def _create_error_diagnostics(self, error: Exception) -> Dict[str, Any]:
         """Create a diagnostics dictionary for the error state."""
         return {
-            'state': 0, # STOP / ERROR
+            'state': int(ControllerState.INIT),  # 错误状态使用 INIT (控制器未正常运行)
             'mpc_success': False,
             'backup_active': False,
             'error_message': str(error),

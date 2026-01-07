@@ -568,6 +568,28 @@ class StateMachine:
             return True
         return False
     
+    def reset_counters_only(self) -> None:
+        """
+        仅重置内部计数器和历史，不改变状态
+        
+        用于暂停恢复场景。与 reset() 不同：
+        - 保留当前状态 (self.state)
+        - 保留停止请求 (_stop_event)
+        - 仅清除过时的历史数据和计数器
+        
+        这确保了：
+        - 如果暂停前在 BACKUP_ACTIVE，恢复后仍在 BACKUP_ACTIVE（安全）
+        - 如果暂停前在 STOPPING，恢复后继续停止流程（安全关键）
+        - MPC 历史和恢复计数器被清空，避免基于过时数据做决策
+        """
+        self._reset_all_counters()  # 清空 MPC 历史和恢复计数器
+        self._stopping_start_time = None  # 重置停止计时器（暂停时间不应计入）
+        # 重新开始状态持续时间监控（暂停时间不应计入状态超时）
+        self._state_entry_time = get_monotonic_time()
+        self._timeout_warned_states.clear()
+        self._nan_velocity_warned = False
+        # 注意：不清除 _stop_event，保持停止请求有效
+    
     def reset(self) -> None:
         """重置状态机
 

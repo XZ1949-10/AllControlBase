@@ -90,6 +90,7 @@ class ROS1PublisherManager:
         
         # 节流控制
         self._last_debug_path_time = 0.0
+        self._last_mpc_path_time = 0.0  # MPC 路径发布节流
         self._debug_path_interval = 0.5  # 2Hz Limit
 
     def _create_publishers(self):
@@ -313,9 +314,6 @@ class ROS1PublisherManager:
 
         # 节流 MPC path (Limit to ~5Hz)
         now = self._get_time_func()
-        if not hasattr(self, '_last_mpc_path_time'):
-            self._last_mpc_path_time = 0.0
-            
         if now - self._last_mpc_path_time < 0.2:
             return
         self._last_mpc_path_time = now

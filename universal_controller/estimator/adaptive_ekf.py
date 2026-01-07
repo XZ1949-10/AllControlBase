@@ -62,8 +62,8 @@ class AdaptiveEKFEstimator(IStateEstimator):
             self._release_lock = self._lock.release
         else:
             self._lock = None
-            # 零开销的 No-op
-            self._acquire_lock = lambda: None
+            # 零开销的 No-op，返回 True 以匹配 RLock.acquire() 的返回类型
+            self._acquire_lock = lambda: True
             self._release_lock = lambda: None
         
         # 记录调用线程 ID，用于检测多线程误用
@@ -750,8 +750,22 @@ class AdaptiveEKFEstimator(IStateEstimator):
         
         # 优化: 使用显式代数运算代替 NumPy 数组分配和 np.cross，显著减少高频 IMU 更新的开销
         
-        # 提取四元数分量
+        # 提取四元数分量并归一化
+        # 防御性编程: 确保四元数是单位四元数，避免非单位四元数导致的旋转缩放误差
         qx, qy, qz, qw = imu.orientation[0], imu.orientation[1], imu.orientation[2], imu.orientation[3]
+        
+        # 高性能归一化: 使用平方和避免 sqrt 两次调用
+        q_norm_sq = qx*qx + qy*qy + qz*qz + qw*qw
+        # 仅在明显偏离单位四元数时进行归一化 (容差 0.1%)
+        # 这避免了正常情况下的除法开销
+        if abs(q_norm_sq - 1.0) > 1e-3:
+            if q_norm_sq > 1e-10:
+                q_norm_inv = 1.0 / np.sqrt(q_norm_sq)
+                qx, qy, qz, qw = qx * q_norm_inv, qy * q_norm_inv, qz * q_norm_inv, qw * q_norm_inv
+            else:
+                # 四元数接近零，使用单位四元数 (无旋转)
+                logger.warning("IMU quaternion near zero, using identity rotation")
+                qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
         
         # 目标向量 v = [ax_body, ay_body, az_body]
         vx, vy, vz = ax_body_true, ay_body_true, az_body_true

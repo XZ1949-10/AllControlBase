@@ -133,7 +133,9 @@ class ControllerBridge(LifecycleMixin):
     
     def _do_reset(self) -> None:
         """重置控制器状态"""
+        # 重置时间状态，与 _do_initialize 保持一致
         self._last_ros_time = 0.0
+        self._last_monotonic_time = 0.0
         self._warmup_counter = 0
         if self._manager is not None:
             self._manager.reset()

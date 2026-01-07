@@ -287,7 +287,7 @@ class DataManager(LifecycleMixin):
         新数据到来时的处理
         
         Args:
-            data_type: 数据类型 ('odom', 'imu', 'traj')
+            data_type: 数据类型 ('odom', 'imu', 'trajectory')
             now: 当前时间（秒）
         
         Returns:
@@ -604,7 +604,7 @@ class DataManager(LifecycleMixin):
         检查指定类型的数据是否有效
         
         Args:
-            data_type: 数据类型 ('odom', 'imu', 'traj')
+            data_type: 数据类型 ('odom', 'imu', 'trajectory')
         
         Returns:
             如果该数据有效返回 True

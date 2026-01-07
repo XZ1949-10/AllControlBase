@@ -117,19 +117,29 @@ class ControllerNodeROS1(ControllerNodeBase):
     def _create_ros_interfaces(self):
         """Create ROS1 specific interfaces"""
         # Create publisher manager
-        self._publisher_manager = ROS1PublisherManager(
+        # 同时设置 _publishers 以兼容基类 _publish_extra_outputs() 方法
+        diag_publish_rate = self._params.get('diagnostics', {}).get('publish_rate', 10)
+        self._publishers = ROS1PublisherManager(
             topics=self._topics,
             default_frame_id=self._default_frame_id,
+            diag_publish_rate=diag_publish_rate,
             is_quadrotor=self._is_quadrotor,
         )
+        # 向后兼容别名
+        self._publisher_manager = self._publishers
         
         # Create service manager
-        self._service_manager = ROS1ServiceManager(
+        # 同时设置 _services 以保持与基类命名一致
+        self._services = ROS1ServiceManager(
             reset_callback=self._handle_reset,
             get_diagnostics_callback=self._handle_get_diagnostics,
             set_state_callback=self._handle_set_state,
+            set_hover_yaw_callback=self._handle_set_hover_yaw if self._is_quadrotor else None,
+            get_attitude_rate_limits_callback=self._handle_get_attitude_rate_limits if self._is_quadrotor else None,
             is_quadrotor=self._is_quadrotor,
         )
+        # 向后兼容别名
+        self._service_manager = self._services
         
         # Create subscribers
         self._create_subscriptions()
@@ -213,28 +223,95 @@ class ControllerNodeROS1(ControllerNodeBase):
     
     def _publish_cmd(self, cmd: ControlOutput):
         """Publish control command"""
-        if self._publisher_manager is not None:
-            self._publisher_manager.publish_cmd(cmd)
+        if self._publishers is not None:
+            self._publishers.publish_cmd(cmd)
     
     def _publish_stop_cmd(self):
         """Publish stop command"""
-        if self._publisher_manager is not None:
-            self._publisher_manager.publish_stop_cmd()
+        if self._publishers is not None:
+            self._publishers.publish_stop_cmd()
     
     def _publish_diagnostics(self, diag: Dict[str, Any], force: bool = False):
         """Publish diagnostics"""
-        if self._publisher_manager is not None:
-            self._publisher_manager.publish_diagnostics(diag, force=force)
+        if self._publishers is not None:
+            self._publishers.publish_diagnostics(diag, force=force)
     
     def _publish_attitude_cmd(self, attitude_cmd: AttitudeCommand):
         """Publish attitude command (quadrotor only)"""
-        if self._publisher_manager is not None and self._is_quadrotor:
-            self._publisher_manager.publish_attitude_cmd(attitude_cmd)
+        if self._publishers is not None and self._is_quadrotor:
+            self._publishers.publish_attitude_cmd(attitude_cmd)
     
     def _publish_debug_path(self, trajectory):
         """Publish debug path for RViz visualization"""
-        if self._publisher_manager is not None:
-            self._publisher_manager.publish_debug_path(trajectory)
+        if self._publishers is not None:
+            self._publishers.publish_debug_path(trajectory)
+    
+    # ==================== Lifecycle ====================
+    
+    def shutdown(self):
+        """
+        清理资源 (ROS1 版本)
+        
+        完整的资源清理流程:
+        1. 设置关闭标志，阻止控制循环继续执行
+        2. 取消控制定时器
+        3. 发送最终停止命令
+        4. 注销订阅器
+        5. 关闭发布器和服务
+        6. 关闭 TF 桥接
+        7. 调用基类清理
+        """
+        # 1. 设置关闭标志
+        self._shutting_down.set()
+        
+        # 2. 取消控制定时器
+        if self._control_timer is not None:
+            self._control_timer.shutdown()
+            self._control_timer = None
+        
+        # 3. 发送最终停止命令
+        try:
+            if self._publishers is not None:
+                self._publishers.publish_stop_cmd()
+                rospy.loginfo("Final stop command sent")
+        except Exception as e:
+            rospy.logwarn(f"Failed to send final stop command: {e}")
+        
+        # 4. 注销订阅器 (ROS1 使用 unregister)
+        if self._odom_sub is not None:
+            self._odom_sub.unregister()
+            self._odom_sub = None
+        
+        if self._imu_sub is not None:
+            self._imu_sub.unregister()
+            self._imu_sub = None
+        
+        if self._traj_sub is not None:
+            self._traj_sub.unregister()
+            self._traj_sub = None
+        
+        if self._emergency_stop_sub is not None:
+            self._emergency_stop_sub.unregister()
+            self._emergency_stop_sub = None
+        
+        # 5. 关闭发布器和服务
+        if self._publishers is not None:
+            self._publishers.shutdown()
+            self._publishers = None
+        
+        if self._services is not None:
+            self._services.shutdown()
+            self._services = None
+        
+        # 6. 关闭 TF 桥接
+        if self._tf_bridge is not None:
+            self._tf_bridge.shutdown()
+            self._tf_bridge = None
+        
+        # 7. 调用基类清理
+        ControllerNodeBase.shutdown(self)
+        
+        rospy.loginfo("Controller node shutdown complete")
     
     def run(self):
         """Run the node"""

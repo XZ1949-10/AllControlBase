@@ -75,6 +75,7 @@ class PublisherManager:
         
         # 调试路径发布节流
         self._last_debug_path_time = 0.0
+        self._last_mpc_path_time = 0.0  # MPC 路径发布节流
         self._debug_path_interval = 0.5  # 2Hz Limit
         
         # 异步可视化工作线程
@@ -128,10 +129,13 @@ class PublisherManager:
             self._diag_pub = self._node.create_publisher(
                 DiagnosticsV2, diag_topic, 10
             )
+            # 预创建可复用的诊断消息对象，减少 GC 压力 (与 ROS1 实现保持一致)
+            self._reusable_diag_msg = DiagnosticsV2()
             self._node.get_logger().info(f"Publishing diagnostics to: {diag_topic}")
         else:
             self._node.get_logger().warn("DiagnosticsV2 message not available")
             self._diag_pub = None
+            self._reusable_diag_msg = None
         
         # 状态发布器 (需求文档要求)
         state_topic = self._topics.get('state', TOPICS_DEFAULTS['state'])
@@ -204,17 +208,17 @@ class PublisherManager:
         if not self._diag_throttler.should_publish(diag, force=force):
             return
         
-        if self._diag_pub is None:
+        if self._diag_pub is None or self._reusable_diag_msg is None:
             return
         
         try:
-            msg = DiagnosticsV2()
+            # 复用消息对象，避免每次创建新对象 (与 ROS1 实现保持一致)
             fill_diagnostics_msg(
-                msg, diag,
+                self._reusable_diag_msg, diag,
                 get_time_func=lambda: self._node.get_clock().now().to_msg()
             )
             
-            self._diag_pub.publish(msg)
+            self._diag_pub.publish(self._reusable_diag_msg)
         except Exception:
             # 忽略所有发布错误，保持控制循环稳定
             pass
@@ -332,9 +336,6 @@ class PublisherManager:
 
         # 节流 (Limit to ~5Hz -> 0.2s)
         now = self._get_time_func()
-        if not hasattr(self, '_last_mpc_path_time'):
-            self._last_mpc_path_time = 0.0
-            
         if now - self._last_mpc_path_time < 0.2:
             return
         self._last_mpc_path_time = now
@@ -416,13 +417,7 @@ class PublisherManager:
 
     def shutdown(self) -> None:
         """关闭发布管理器"""
-        self._cmd_pub = None
-        self._diag_pub = None
-        self._state_pub = None
-        self._path_pub = None
-        self._attitude_pub = None
-        
-        # 停止 Worker 线程
+        # 1. 停止 Worker 线程
         self._vis_running = False
         try:
              # 发送 poison pill 以尽快唤醒
@@ -432,3 +427,18 @@ class PublisherManager:
         if self._vis_thread is not None:
              self._vis_thread.join(timeout=1.0)
              self._vis_thread = None
+        
+        # 2. 清空所有发布器引用 (按创建顺序)
+        # 注意: ROS2 发布器会在节点销毁时自动清理，
+        # 但显式清空可以更早释放资源并防止悬挂引用
+        self._cmd_pub = None
+        self._diag_pub = None
+        self._state_pub = None
+        self._path_pub = None
+        self._mpc_path_pub = None
+        self._attitude_pub = None
+        
+        # 3. 清空适配器和节流器 (与 ROS1 版本保持一致)
+        self._output_adapter = None
+        self._attitude_adapter = None
+        self._diag_throttler = None

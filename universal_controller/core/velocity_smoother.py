@@ -64,7 +64,20 @@ class VelocitySmoother:
             平滑后的控制命令
         """
         if last_cmd is None:
+            # 防御性检查: 即使无历史命令，也要拦截 NaN/Inf
+            if not (np.isfinite(cmd.vx) and np.isfinite(cmd.vy) and 
+                    np.isfinite(cmd.vz) and np.isfinite(cmd.omega)):
+                return ControlOutput(vx=0.0, vy=0.0, vz=0.0, omega=0.0,
+                                   frame_id=cmd.frame_id, success=False,
+                                   health_metrics={'error_type': 'nan_in_smoother'})
             return cmd
+        
+        # NaN/Inf 源头拦截 - 使用短路求值，正常情况下几乎零开销
+        # 这比依赖下游 SafetyMonitor 更早拦截问题，便于定位 NaN 来源
+        if not (np.isfinite(cmd.vx) and np.isfinite(cmd.vy) and 
+                np.isfinite(cmd.vz) and np.isfinite(cmd.omega)):
+            # 返回上一次的安全命令，避免 NaN 传播
+            return last_cmd
         
         # 水平速度变化向量限制
         # 确保合成加速度不超过 a_max
@@ -116,6 +129,13 @@ class VelocitySmoother:
             return ControlOutput(vx=0.0, vy=0.0, vz=0.0, omega=0.0, 
                                frame_id=frame_id, success=True)
         
+        # NaN/Inf 检测 - 与 smooth() 方法保持一致
+        # 如果历史命令包含 NaN，直接返回零速度（已经在停止了）
+        if not (np.isfinite(last_cmd.vx) and np.isfinite(last_cmd.vy) and 
+                np.isfinite(last_cmd.vz) and np.isfinite(last_cmd.omega)):
+            return ControlOutput(vx=0.0, vy=0.0, vz=0.0, omega=0.0, 
+                               frame_id=frame_id, success=True)
+        
         # 水平速度使用向量限制，确保合成加速度不超过 a_max
         v_horizontal = np.sqrt(last_cmd.vx**2 + last_cmd.vy**2)
         if v_horizontal <= self.max_dv:
@@ -148,16 +168,31 @@ class VelocitySmoother:
 def clip_velocity(vx: float, vy: float, last_vx: float, last_vy: float,
                   max_dv: float) -> tuple:
     """
-    限制水平速度变化
+    限制水平速度变化（分量独立限制）
+    
+    .. deprecated::
+        此函数使用分量独立限制，可能允许合成加速度超过 √2 * max_dv。
+        推荐使用 `VelocitySmoother.smooth()` 方法，它使用向量限制确保合成加速度不超过限制。
+    
+    注意:
+        - 此函数分别限制 vx 和 vy 的变化量
+        - 对角方向运动时，合成加速度可能达到 √2 * a_max
+        - 对于安全关键场景，请使用 VelocitySmoother 类
     
     Args:
         vx, vy: 新的速度
         last_vx, last_vy: 上一次的速度
-        max_dv: 最大速度变化量
+        max_dv: 最大速度变化量（每个分量）
     
     Returns:
         (clipped_vx, clipped_vy): 限制后的速度
     """
+    import warnings
+    warnings.warn(
+        "clip_velocity() is deprecated. Use VelocitySmoother.smooth() for proper vector limiting.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     clipped_vx = np.clip(vx, last_vx - max_dv, last_vx + max_dv)
     clipped_vy = np.clip(vy, last_vy - max_dv, last_vy + max_dv)
     return clipped_vx, clipped_vy

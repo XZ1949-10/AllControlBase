@@ -200,12 +200,14 @@ class TrajectoryAdapter(IMsgConverter):
                 limit = int(self._config.max_points * 2)  # 留出余量，避免过度截断影响逻辑
                 if num_raw > limit:
                      from ..utils.ros_compat import log_warn_throttle
+                     # 使用固定模板以确保节流正确生效
+                     # 动态值通过 debug 日志记录，避免节流失效
                      log_warn_throttle(
                         10.0,
-                        f"Performance Protection: Truncating large legacy trajectory "
-                        f"({num_raw} > {limit}) to prevent CPU stall. "
-                        f"Please use 'points_flat' for large paths."
+                        "Performance Protection: Truncating large legacy trajectory. "
+                        "Please use 'points_flat' for large paths."
                      )
+                     logger.debug(f"Trajectory truncated: {num_raw} > {limit}")
                      raw_points = raw_points[:limit]
                      num_raw = limit
             

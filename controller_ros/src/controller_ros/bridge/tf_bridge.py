@@ -82,10 +82,13 @@ class TFBridge:
         关闭 TF 桥接，释放资源
         
         支持重复调用，第二次及之后的调用会被忽略。
+        异常安全：即使 _tf2_compat.shutdown() 失败，引用也会被清空。
         """
         if self._tf2_compat is None:
             # 已经关闭，直接返回
             return
-        self._tf2_compat.shutdown()
-        self._tf2_compat = None
-        self._node = None
+        try:
+            self._tf2_compat.shutdown()
+        finally:
+            self._tf2_compat = None
+            self._node = None

@@ -228,28 +228,27 @@ class ROS1ServiceManager:
         关闭服务管理器，释放资源
         
         在 ROS1 中关闭服务并清理回调引用。
+        使用 try-finally 确保即使某个服务关闭失败也会继续处理后续服务。
         """
-        # 关闭服务
-        if hasattr(self, '_reset_srv') and self._reset_srv is not None:
-            self._reset_srv.shutdown()
-            self._reset_srv = None
+        # 定义所有服务属性名称
+        service_attrs = [
+            '_reset_srv',
+            '_get_diag_srv', 
+            '_set_state_srv',
+            '_set_hover_yaw_srv',
+            '_get_attitude_limits_srv',
+        ]
         
-        if hasattr(self, '_get_diag_srv') and self._get_diag_srv is not None:
-            self._get_diag_srv.shutdown()
-            self._get_diag_srv = None
-        
-        if hasattr(self, '_set_state_srv') and self._set_state_srv is not None:
-            self._set_state_srv.shutdown()
-            self._set_state_srv = None
-        
-        # 关闭四旋翼服务
-        if hasattr(self, '_set_hover_yaw_srv') and self._set_hover_yaw_srv is not None:
-            self._set_hover_yaw_srv.shutdown()
-            self._set_hover_yaw_srv = None
-        
-        if hasattr(self, '_get_attitude_limits_srv') and self._get_attitude_limits_srv is not None:
-            self._get_attitude_limits_srv.shutdown()
-            self._get_attitude_limits_srv = None
+        # 逐个关闭服务（带异常保护）
+        for srv_name in service_attrs:
+            srv = getattr(self, srv_name, None)
+            if srv is not None:
+                try:
+                    srv.shutdown()
+                except Exception as e:
+                    rospy.logwarn(f"Error shutting down {srv_name}: {e}")
+                finally:
+                    setattr(self, srv_name, None)
         
         # 清理回调引用
         self._reset_callback = None
@@ -259,3 +258,4 @@ class ROS1ServiceManager:
         self._get_attitude_rate_limits_callback = None
         
         rospy.logdebug("ROS1ServiceManager shutdown complete")
+

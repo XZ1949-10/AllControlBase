@@ -601,6 +601,52 @@ class ControllerManager:
                 return p.get_attitude_rate_limits()
         return None        
 
+    def _reset_all_stateful_components(self) -> None:
+        """
+        重置所有有状态的组件
+        
+        在长暂停后调用，确保所有组件从干净状态开始。
+        这避免了以下问题：
+        - EKF 使用过时的状态估计
+        - Safety Monitor 使用过时的 last_cmd 计算加速度
+        - MPC/Backup Tracker 使用过时的 last_cmd
+        - Consistency Checker 使用过时的时序窗口数据
+        - Smooth Transition 使用过时的过渡起始命令
+        - MPC Health Monitor 使用过时的健康历史
+        - Timeout Monitor 使用过时的启动时间和超时状态
+        - Coordinate Transformer 使用过时的降级状态
+        - State Machine 使用过时的恢复计数器和 MPC 历史（保留状态和停止请求）
+        - Processors (如 AttitudeProcessor) 使用过时的姿态和悬停状态
+        """
+        if self.state_estimator:
+            self.state_estimator.reset()
+        if self.safety_monitor:
+            self.safety_monitor.reset()
+        if self.mpc_tracker:
+            self.mpc_tracker.reset()
+        if self.backup_tracker:
+            self.backup_tracker.reset()
+        if self.consistency_checker:
+            self.consistency_checker.reset()
+        if self.smooth_transition:
+            self.smooth_transition.reset()
+        if self.mpc_health_monitor:
+            self.mpc_health_monitor.reset()
+        if self.timeout_monitor:
+            self.timeout_monitor.reset()
+        if self.coord_transformer:
+            self.coord_transformer.reset()
+        if self.state_machine:
+            # 使用 reset_counters_only() 而非 reset()
+            # 保留当前状态和停止请求，仅清除过时的历史数据
+            # 这确保了：
+            # - 暂停前的 STOPPING 状态会保持（安全关键）
+            # - 暂停前的 BACKUP_ACTIVE 状态会保持（谨慎恢复）
+            self.state_machine.reset_counters_only()
+        # 重置所有处理器（如 AttitudeProcessor）
+        for processor in self.processors:
+            if hasattr(processor, 'reset'):
+                processor.reset()
     
     def _compute_time_step(self, current_time: float) -> tuple:
         """
@@ -618,16 +664,7 @@ class ControllerManager:
             
             if actual_dt > ekf_reset_threshold:
                 logger.warning(f"Long pause detected ({actual_dt:.2f}s), resetting EKF and controllers")
-                if self.state_estimator:
-                    self.state_estimator.reset()
-                
-                # 同时重置其他有状态的组件，防止旧状态（如 last_cmd）影响恢复
-                if self.safety_monitor:
-                    self.safety_monitor.reset()
-                if self.mpc_tracker:
-                    self.mpc_tracker.reset()
-                if self.backup_tracker:
-                    self.backup_tracker.reset()
+                self._reset_all_stateful_components()
                     
                 skip_prediction = True
                 actual_dt = self.dt
@@ -640,17 +677,7 @@ class ControllerManager:
                 num_steps = int(actual_dt / self.dt)
                 if num_steps > MAX_CATCHUP_STEPS:
                     logger.warning(f"Pause ({actual_dt:.2f}s) exceeds catchup limit. Resetting EKF to current state.")
-                    # 强制重置 EKF 到当前状态，避免巨大的 Innovation 导致发散
-                    if self.state_estimator:
-                        self.state_estimator.reset()
-                        
-                    # 同样重置其他组件
-                    if self.safety_monitor:
-                        self.safety_monitor.reset()
-                    if self.mpc_tracker:
-                        self.mpc_tracker.reset()
-                    if self.backup_tracker:
-                        self.backup_tracker.reset()
+                    self._reset_all_stateful_components()
                     
                     # 标记跳过预测，actual_dt 设为正常帧率，让 estimator 重新锁定 odom
                     skip_prediction = True

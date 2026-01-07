@@ -14,13 +14,13 @@ except ImportError:
     ControllerNode = None
     _ROS2_AVAILABLE = False
 
-# ROS1 specific class, lazy import for non-ROS environments
-try:
-    from .controller_node_ros1 import ControllerNodeROS1
-    _ROS1_AVAILABLE = True
-except ImportError:
-    ControllerNodeROS1 = None
-    _ROS1_AVAILABLE = False
+# ROS1 specific class
+# NOTE: The legacy controller_node_ros1.py module is deprecated.
+# For ROS1, use scripts/controller_node.py instead.
+# We keep ControllerNodeROS1 = None for backward compatibility with code
+# that checks for its existence, but we do NOT import the deprecated module.
+ControllerNodeROS1 = None
+_ROS1_AVAILABLE = False
 
 __all__ = [
     'ControllerNodeBase',

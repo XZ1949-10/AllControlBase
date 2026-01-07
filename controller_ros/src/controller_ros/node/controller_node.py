@@ -53,6 +53,10 @@ class ControllerNode(ControllerNodeBase, Node):
         self._params = ParamLoader.load(self)
         self._topics = ParamLoader.get_topics(self)
         
+        # 1.1 加载时钟配置并合并到参数中 (与 ROS1 版本保持一致)
+        clock_config = ParamLoader.get_clock_config(self)
+        self._params['clock'] = clock_config
+        
         # 2. 创建回调组（用于并发控制）
         self._sensor_cb_group = ReentrantCallbackGroup()
         self._control_cb_group = MutuallyExclusiveCallbackGroup()

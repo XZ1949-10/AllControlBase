@@ -57,30 +57,32 @@ class ControllerNodeBase(LifecycleMixin, ABC):
         
         self._controller_bridge: Optional[ControllerBridge] = None
         self._data_manager: Optional[DataManager] = None
-        self._tf_bridge: Any = None
+        self._tf_bridge: Any = None  # TFBridge, varies by ROS version
         
         # TF2 注入管理器 - 管理 TF2 回调注入和重试逻辑
         self._tf2_injection_manager: Optional[TF2InjectionManager] = None
         
         self._health_checker: Optional[HealthChecker] = None
         
-        self._publishers = None
-        self._services = None
-        self._timer = None 
-        self._control_timer = None
-        self._odom_sub = None
-        self._imu_sub = None
-        self._traj_sub = None
-        self._traj_msg_available = False
-        self._emergency_stop_sub = None
+        # ROS 版本特定的管理器和订阅器
+        # 类型为 Any 因为 ROS1 和 ROS2 有不同的实现类
+        self._publishers: Optional[Any] = None   # PublisherManager (ROS2) 或 ROS1PublisherManager
+        self._services: Optional[Any] = None     # ServiceManager (ROS2) 或 ROS1ServiceManager
+        self._timer: Optional[Any] = None        # rclpy.Timer (ROS2) 或 rospy.Timer (ROS1)
+        self._control_timer: Optional[Any] = None
+        self._odom_sub: Optional[Any] = None
+        self._imu_sub: Optional[Any] = None
+        self._traj_sub: Optional[Any] = None
+        self._traj_msg_available: bool = False
+        self._emergency_stop_sub: Optional[Any] = None
         
-        self._waiting_for_data = True
+        self._waiting_for_data: bool = True
         self._error_handler: Optional[ErrorHandler] = None
         
-        self._emergency_stop_requested = False
+        self._emergency_stop_requested: bool = False
         self._emergency_stop_time: Optional[float] = None
         
-        self._is_quadrotor = False
+        self._is_quadrotor: bool = False
         self._last_attitude_cmd: Optional[AttitudeCommand] = None
         self._attitude_yaw_mode: int = 0
 

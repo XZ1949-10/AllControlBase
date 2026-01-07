@@ -500,32 +500,65 @@ class PurePursuitController(ITrajectoryTracker):
                             target_v: float, dist_to_target: float,
                             trajectory: Trajectory, target_idx: int,
                             omega_limit: float) -> ControlOutput:
+        """
+        计算全向轮控制输出
+        
+        输出坐标系: 机体坐标系 (base_link)
+        - vx: 机体前向速度
+        - vy: 机体侧向速度（向左为正）
+        """
         if dist_to_target > EPSILON:
+            # 先计算世界坐标系下的速度方向
             vx_world = target_v * dx / dist_to_target
             vy_world = target_v * dy / dist_to_target
+            
+            # 转换到机体坐标系: V_body = R(-theta) @ V_world
+            # [vx_body]   [cos(theta)   sin(theta)] [vx_world]
+            # [vy_body] = [-sin(theta)  cos(theta)] [vy_world]
+            cos_theta = np.cos(theta)
+            sin_theta = np.sin(theta)
+            vx_body = vx_world * cos_theta + vy_world * sin_theta
+            vy_body = -vx_world * sin_theta + vy_world * cos_theta
         else:
-            vx_world = 0.0
-            vy_world = 0.0
+            vx_body = 0.0
+            vy_body = 0.0
         
         omega = self._compute_heading_control(dx, dy, theta, dist_to_target, trajectory, target_idx, omega_limit)
         
-        return ControlOutput(vx=vx_world, vy=vy_world, vz=0.0, omega=omega,
+        return ControlOutput(vx=vx_body, vy=vy_body, vz=0.0, omega=omega,
                             frame_id=self.output_frame, success=True)
     
     def _compute_3d_output(self, dx: float, dy: float, theta: float,
                           target_v: float, dist_to_target: float, vz: float,
                           trajectory: Trajectory, target_idx: int,
                           omega_limit: float) -> ControlOutput:
+        """
+        计算3D平台（无人机）控制输出
+        
+        输出坐标系: 机体坐标系 (base_link)
+        - vx: 机体前向速度
+        - vy: 机体侧向速度（向左为正）
+        - vz: 世界坐标系垂直速度（向上为正）
+        
+        注意: vz 保持世界坐标系，因为无人机的高度控制通常基于世界坐标系
+        """
         if dist_to_target > EPSILON:
+            # 先计算世界坐标系下的水平速度方向
             vx_world = target_v * dx / dist_to_target
             vy_world = target_v * dy / dist_to_target
+            
+            # 转换到机体坐标系: V_body = R(-theta) @ V_world
+            cos_theta = np.cos(theta)
+            sin_theta = np.sin(theta)
+            vx_body = vx_world * cos_theta + vy_world * sin_theta
+            vy_body = -vx_world * sin_theta + vy_world * cos_theta
         else:
-            vx_world = 0.0
-            vy_world = 0.0
+            vx_body = 0.0
+            vy_body = 0.0
         
         omega = self._compute_heading_control(dx, dy, theta, dist_to_target, trajectory, target_idx, omega_limit)
         
-        return ControlOutput(vx=vx_world, vy=vy_world, vz=vz, omega=omega,
+        return ControlOutput(vx=vx_body, vy=vy_body, vz=vz, omega=omega,
                             frame_id=self.output_frame, success=True)
     
     def _compute_heading_control(self, dx: float, dy: float, theta: float,

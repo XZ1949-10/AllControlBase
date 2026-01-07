@@ -49,12 +49,13 @@ class DiagnosticsPublisher:
         publisher.publish(...)
     """
     
-    def __init__(self, publish_rate: float = 10.0):
+    def __init__(self, publish_rate: float = 10.0, callback_max_failures: int = 5):
         """
         初始化诊断发布器
         
         Args:
             publish_rate: 诊断发布频率 (Hz)，默认 10Hz
+            callback_max_failures: 连续失败多少次后自动移除回调，默认 5
         """
         # 回调函数（线程安全）
         # Now passes DiagnosticsV2 object instead of Dict
@@ -63,7 +64,15 @@ class DiagnosticsPublisher:
         
         # 回调失败计数（用于自动移除持续失败的回调）
         self._callback_fail_counts: Dict[int, int] = {}  # callback id -> fail count
-        self._callback_max_failures = 5  # 连续失败超过此次数后移除回调
+        self._callback_max_failures = callback_max_failures
+        
+        # 回调移除通知（可选）
+        # 当回调因连续失败被自动移除时调用
+        self._removal_notification: Optional[Callable[[Callable, Exception, int], None]] = None
+        
+        # 统计信息
+        self._total_callbacks_removed = 0
+        self._total_callback_failures = 0
         
         # 发布历史
         self._last_published: Optional[DiagnosticsV2] = None
@@ -84,7 +93,8 @@ class DiagnosticsPublisher:
             callback: 回调函数，签名为 callback(diagnostics: DiagnosticsV2) -> None
         
         Note:
-            如果回调连续失败超过 5 次，会被自动移除以防止日志泛滥
+            如果回调连续失败超过 callback_max_failures 次（默认 5），
+            会被自动移除以防止日志泛滥。可通过构造函数配置此阈值。
         """
         with self._callbacks_lock:
             if callback not in self._callbacks:
@@ -103,6 +113,41 @@ class DiagnosticsPublisher:
         with self._callbacks_lock:
             self._callbacks.clear()
             self._callback_fail_counts.clear()
+    
+    def set_removal_notification(self, 
+                                  callback: Optional[Callable[[Callable, Exception, int], None]]) -> None:
+        """
+        设置回调移除通知函数
+        
+        当回调因连续失败被自动移除时，会调用此通知函数。
+        这允许上层代码进行错误监控、重试逻辑或替换回调。
+        
+        Args:
+            callback: 通知函数，签名为 callback(removed_callback, last_error, fail_count) -> None
+                      设置为 None 可禁用通知
+        
+        Example:
+            def on_callback_removed(cb, error, count):
+                logger.error(f"Callback removed after {count} failures: {error}")
+                # 可选：尝试重新注册或替换回调
+            
+            publisher.set_removal_notification(on_callback_removed)
+        """
+        self._removal_notification = callback
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        获取发布器统计信息
+        
+        Returns:
+            包含回调数量、移除统计、失败统计的字典
+        """
+        with self._callbacks_lock:
+            return {
+                'active_callbacks': len(self._callbacks),
+                'total_callbacks_removed': self._total_callbacks_removed,
+                'total_callback_failures': self._total_callback_failures,
+            }
     
     def publish(self,
                 current_time: float,
@@ -175,13 +220,14 @@ class DiagnosticsPublisher:
                 with self._callbacks_lock:
                     fail_count = self._callback_fail_counts.get(callback_id, 0) + 1
                     self._callback_fail_counts[callback_id] = fail_count
+                    self._total_callback_failures += 1
                 
                 if fail_count >= self._callback_max_failures:
                     logger.warning(
                         f"Callback {callback} failed {fail_count} times consecutively, removing it. "
                         f"Last error: {e}"
                     )
-                    callbacks_to_remove.append(callback)
+                    callbacks_to_remove.append((callback, e, fail_count))
                 elif fail_count == 1:
                     # 首次失败记录警告
                     logger.warning(f"Callback error: {e}")
@@ -192,10 +238,19 @@ class DiagnosticsPublisher:
         # 移除持续失败的回调
         if callbacks_to_remove:
             with self._callbacks_lock:
-                for callback in callbacks_to_remove:
+                for callback, last_error, fail_count in callbacks_to_remove:
                     if callback in self._callbacks:
                         self._callbacks.remove(callback)
                         self._callback_fail_counts.pop(id(callback), None)
+                        self._total_callbacks_removed += 1
+            
+            # 在锁外调用通知回调，避免死锁
+            if self._removal_notification:
+                for callback, last_error, fail_count in callbacks_to_remove:
+                    try:
+                        self._removal_notification(callback, last_error, fail_count)
+                    except Exception as notify_error:
+                        logger.debug(f"Removal notification failed: {notify_error}")
     
     def get_last_published(self) -> Optional[DiagnosticsV2]:
         """获取最后发布的诊断数据"""

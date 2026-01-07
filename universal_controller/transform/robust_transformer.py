@@ -2,7 +2,6 @@
 鲁棒坐标变换模块
 """
 from typing import Dict, Any, Tuple, Optional, List
-import time
 import numpy as np
 import logging
 from threading import Lock
@@ -12,7 +11,8 @@ from ..core.data_types import Trajectory, Point3D, EstimatorOutput
 from ..core.enums import TransformStatus
 from ..core.ros_compat import (
     TF2_AVAILABLE, Duration, Time, 
-    transform_pose, get_transform_matrix, apply_transform_to_trajectory
+    transform_pose, get_transform_matrix, apply_transform_to_trajectory,
+    get_monotonic_time
 )
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                     
                     # 成功获取 TF，重置降级状态
                     if self.fallback_start_time is not None:
-                        logger.info(f"TF2 service recovered after {time.time() - self.fallback_start_time:.3f}s")
+                        logger.info(f"TF2 service recovered after {get_monotonic_time() - self.fallback_start_time:.3f}s")
                         self.fallback_start_time = None
                     self._last_status = TransformStatus.TF2_OK
                     
@@ -170,7 +170,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
                 logger.error(f"RobustFallback: Source frame '{source_frame}' mismatch with configured '{self.source_frame}'. Cannot use estimator fallback.")
                 return traj, TransformStatus.FALLBACK_CRITICAL
 
-        current_time = time.time()
+        current_time = get_monotonic_time()
         
         # 首次进入降级模式
         if self.fallback_start_time is None:
@@ -242,7 +242,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         """获取状态信息"""
         fallback_duration = 0.0
         if self.fallback_start_time is not None:
-            fallback_duration = time.time() - self.fallback_start_time
+            fallback_duration = get_monotonic_time() - self.fallback_start_time
             
         return {
             'status': self._last_status.name,
@@ -281,7 +281,7 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         self._stored_transforms[key] = {
             'translation': {'x': x, 'y': y, 'z': z},
             'rotation': self._euler_to_quaternion(0, 0, theta),
-            'stamp': stamp or time.time()
+            'stamp': stamp or get_monotonic_time()
         }
         
         # 如果没有回调，设置内部回调
@@ -318,8 +318,30 @@ class RobustCoordinateTransformer(ICoordinateTransformer):
         reverse_key = (source_frame, target_frame)
         if reverse_key in self._stored_transforms:
             t = self._stored_transforms[reverse_key]
-            # 简化的反向变换 (仅适用于 2D)
+            # 简化的反向变换 (仅适用于 2D，假设 roll=pitch=0)
             q = t['rotation']
+            
+            # 3D 变换检测: 检查是否有显著的 roll/pitch 分量
+            # roll/pitch 会导致 qx, qy 非零
+            # 使用阈值 0.01 (~1.1度) 避免浮点误差误报
+            if abs(q['x']) > 0.01 or abs(q['y']) > 0.01:
+                if 'inverse_3d_warned' not in self._warned_frames:
+                    self._warned_frames.add('inverse_3d_warned')
+                    logger.warning(
+                        f"_internal_lookup: Inverse transform requested for non-2D rotation "
+                        f"(qx={q['x']:.3f}, qy={q['y']:.3f}). "
+                        f"Result may be inaccurate. Use TF2 for 3D transforms."
+                    )
+            
+            # 检查显著的 Z 轴平移
+            if abs(t['translation']['z']) > 0.01:
+                if 'inverse_z_warned' not in self._warned_frames:
+                    self._warned_frames.add('inverse_z_warned')
+                    logger.warning(
+                        f"_internal_lookup: Inverse transform with non-zero Z translation "
+                        f"(z={t['translation']['z']:.3f}). Using simplified 2D inverse."
+                    )
+            
             theta = 2 * np.arctan2(q['z'], q['w'])
             cos_t, sin_t = np.cos(theta), np.sin(theta)
             tx, ty = t['translation']['x'], t['translation']['y']

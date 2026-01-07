@@ -236,7 +236,6 @@ class Trajectory:
                             value = np.array([[p.x, p.y, p.z] for p in value], dtype=np.float64)
                 
                 # 维度检查
-                # 维度检查
                 if value.ndim != 2 or value.shape[1] != 3:
                     if value.ndim == 1 and value.size == 0:
                         value = value.reshape(0, 3)

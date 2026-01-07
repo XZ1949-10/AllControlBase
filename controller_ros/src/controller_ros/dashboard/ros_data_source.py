@@ -41,20 +41,29 @@ from universal_controller.dashboard.models import (
 # 导入配置（从 universal_controller）
 from universal_controller.config import DEFAULT_CONFIG
 
-# 检测 ROS 版本
-ROS_VERSION = 0
+# 导入版本号
 try:
-    import rospy
-    ROS_VERSION = 1
+    from controller_ros import __version__ as CONTROLLER_ROS_VERSION
 except ImportError:
-    pass
+    CONTROLLER_ROS_VERSION = "unknown"
 
-if ROS_VERSION == 0:
+# 使用统一的 ROS 版本检测 (避免代码重复)
+try:
+    from controller_ros.utils.ros_compat import ROS_VERSION
+except ImportError:
+    # Fallback: 如果 ros_compat 不可用，使用本地检测
+    ROS_VERSION = 0
     try:
-        import rclpy
-        ROS_VERSION = 2
+        import rospy
+        ROS_VERSION = 1
     except ImportError:
         pass
+    if ROS_VERSION == 0:
+        try:
+            import rclpy
+            ROS_VERSION = 2
+        except ImportError:
+            pass
 
 # 尝试检测 ACADOS
 try:
@@ -169,6 +178,9 @@ class ROSDashboardDataSource:
 
     def _init_ros1_subscriptions(self):
         """初始化 ROS1 订阅"""
+        # 显式导入 rospy，消除对 ros_compat 导入副作用的隐式依赖
+        import rospy
+        
         try:
             # 直接导入本包的消息类型（不再是跨层依赖）
             from controller_ros.msg import DiagnosticsV2
@@ -432,7 +444,7 @@ class ROSDashboardDataSource:
         data.command = self._build_control_command(raw_diagnostics)
         data.trajectory = TrajectoryData()  # ROS 模式暂不支持轨迹可视化
         data.statistics = self._build_statistics()
-        data.version = 'v3.17.12'
+        data.version = f'v{CONTROLLER_ROS_VERSION}'
         data.transition_progress = raw_diagnostics.get('transition_progress', 1.0)
 
         return data

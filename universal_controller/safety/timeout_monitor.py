@@ -169,6 +169,25 @@ class TimeoutMonitor:
         )
     
     def reset(self) -> None:
+        """
+        完全重置监控器状态
+        
+        此方法会重置所有内部状态，包括：
+        - 轨迹超时计时器
+        - 启动时间（首次收到数据的时间）
+        - 创建时间（用于绝对启动超时计算）
+        
+        设计意图：
+            reset() 相当于重新创建一个监控器，所有超时计时将从零开始。
+            这在以下场景中是正确的行为：
+            - 控制器完全重启
+            - 从 STOPPED 状态恢复
+            - 长时间暂停后恢复（避免立即触发超时）
+        
+        Note:
+            如果只需要清除临时状态而保留创建时间，请直接操作相应字段。
+        """
         self._traj_timeout_start = None
         self._startup_time = None
         self._creation_time = get_monotonic_time()
+

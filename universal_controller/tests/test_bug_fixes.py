@@ -61,6 +61,54 @@ def test_velocity_smoother_vector_limit():
     print("✓ test_velocity_smoother_vector_limit passed")
 
 
+def test_velocity_smoother_nan_detection():
+    """测试速度平滑器的 NaN/Inf 检测
+    
+    验证: 
+    1. 当输入包含 NaN 时，返回安全的上一次命令
+    2. 当无历史命令且输入为 NaN 时，返回零速度命令
+    """
+    smoother = VelocitySmoother(a_max=1.5, az_max=1.0, alpha_max=3.0, dt=0.02)
+    
+    # Case 1: 有历史命令，新命令包含 NaN
+    last_cmd = ControlOutput(vx=1.0, vy=0.5, vz=0.0, omega=0.1)
+    nan_cmd = ControlOutput(vx=float('nan'), vy=0.0, vz=0.0, omega=0.0)
+    
+    result = smoother.smooth(nan_cmd, last_cmd)
+    
+    # 应该返回上一次的安全命令
+    assert result.vx == last_cmd.vx, f"Expected vx={last_cmd.vx}, got {result.vx}"
+    assert result.vy == last_cmd.vy, f"Expected vy={last_cmd.vy}, got {result.vy}"
+    
+    # Case 2: 无历史命令，新命令包含 Inf
+    inf_cmd = ControlOutput(vx=float('inf'), vy=0.0, vz=0.0, omega=0.0)
+    
+    result2 = smoother.smooth(inf_cmd, None)
+    
+    # 应该返回零速度命令
+    assert result2.vx == 0.0, f"Expected vx=0.0, got {result2.vx}"
+    assert result2.vy == 0.0, f"Expected vy=0.0, got {result2.vy}"
+    assert result2.success == False, "Expected success=False for NaN input"
+    
+    # Case 3: 正常输入应该正常处理
+    normal_cmd = ControlOutput(vx=1.0, vy=0.0, vz=0.0, omega=0.0)
+    result3 = smoother.smooth(normal_cmd, None)
+    
+    assert result3.vx == 1.0, f"Expected vx=1.0, got {result3.vx}"
+    assert np.isfinite(result3.vx), "Result should be finite"
+    
+    # Case 4: smooth_to_stop 历史命令包含 NaN
+    nan_last_cmd = ControlOutput(vx=float('nan'), vy=1.0, vz=0.0, omega=0.0)
+    result4 = smoother.smooth_to_stop(nan_last_cmd, frame_id='test')
+    
+    # 应该返回零速度命令
+    assert result4.vx == 0.0, f"Expected vx=0.0, got {result4.vx}"
+    assert result4.vy == 0.0, f"Expected vy=0.0, got {result4.vy}"
+    assert np.isfinite(result4.vx), "smooth_to_stop result should be finite"
+    
+    print("✓ test_velocity_smoother_nan_detection passed")
+
+
 def test_pure_pursuit_rear_target():
     """测试 Pure Pursuit 处理正后方目标点
     
@@ -228,6 +276,7 @@ def run_all_tests():
     
     tests = [
         test_velocity_smoother_vector_limit,
+        test_velocity_smoother_nan_detection,
         test_pure_pursuit_rear_target,
         test_pure_pursuit_rear_target_consistency,
         test_safety_monitor_warmup,
